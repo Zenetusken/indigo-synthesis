@@ -1,0 +1,130 @@
+# Self-hosting contract
+
+Status: accepted product requirement
+
+Self-hosting is not merely a future deployment option. It constrains application design
+now.
+
+## Required runtime
+
+Core product operation requires only:
+
+1. one supported Node.js process;
+2. one PostgreSQL database; and
+3. one writable data directory if local media uploads are enabled.
+
+No other service is authoritative or mandatory.
+
+## Network trust boundary
+
+There are two distinct access modes:
+
+- **Local development:** plain HTTP is supported only through a loopback origin such as
+  `http://localhost:3000`.
+- **Network use:** a phone, LAN client, public hostname, or any non-loopback client must
+  use an externally visible HTTPS origin. Production authentication cookies are always
+  `Secure`.
+
+Network use therefore has an environmental ingress prerequisite: the operator supplies a
+TLS terminator in front of the Node process (or an equivalent HTTPS-capable host layer).
+It holds no product data and is not another application authority. The repository does
+not yet provide reverse-proxy configuration or certificate automation, but TLS itself is
+not deferred or optional for non-loopback use.
+
+## No mandatory outbound network
+
+After installation, the complete core journey works with outbound network access blocked.
+
+Therefore:
+
+- authentication is local;
+- fonts, icons, and core imagery are bundled;
+- no CDN is required;
+- no cloud object store is required;
+- no email provider is required for normal sign-in;
+- no analytics, telemetry, error-reporting, or model API is required;
+- no social OAuth provider is required; and
+- no remote exercise/content API is called at runtime.
+
+Optional outbound adapters must be disabled by default and fail without breaking core
+use.
+
+## Configuration surface
+
+The target required configuration is:
+
+- database URL;
+- application origin;
+- authentication secret; and
+- optional local data directory.
+
+SMTP, S3-compatible storage, external identity, and other adapters are explicitly
+optional.
+
+Startup validates required configuration and schema compatibility, then fails with a
+specific corrective message. It does not limp into plausible fake data.
+
+Startup rejects a non-loopback HTTP application origin outside explicit development
+mode.
+
+## Accounts
+
+- A fresh installation has a one-time first-owner bootstrap.
+- A singleton installation row is locked while owner creation and bootstrap closure
+  commit atomically; concurrent bootstrap attempts cannot create a second first owner.
+- Public signup is off by default after bootstrap.
+- The owner can create or invite local users according to the approved user model.
+- Password reset works through optional SMTP. If the only owner is locked out, a
+  host-local administrative command with database access may issue an expiring one-use
+  recovery code. Redemption revokes existing sessions and records a redacted audit event.
+- Core auth does not expose refresh tokens to browser JavaScript.
+
+## Data ownership
+
+The complete backup boundary is:
+
+- PostgreSQL; and
+- the configured media directory, if enabled.
+
+Export is a product feature, not a database-admin substitute. It includes a schema
+version and enough provenance to interpret programs, sessions, and recommendations.
+
+Deletion is an explicit destruction exception to immutable history. Modules delete or
+redact scoped personal records in referential order inside one transaction; Identity is
+last. The retained system tombstone contains only event metadata, row counts, schema
+version, and a completion digest. Deletion and restore behavior are tested in the first
+release journey and drilled again before beta.
+
+## Privacy and telemetry
+
+- Application telemetry is off by default.
+- Build/CLI telemetry is disabled where supported.
+- Logs avoid secrets, auth tokens, raw health context, and unnecessary personal data.
+- The product collects only data required by an accepted use case.
+- Optional integrations document every outbound field and destination.
+
+## Supported baseline
+
+The first supported topology is one application instance and one PostgreSQL instance.
+Multi-instance cache coordination, HA databases, replicas, failover, and multi-region
+operation are not implicit requirements.
+
+## Deferred packaging
+
+This contract does not prescribe installation packaging yet. The following are deferred:
+
+- Docker/Compose
+- reverse proxy configuration and TLS/certificate automation
+- systemd or other service unit
+- CI/CD
+- monitoring stack
+- backup automation
+- high availability
+
+When packaging work begins, it must satisfy this contract rather than expand the runtime
+without need.
+
+## Verification
+
+The first release gate includes a test environment where outbound network is denied and
+only the application, PostgreSQL, and optional media directory are available.

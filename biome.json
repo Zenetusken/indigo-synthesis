@@ -1,0 +1,33 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!!node_modules",
+      "!!.next",
+      "!!next-env.d.ts",
+      "!!coverage",
+      "!!playwright-report",
+      "!!test-results"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 90
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  }
+}

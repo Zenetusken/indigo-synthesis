@@ -1,0 +1,88 @@
+@layer reset, tokens, base;
+
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+@layer tokens {
+  :root {
+    color-scheme: light;
+    --rack-ink: #151922;
+    --rack-ink-soft: #28303d;
+    --primer: #e7ebf0;
+    --paper: #f8fafc;
+    --paper-raised: #ffffff;
+    --indigo-enamel: #3546a3;
+    --indigo-deep: #27357f;
+    --plate-yellow: #d59a1f;
+    --verified: #26705a;
+    --steel: #5b6675;
+    --hairline: #c8d0da;
+    --focus: #1b63d9;
+    --font-display: "Saira Variable", "Arial Narrow", sans-serif;
+    --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+    --font-data: "IBM Plex Mono", ui-monospace, monospace;
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+    --space-12: 3rem;
+    --space-16: 4rem;
+    --radius-sm: 0.25rem;
+    --radius-md: 0.5rem;
+  }
+}
+
+@layer base {
+  body {
+    background: var(--primer);
+    color: var(--rack-ink);
+    font-family: var(--font-body);
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 3px;
+  }
+
+  ::selection {
+    background: var(--plate-yellow);
+    color: var(--rack-ink);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto;
+      transition-duration: 0.01ms;
+      animation-duration: 0.01ms;
+      animation-iteration-count: 1;
+    }
+  }
+}

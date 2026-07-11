@@ -1,0 +1,344 @@
+.shell {
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.masthead {
+  align-items: center;
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-inline: auto;
+  max-width: 90rem;
+  min-height: 5rem;
+  padding: var(--space-4) clamp(1rem, 4vw, 4rem);
+}
+
+.wordmark {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-3);
+  text-decoration: none;
+}
+
+.wordmark strong,
+.wordmark small {
+  display: block;
+}
+
+.wordmark strong {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-stretch: condensed;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.wordmark small {
+  color: var(--steel);
+  font-family: var(--font-data);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  margin-top: var(--space-1);
+  text-transform: uppercase;
+}
+
+.mark {
+  align-items: center;
+  background: var(--indigo-enamel);
+  border-radius: var(--radius-sm);
+  color: white;
+  display: inline-flex;
+  font-family: var(--font-data);
+  font-size: 0.8rem;
+  height: 2.5rem;
+  justify-content: center;
+  letter-spacing: -0.06em;
+  width: 2.5rem;
+}
+
+.status {
+  align-items: center;
+  color: var(--rack-ink-soft);
+  display: flex;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.status span {
+  background: var(--verified);
+  border-radius: 50%;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.hero {
+  display: grid;
+  gap: clamp(2rem, 6vw, 7rem);
+  grid-template-columns: minmax(0, 1.45fr) minmax(18rem, 0.65fr);
+  margin-inline: auto;
+  max-width: 90rem;
+  padding: clamp(4rem, 11vw, 9rem) clamp(1rem, 4vw, 4rem);
+}
+
+.heroCopy {
+  max-width: 57rem;
+}
+
+.eyebrow,
+.dataLabel {
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  margin: 0 0 var(--space-4);
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  color: var(--indigo-deep);
+}
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(3.6rem, 8.2vw, 8.4rem);
+  font-stretch: condensed;
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 0.86;
+  margin: 0;
+  max-width: 13ch;
+  text-wrap: balance;
+}
+
+.lede {
+  color: var(--rack-ink-soft);
+  font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+  margin: var(--space-8) 0 0;
+  max-width: 44rem;
+}
+
+.proof {
+  align-self: end;
+  background: var(--rack-ink);
+  border-top: 0.4rem solid var(--plate-yellow);
+  color: var(--paper);
+  padding: var(--space-8);
+}
+
+.proof h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-stretch: condensed;
+  line-height: 1;
+  margin: 0 0 var(--space-4);
+}
+
+.proof p {
+  margin: 0;
+}
+
+.proof .dataLabel {
+  color: #f0bd4d;
+  margin-bottom: var(--space-6);
+}
+
+.proof .proofRule {
+  border-top: 1px solid #48505d;
+  color: #cdd4dd;
+  font-size: 0.9rem;
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+}
+
+.loopSection {
+  background: var(--paper);
+  border-block: 1px solid var(--hairline);
+  display: grid;
+  gap: clamp(3rem, 8vw, 8rem);
+  grid-template-columns: minmax(15rem, 0.65fr) minmax(0, 1.35fr);
+  padding: clamp(4rem, 8vw, 7rem) max(1rem, calc((100vw - 82rem) / 2));
+}
+
+.sectionHeading {
+  max-width: 28rem;
+}
+
+.sectionHeading h2,
+.scopeSection h2 {
+  font-family: var(--font-display);
+  font-size: clamp(2.4rem, 4.4vw, 4.5rem);
+  font-stretch: condensed;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.loadRail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.loadRail::before {
+  background: var(--rack-ink);
+  content: "";
+  inset-block: 1rem;
+  left: 1.45rem;
+  position: absolute;
+  width: 0.18rem;
+}
+
+.loadRail li {
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: 3rem minmax(0, 1fr);
+  padding-bottom: var(--space-8);
+  position: relative;
+}
+
+.loadRail li:last-child {
+  padding-bottom: 0;
+}
+
+.notch {
+  align-items: center;
+  background: var(--paper);
+  border: 0.18rem solid var(--rack-ink);
+  border-radius: 50%;
+  display: flex;
+  font-family: var(--font-data);
+  font-size: 0.62rem;
+  height: 3rem;
+  justify-content: center;
+  position: relative;
+  width: 3rem;
+  z-index: 1;
+}
+
+.loadRail li:first-child .notch {
+  background: var(--plate-yellow);
+}
+
+.loadRail h3 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-stretch: condensed;
+  line-height: 1;
+  margin: 0 0 var(--space-2);
+}
+
+.loadRail p {
+  color: var(--rack-ink-soft);
+  margin: 0;
+  max-width: 43rem;
+}
+
+.loadRail .dataLabel {
+  color: var(--steel);
+  margin-bottom: var(--space-2);
+}
+
+.scopeSection {
+  display: grid;
+  gap: clamp(3rem, 8vw, 8rem);
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, 0.8fr);
+  margin-inline: auto;
+  max-width: 90rem;
+  padding: clamp(4rem, 9vw, 8rem) clamp(1rem, 4vw, 4rem);
+}
+
+.scopeSection > div > p:last-child {
+  color: var(--rack-ink-soft);
+  font-size: 1.05rem;
+  margin: var(--space-6) 0 0;
+  max-width: 42rem;
+}
+
+.scopeList {
+  border-top: 0.22rem solid var(--rack-ink);
+  margin: 0;
+}
+
+.scopeList div {
+  align-items: baseline;
+  border-bottom: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 7rem minmax(0, 1fr);
+  padding: var(--space-4) 0;
+}
+
+.scopeList dt {
+  color: var(--indigo-deep);
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scopeList dd {
+  font-weight: 700;
+  margin: 0;
+}
+
+.footer {
+  align-items: center;
+  background: var(--rack-ink);
+  color: var(--paper);
+  display: flex;
+  font-size: 0.82rem;
+  gap: var(--space-6);
+  justify-content: space-between;
+  padding: var(--space-6) max(1rem, calc((100vw - 82rem) / 2));
+}
+
+.footer p {
+  color: #cdd4dd;
+  margin: 0;
+}
+
+.footer span {
+  color: white;
+  font-weight: 700;
+}
+
+@media (max-width: 52rem) {
+  .masthead,
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hero,
+  .loopSection,
+  .scopeSection {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding-top: var(--space-16);
+  }
+
+  .hero h1 {
+    font-size: clamp(3.4rem, 17vw, 5.8rem);
+  }
+
+  .proof {
+    max-width: 32rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .status {
+    align-items: flex-start;
+  }
+
+  .scopeList div {
+    grid-template-columns: 1fr;
+  }
+}
