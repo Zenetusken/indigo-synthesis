@@ -20,7 +20,7 @@
 
 .button:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: 0.65;
 }
 
 .primary {

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getInstallationStatus } from '@/modules/identity/application/installation'
 import { BootstrapForm } from '@/modules/identity/ui/bootstrap-form'
@@ -20,12 +21,12 @@ export default async function BootstrapPage({
   return (
     <main className={styles.page}>
       <section className={styles.frame} aria-labelledby="bootstrap-heading">
-        <a className={styles.wordmark} href="/">
+        <Link className={styles.wordmark} href={{ pathname: '/' }}>
           <span className={styles.mark} aria-hidden="true">
             IS
           </span>
           Indigo Synthesis
-        </a>
+        </Link>
 
         {query.reset === 'complete' ? (
           <p className={styles.notice} role="status">

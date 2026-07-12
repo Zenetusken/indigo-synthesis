@@ -83,6 +83,7 @@ describe('active workout process restart recovery', () => {
       kind: 'active',
       sessionId: beforeRestart.sessionId,
       status: 'paused',
+      progressionInvalidated: false,
       contentEligibility: { eligible: true },
     })
 

@@ -4,7 +4,7 @@
 }
 
 .warning {
-  background: #fff6dc;
+  background: var(--warning-soft);
   border-inline-start: 0.35rem solid var(--plate-yellow);
   display: grid;
   gap: var(--space-2);
@@ -18,7 +18,7 @@
 
 .empty {
   background: var(--paper);
-  border-block-start: 0.3rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   display: grid;
   gap: var(--space-6);
   max-width: 48rem;
@@ -42,7 +42,7 @@
   background: var(--paper-raised);
   border: 1px solid var(--hairline-strong);
   border-radius: var(--radius-sm);
-  font: 500 1rem / 1 var(--font-data);
+  font: 500 var(--text-base) / 1 var(--font-data);
   min-height: 3rem;
   padding: 0.75rem;
 }
@@ -60,7 +60,7 @@
 
 .sheet {
   background: var(--paper);
-  border-block-start: 0.35rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
 }
 
 .sheetHeader {
@@ -114,13 +114,13 @@
 
 .workoutMeta strong {
   font-family: var(--font-display);
-  font-size: 1.5rem;
+  font-size: var(--text-2xl);
   font-stretch: condensed;
 }
 
 .workoutMeta span {
   color: var(--steel);
-  font: 500 0.75rem / 1.5 var(--font-data);
+  font: 500 var(--text-sm) / 1.5 var(--font-data);
   margin-block-start: var(--space-2);
 }
 
@@ -151,11 +151,11 @@
 
 .ordinal {
   color: var(--steel);
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
 }
 
 .prescription {
-  font-size: 0.9rem;
+  font-size: var(--text-md);
 }
 
 .versions {
@@ -174,11 +174,11 @@
 
 .versions dt {
   color: var(--steel);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .versions dd {
-  font: 500 0.8rem / 1.5 var(--font-data);
+  font: 500 var(--text-sm) / 1.5 var(--font-data);
   margin: 0;
   overflow-wrap: anywhere;
 }

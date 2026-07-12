@@ -15,7 +15,7 @@
 .eyebrow {
   color: var(--indigo-deep);
   font-family: var(--font-data);
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.11em;
   margin: 0 0 var(--space-3);
   text-transform: uppercase;

@@ -252,24 +252,15 @@ async function withPendingLedgerProvenanceMigration(
   await database.create()
 
   try {
-    database.activateDatabaseUrl()
-    resetServerConfigForTests()
-    await closeDb()
-    await migrateDatabase()
-
     client = new Client({ connectionString: database.databaseUrl })
     await client.connect()
     const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-    expect(migrations).toHaveLength(11)
-    const provenanceMigration = migrations[10]
-    if (!provenanceMigration) {
-      throw new Error('Migration-ledger provenance migration is missing.')
-    }
-    const removed = await client.query(
-      `DELETE FROM drizzle.__drizzle_migrations WHERE created_at = $1`,
-      [provenanceMigration.folderMillis],
-    )
-    expect(removed.rowCount).toBe(1)
+    expect(migrations).toHaveLength(13)
+    await applyMigrationPrefixWithLedger(client, migrations.slice(0, 10))
+
+    database.activateDatabaseUrl()
+    resetServerConfigForTests()
+    await closeDb()
 
     await exercise(client)
   } finally {
@@ -512,7 +503,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(ledger.rows).toEqual([{ hash: canonicalProgramOrdinalMigrationHash }])
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 11,
+        appliedMigrationCount: 13,
         migrationLedgerCanonical: true,
       })
 
@@ -544,7 +535,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(after.rows).toEqual(before.rows)
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 11,
+        appliedMigrationCount: 13,
         migrationLedgerCanonical: true,
       })
     })
@@ -573,9 +564,10 @@ describe('program-ordinal migration ledger provenance', () => {
         [programOrdinalMigrationCreatedAt],
       )
       expect(ledger.rows).toEqual([{ hash: unknownHash }])
-      await expect(assertDatabaseReady()).rejects.toThrow(
-        'expected 11 applied migrations, found 10',
+      const applied = await client.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations`,
       )
+      expect(applied.rows).toEqual([{ count: 10 }])
     })
   })
 

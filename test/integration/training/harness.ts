@@ -182,7 +182,7 @@ export async function seedCoherentProgram(
     await transaction.insert(programs).values({
       id: programId,
       userId,
-      status,
+      status: 'draft',
     })
     await transaction.insert(programRevisions).values({
       id: revisionId,
@@ -269,6 +269,10 @@ export async function seedCoherentProgram(
         .update(programRevisions)
         .set({ status: 'active', activatedAt: TEST_NOW })
         .where(eq(programRevisions.id, revisionId))
+      await transaction
+        .update(programs)
+        .set({ status: 'active', updatedAt: TEST_NOW })
+        .where(eq(programs.id, programId))
     }
   })
 

@@ -21,7 +21,26 @@
 }
 
 .topbar span {
-  font: 500 0.8rem / 1.3 var(--font-data);
+  font: 500 var(--text-sm) / 1.3 var(--font-data);
+  text-transform: uppercase;
+}
+
+.skipLink {
+  background: var(--rack-ink);
+  color: var(--paper-raised);
+  font-weight: 700;
+  left: var(--space-4);
+  min-height: 3rem;
+  padding: var(--space-3) var(--space-4);
+  position: fixed;
+  top: var(--space-3);
+  transform: translateY(calc(-100% - var(--space-6)));
+  transition: transform 120ms ease;
+  z-index: 100;
+}
+
+.skipLink:focus {
+  transform: translateY(0);
 }
 
 .content {
@@ -54,6 +73,7 @@
 }
 
 .error,
+.invalidationStop,
 .safetyStop {
   border-inline-start: 0.35rem solid var(--danger);
   display: grid;
@@ -65,8 +85,17 @@
   background: var(--danger-soft);
 }
 
+.invalidationStop {
+  background: var(--danger-soft);
+}
+
+.invalidationStop h2,
+.invalidationStop p {
+  margin: 0;
+}
+
 .safetyStop {
-  background: #fff2f2;
+  background: var(--danger-soft);
 }
 
 .exerciseList {
@@ -79,7 +108,7 @@
 
 .exercise {
   background: var(--paper);
-  border-block-start: 0.35rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   min-width: 0;
 }
 
@@ -107,21 +136,80 @@
 .priorPerformance span,
 .restContext span {
   color: var(--steel);
-  font: 500 0.72rem / 1.4 var(--font-data);
+  font: 500 var(--text-xs) / 1.4 var(--font-data);
   text-transform: uppercase;
 }
 
 .priorPerformance strong {
-  font: 600 0.82rem / 1.4 var(--font-data);
+  font: 600 var(--text-sm) / 1.4 var(--font-data);
+}
+
+.substitutionPanel {
+  background: var(--paper-raised);
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+}
+
+.substitutionProof,
+.substitutionUnavailable {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.substitutionProof strong,
+.substitutionUnavailable strong {
+  font: 700 var(--text-xs) / 1.4 var(--font-data);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.substitutionProof span,
+.substitutionUnavailable span {
+  color: var(--steel);
+  font-size: var(--text-sm);
 }
 
 .substitutionUnavailable {
-  background: var(--paper-raised);
-  border-block-end: 1px solid var(--hairline);
+  border-inline-start: 0.25rem solid var(--plate-yellow);
+  outline: none;
+  padding: var(--space-3) var(--space-4);
+}
+
+.substitutionUnavailable:focus {
+  box-shadow: var(--focus-ring);
+}
+
+.substitutionForm {
+  align-items: end;
+  display: grid;
+  gap: var(--space-2) var(--space-3);
+  grid-template-columns: minmax(12rem, 1fr) auto;
+}
+
+.substitutionForm label {
+  display: grid;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  gap: var(--space-1);
+}
+
+.substitutionForm input {
+  background: var(--paper);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.substitutionForm p {
   color: var(--steel);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
+  grid-column: 1 / -1;
   margin: 0;
-  padding: var(--space-3) var(--space-6);
 }
 
 .restContext {
@@ -141,7 +229,7 @@
 }
 
 .restContext strong {
-  font: 700 1.35rem / 1 var(--font-data);
+  font: 700 var(--text-xl) / 1 var(--font-data);
 }
 
 .restContext p {
@@ -159,7 +247,7 @@
 
 .exerciseHeader p {
   color: var(--steel);
-  font: 500 0.75rem / 1.5 var(--font-data);
+  font: 500 var(--text-sm) / 1.5 var(--font-data);
 }
 
 .setList {
@@ -185,7 +273,7 @@
   gap: var(--space-4);
   grid-template-columns: 2rem minmax(8rem, 0.6fr) minmax(0, 1fr);
   min-width: 0;
-  padding: var(--space-5, 1.25rem) var(--space-6) var(--space-5, 1.25rem) 0;
+  padding: var(--space-5) var(--space-6) var(--space-5) 0;
   position: relative;
 }
 
@@ -195,7 +283,7 @@
   border: 2px solid var(--hairline-strong);
   border-radius: 50%;
   display: inline-flex;
-  font: 500 0.65rem / 1 var(--font-data);
+  font: 500 var(--text-2xs) / 1 var(--font-data);
   height: 2rem;
   justify-content: center;
   position: relative;
@@ -233,7 +321,7 @@
 .target span,
 .actualSummary span {
   color: var(--steel);
-  font-size: 0.75rem;
+  font-size: var(--text-sm);
 }
 
 .target strong,
@@ -250,7 +338,7 @@
 .setForm label,
 .skipForm label {
   display: grid;
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   font-weight: 700;
   gap: var(--space-1);
 }
@@ -269,7 +357,7 @@
 
 .setForm input[type="number"] {
   font-family: var(--font-data);
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 .setForm small {
@@ -332,6 +420,8 @@
   gap: var(--space-3);
   justify-content: space-between;
   left: 0;
+  max-height: calc(100dvh - var(--space-8));
+  overflow-y: auto;
   padding: var(--space-3) clamp(1rem, 4vw, 3rem)
     calc(var(--space-3) + env(safe-area-inset-bottom));
   position: fixed;
@@ -344,6 +434,17 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.dockSafetyLink {
+  align-items: center;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
 }
 
 .completePanel {
@@ -388,7 +489,7 @@
 
 .abandonPanel label {
   display: grid;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 700;
   gap: var(--space-1);
 }
@@ -423,6 +524,10 @@
 }
 
 @media (max-width: 48rem) {
+  .page {
+    padding-block-end: 0;
+  }
+
   .topbar {
     align-items: start;
     flex-wrap: wrap;
@@ -480,6 +585,22 @@
     grid-column: 2;
   }
 
+  .substitutionPanel {
+    padding-inline: var(--space-4);
+  }
+
+  .substitutionForm {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .substitutionForm p {
+    grid-column: auto;
+  }
+
+  .substitutionForm button {
+    justify-self: stretch;
+  }
+
   .setForm {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -491,5 +612,20 @@
   .dock {
     align-items: stretch;
     flex-direction: column;
+    inset: auto;
+    max-height: none;
+    overflow: visible;
+    position: static;
+  }
+
+  .dockActions > * {
+    flex: 1 1 12rem;
+    max-width: 100%;
+  }
+
+  .dockSafetyLink {
+    justify-content: center;
+    overflow-wrap: anywhere;
+    text-align: center;
   }
 }

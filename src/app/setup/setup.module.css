@@ -31,7 +31,7 @@
 
 .form section {
   background: var(--paper);
-  border-block-start: 0.25rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   display: grid;
   gap: var(--space-6);
   padding: clamp(1.25rem, 4vw, 2.5rem);
@@ -51,7 +51,7 @@
 
 .step {
   color: var(--indigo-deep);
-  font: 500 0.75rem / 1 var(--font-data);
+  font: 500 var(--text-sm) / 1 var(--font-data);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -88,7 +88,7 @@
 
 .form input[type="number"] {
   font-family: var(--font-data);
-  font-size: 1rem;
+  font-size: var(--text-base);
   font-variant-numeric: tabular-nums;
 }
 
@@ -163,8 +163,8 @@
 }
 
 .actionBar span {
-  color: #cdd4dd;
-  font-size: 0.9rem;
+  color: var(--steel-bright);
+  font-size: var(--text-md);
 }
 
 .actionBar button {

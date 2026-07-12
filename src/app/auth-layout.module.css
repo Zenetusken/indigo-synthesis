@@ -7,7 +7,7 @@
 
 .frame {
   background: var(--paper);
-  border-block-start: 0.45rem solid var(--plate-yellow);
+  border-block-start: var(--accent-bar) solid var(--plate-yellow);
   box-shadow: 0 1rem 3rem rgb(21 25 34 / 10%);
   display: grid;
   gap: var(--space-8);
@@ -35,7 +35,7 @@
   border-radius: var(--radius-sm);
   color: white;
   display: inline-flex;
-  font: 500 0.75rem / 1 var(--font-data);
+  font: 500 var(--text-sm) / 1 var(--font-data);
   height: 2.5rem;
   justify-content: center;
   width: 2.5rem;
@@ -67,7 +67,7 @@
 
 .footnote {
   border-block-start: 1px solid var(--hairline);
-  font-size: 0.9rem;
+  font-size: var(--text-md);
   margin: 0;
   padding-block-start: var(--space-4);
 }

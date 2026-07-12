@@ -1,6 +1,9 @@
+import { sql } from 'drizzle-orm'
 import {
   boolean,
+  check,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -82,4 +85,60 @@ export const verification = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [index('verification_identifier_idx').on(table.identifier)],
+)
+
+/**
+ * Mutable security state for destructive password challenges. Successful
+ * reauthentication removes the row; audit_event retains append-only evidence of
+ * denied attempts without retaining account or subject identifiers after deletion.
+ */
+export const destructiveReauthenticationStates = pgTable(
+  'destructive_reauthentication_state',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => account.id, { onDelete: 'cascade' }),
+    purpose: text('purpose').notNull(),
+    windowStartedAt: timestamp('window_started_at', {
+      withTimezone: true,
+      mode: 'date',
+    }).notNull(),
+    failedAttempts: integer('failed_attempts').notNull(),
+    lockedUntil: timestamp('locked_until', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+    lastAttemptAt: timestamp('last_attempt_at', {
+      withTimezone: true,
+      mode: 'date',
+    }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex('destructive_reauthentication_account_purpose_uidx').on(
+      table.accountId,
+      table.purpose,
+    ),
+    check(
+      'destructive_reauthentication_purpose_check',
+      sql`${table.purpose} IN ('trainee-data-deletion', 'instance-reset')`,
+    ),
+    check(
+      'destructive_reauthentication_attempts_check',
+      sql`${table.failedAttempts} BETWEEN 1 AND 5`,
+    ),
+    check(
+      'destructive_reauthentication_window_check',
+      sql`${table.windowStartedAt} <= ${table.lastAttemptAt}`,
+    ),
+    check(
+      'destructive_reauthentication_lock_check',
+      sql`(${table.failedAttempts} < 5 AND ${table.lockedUntil} IS NULL)
+        OR (${table.failedAttempts} = 5
+          AND ${table.lockedUntil} IS NOT NULL
+          AND ${table.lockedUntil} > ${table.windowStartedAt})`,
+    ),
+  ],
 )

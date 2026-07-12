@@ -48,8 +48,9 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
 - PostgreSQL constraints/triggers for ownership, lifecycle, immutability, and audit
   immutability outside the explicit deletion workflow.
 
-No reviewed exercise substitution is bundled. The workout UI therefore denies
-substitution rather than inventing an equivalent.
+No reviewed exercise substitution is bundled. The workout UI sends a typed proposal
+through the authenticated application boundary and returns an explicit denial without
+changing the prescription or session facts, rather than inventing an equivalent.
 
 ## Local development
 

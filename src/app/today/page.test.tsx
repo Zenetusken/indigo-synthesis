@@ -102,4 +102,24 @@ describe('Today safety-hold state', () => {
 
     expect(screen.getByRole('button', { name: 'Resolve safety hold' })).toBeVisible()
   })
+
+  it('routes an invalidated live session to factual review instead of resume', async () => {
+    pageMocks.getTodayState.mockResolvedValue({
+      kind: 'active',
+      sessionId: 'invalidated-session-id',
+      status: 'paused',
+      progressionInvalidated: true,
+      contentEligibility: { eligible: true },
+    })
+
+    render(await TodayPage({ searchParams: Promise.resolve({}) }))
+
+    expect(
+      screen.getByRole('heading', { name: 'Workout progression invalidated.' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('link', { name: 'Review invalidated session' }),
+    ).toHaveAttribute('href', '/workouts/invalidated-session-id')
+    expect(screen.queryByRole('link', { name: 'Resume workout' })).not.toBeInTheDocument()
+  })
 })

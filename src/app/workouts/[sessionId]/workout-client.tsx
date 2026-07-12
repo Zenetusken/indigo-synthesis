@@ -13,13 +13,13 @@ import type {
   WorkoutSessionView,
   WorkoutSetView,
 } from '@/modules/training/application/workouts'
-import { evaluateSubstitution } from '@/modules/training/domain/substitution'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import {
   abandonWorkoutAction,
   completeSetAction,
   completeWorkoutAction,
   pauseAction,
+  proposeExerciseSubstitutionAction,
   reportPainAction,
   resumeAction,
   skipSetAction,
@@ -42,6 +42,8 @@ const errorMessages: Readonly<Record<string, string>> = {
   'session.complete-failed': 'The workout could not be completed. Try again.',
   'session.abandon-failed': 'The workout could not be abandoned. Try again.',
   'session.not-abandonable': 'The session is no longer active or paused.',
+  'program.revision-invalidated':
+    'A corrected training fact invalidated this workout progression.',
   'safety.hold-active': 'A safety hold blocks this action.',
   'safety.pain-reported': 'A reported pain issue blocks normal completion.',
   'safety.report-failed': 'The issue could not be reported. Try again.',
@@ -53,6 +55,10 @@ const errorMessages: Readonly<Record<string, string>> = {
   'set.skip-reason-required': 'Enter a reason before skipping the set.',
   'set.skip-failed': 'The set could not be skipped. Try again.',
   'set.save-failed': 'The set was not saved. Your entries remain on this screen.',
+  'substitution.unapproved':
+    'No reviewed, equipment-compatible substitution release is installed.',
+  'substitution.proposal-failed':
+    'The substitution proposal could not be evaluated. Try again.',
   'abandon.reason-required': 'Enter a factual reason for abandoning the workout.',
   'abandon.ack-required':
     'Confirm that you understand this product does not assess or clear symptoms.',
@@ -68,6 +74,7 @@ type WorkoutClientProps = {
   continuationTargetId: string | null
   previousPerformedSet: WorkoutSetView | null
   initialError: string | null
+  serverNow: string
 }
 
 function useWorkoutForm(action: (formData: FormData) => Promise<WorkoutActionResult>) {
@@ -236,6 +243,70 @@ function SkipForm({ sessionId, set }: { sessionId: string; set: WorkoutSetView }
   )
 }
 
+function SubstitutionProposalForm({
+  sessionId,
+  sessionExerciseId,
+  originalExerciseName,
+}: {
+  sessionId: string
+  sessionExerciseId: string
+  originalExerciseName: string
+}) {
+  const { isPending, errorCode, alertRef, submit } = useWorkoutForm(
+    proposeExerciseSubstitutionAction,
+  )
+  const [commandId] = useState(() => newUuidV7())
+  const [requestedExerciseCode, setRequestedExerciseCode] = useState('')
+
+  return (
+    <section
+      className={styles.substitutionPanel}
+      aria-label={`Substitution proposal for ${originalExerciseName}`}
+    >
+      <div className={styles.substitutionProof}>
+        <strong>Prescription unchanged</strong>
+        <span>{originalExerciseName} remains the prescribed exercise.</span>
+      </div>
+      {errorCode ? (
+        <div
+          className={styles.substitutionUnavailable}
+          role="alert"
+          tabIndex={-1}
+          ref={alertRef}
+        >
+          <strong>Substitution not applied</strong>
+          <span>{errorMessages[errorCode] ?? 'The substitution was not applied.'}</span>
+          <span>The original prescription remains unchanged.</span>
+        </div>
+      ) : null}
+      <form className={styles.substitutionForm} onSubmit={submit} aria-busy={isPending}>
+        <input type="hidden" name="sessionId" value={sessionId} />
+        <input type="hidden" name="sessionExerciseId" value={sessionExerciseId} />
+        <input type="hidden" name="commandId" value={commandId} />
+        <label>
+          <span>Requested exercise</span>
+          <input
+            name="requestedExerciseCode"
+            type="text"
+            maxLength={200}
+            value={requestedExerciseCode}
+            onChange={(event) => setRequestedExerciseCode(event.target.value)}
+            aria-describedby={`substitution-help-${sessionExerciseId}`}
+            required
+            disabled={isPending}
+          />
+        </label>
+        <p id={`substitution-help-${sessionExerciseId}`}>
+          Enter the exercise name or catalog code you want considered.
+        </p>
+        <button className={styles.secondaryButton} type="submit" disabled={isPending}>
+          {isPending ? 'Checking proposal…' : 'Propose substitute'}
+        </button>
+      </form>
+    </section>
+  )
+}
+
 function CompleteWorkoutForm({ sessionId }: { sessionId: string }) {
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(completeWorkoutAction)
   const [commandId] = useState(() => newUuidV7())
@@ -251,6 +322,7 @@ function CompleteWorkoutForm({ sessionId }: { sessionId: string }) {
         <input type="hidden" name="commandId" value={commandId} />
         <label>
           <input
+            id="complete-workout-ack"
             name="noPainAttested"
             type="checkbox"
             checked={checked}
@@ -274,8 +346,12 @@ function ReportPainForm({ sessionId }: { sessionId: string }) {
   const [details, setDetails] = useState('')
 
   return (
-    <section className={styles.safetyStop} aria-labelledby="safety-stop-heading">
-      <h2 id="safety-stop-heading">Report pain or an issue</h2>
+    <section
+      className={styles.safetyStop}
+      id="report-pain"
+      aria-labelledby="report-pain-heading"
+    >
+      <h2 id="report-pain-heading">Report pain or an issue</h2>
       <p>
         This pauses training and creates a persisted safety hold. It does not diagnose the
         issue.
@@ -343,6 +419,7 @@ function PauseResumeForm({
         ) : null}
         <input type="hidden" name="sessionId" value={sessionId} />
         <button
+          id="resume-workout"
           className={styles.primaryButton}
           type="submit"
           disabled={resume.isPending}
@@ -472,30 +549,54 @@ export function WorkoutClient({
   continuationTargetId,
   previousPerformedSet,
   initialError,
+  serverNow,
 }: WorkoutClientProps) {
   return (
     <main className={styles.page}>
+      <a className={styles.skipLink} href="#workout-content">
+        Skip to workout content
+      </a>
+
       <header className={styles.topbar}>
         <Link href={{ pathname: '/today' }}>← Back to Today</Link>
         <span>
-          {session.status.toUpperCase()} · VERSION {session.optimisticVersion}
+          {session.status} · version {session.optimisticVersion}
         </span>
       </header>
 
-      <div className={styles.content}>
-        <ContinuationFocus targetId={continuationTargetId} />
+      <div className={styles.content} id="workout-content" tabIndex={-1}>
+        <ContinuationFocus
+          targetId={initialError ? 'workout-command-error' : continuationTargetId}
+        />
         <header className={styles.heading}>
           <h1>{session.plannedWorkout.name}</h1>
           <p>
             {session.plannedWorkout.scheduledDate} · Started{' '}
             {formatTimeInTimezone(session.startedAt, timezone)} ·{' '}
             <span aria-atomic="true" aria-live="polite" role="status">
-              Draft saved in PostgreSQL at version {session.optimisticVersion}
+              Draft saved · revision {session.optimisticVersion}
             </span>
           </p>
         </header>
 
-        {!session.contentEligibility.eligible ? (
+        {session.progressionInvalidated ? (
+          <section
+            className={styles.invalidationStop}
+            aria-labelledby="progression-invalidated-heading"
+          >
+            <h2 id="progression-invalidated-heading">
+              This workout progression was invalidated.
+            </h2>
+            <p>
+              A corrected training fact invalidated the revision behind this saved
+              session. Its facts remain available for inspection, but no sets,
+              substitution proposals, safety reports, resume, pause, or completion can be
+              recorded. Abandoning the session is the only available close-out action.
+            </p>
+          </section>
+        ) : null}
+
+        {!session.contentEligibility.eligible && !session.progressionInvalidated ? (
           <section className={styles.error} role="alert">
             <strong>Saved session blocked in this content mode</strong>
             <span>
@@ -507,7 +608,12 @@ export function WorkoutClient({
         ) : null}
 
         {initialError ? (
-          <div className={styles.error} role="alert">
+          <div
+            className={styles.error}
+            id="workout-command-error"
+            role="alert"
+            tabIndex={-1}
+          >
             <strong>Command not applied</strong>
             <span>{errorMessages[initialError] ?? 'The command was not applied.'}</span>
           </div>
@@ -524,11 +630,11 @@ export function WorkoutClient({
           </section>
         ) : null}
 
-        {previousPerformedSet?.confirmedAt ? (
+        {!session.progressionInvalidated && previousPerformedSet?.confirmedAt ? (
           <RestCountdown
             confirmedAt={previousPerformedSet.confirmedAt.toISOString()}
             prescribedSeconds={previousPerformedSet.restSeconds}
-            serverNow={new Date().toISOString()}
+            serverNow={serverNow}
           />
         ) : null}
 
@@ -561,18 +667,13 @@ export function WorkoutClient({
                 </div>
               </header>
 
-              {(() => {
-                const substitution = evaluateSubstitution(
-                  exercise.exerciseCode,
-                  'not-selected',
-                )
-                return substitution.allowed ? null : (
-                  <p className={styles.substitutionUnavailable} role="status">
-                    Substitution unavailable — {substitution.reason} The original
-                    prescription is unchanged.
-                  </p>
-                )
-              })()}
+              {!session.progressionInvalidated ? (
+                <SubstitutionProposalForm
+                  sessionId={session.id}
+                  sessionExerciseId={exercise.id}
+                  originalExerciseName={exercise.exerciseName}
+                />
+              ) : null}
 
               <ol className={styles.setList}>
                 {exercise.sets.map((set) => {
@@ -585,7 +686,11 @@ export function WorkoutClient({
                     .join(' ')
 
                   return (
-                    <li className={rowClasses} key={set.id}>
+                    <li
+                      className={rowClasses}
+                      key={set.id}
+                      aria-current={set.id === currentSetId ? 'step' : undefined}
+                    >
                       <span className={styles.notch}>
                         <span className={styles.visuallyHidden}>
                           Set {set.ordinal}: {set.status}
@@ -628,6 +733,7 @@ export function WorkoutClient({
                       ) : null}
 
                       {set.status === 'pending' &&
+                      !session.progressionInvalidated &&
                       session.status === 'active' &&
                       session.contentEligibility.eligible &&
                       !session.feedback?.painReported ? (
@@ -650,27 +756,42 @@ export function WorkoutClient({
         </ol>
 
         {pendingSets.length === 0 &&
+        !session.progressionInvalidated &&
         !session.feedback?.painReported &&
         session.contentEligibility.eligible &&
-        ['active', 'paused'].includes(session.status) ? (
+        session.status === 'active' ? (
           <CompleteWorkoutForm sessionId={session.id} />
         ) : null}
 
-        {['active', 'paused'].includes(session.status) ? (
+        {['active', 'paused'].includes(session.status) &&
+        !session.progressionInvalidated ? (
           <ReportPainForm sessionId={session.id} />
         ) : null}
       </div>
 
       {['active', 'paused'].includes(session.status) ? (
         <footer className={styles.dock}>
-          <strong>{pendingSets.length} unresolved sets</strong>
+          <strong>
+            {session.progressionInvalidated
+              ? `Session blocked · ${pendingSets.length} unresolved sets`
+              : `${pendingSets.length} unresolved sets`}
+          </strong>
           <div className={styles.dockActions}>
-            <PauseResumeForm
-              sessionId={session.id}
-              status={session.status}
-              painReported={session.feedback?.painReported ?? false}
-              eligible={session.contentEligibility.eligible}
-            />
+            {!session.progressionInvalidated ? (
+              <>
+                {!session.feedback?.painReported ? (
+                  <a className={styles.dockSafetyLink} href="#report-pain">
+                    Report pain or an issue
+                  </a>
+                ) : null}
+                <PauseResumeForm
+                  sessionId={session.id}
+                  status={session.status}
+                  painReported={session.feedback?.painReported ?? false}
+                  eligible={session.contentEligibility.eligible}
+                />
+              </>
+            ) : null}
             <AbandonPanel sessionId={session.id} />
           </div>
         </footer>

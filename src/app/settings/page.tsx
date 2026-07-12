@@ -78,6 +78,27 @@ export default async function SettingsPage() {
           </a>
         </section>
 
+        <section className={styles.section}>
+          <h2>
+            {actor.role === 'owner'
+              ? 'Delete my training data'
+              : 'Delete my local account'}
+          </h2>
+          <p>
+            {actor.role === 'owner'
+              ? 'Preview and permanently remove your trainee profile and training history while preserving installation ownership, your login, and every other local user.'
+              : 'Preview and permanently remove only your account, training data, and subject-linked audit history. Other local users remain unchanged.'}
+          </p>
+          <Link
+            className={styles.dangerLink}
+            href={{ pathname: '/settings/delete-account' }}
+          >
+            {actor.role === 'owner'
+              ? 'Review training-data deletion'
+              : 'Review account deletion'}
+          </Link>
+        </section>
+
         {actor.role === 'owner' ? (
           <section className={styles.section}>
             <h2>Reset instance</h2>
@@ -89,21 +110,7 @@ export default async function SettingsPage() {
               Review instance reset
             </Link>
           </section>
-        ) : (
-          <section className={styles.section}>
-            <h2>Delete my local account</h2>
-            <p>
-              Preview and permanently remove only your account, training data, and
-              subject-linked audit history. Other local users remain unchanged.
-            </p>
-            <Link
-              className={styles.dangerLink}
-              href={{ pathname: '/settings/delete-account' }}
-            >
-              Review account deletion
-            </Link>
-          </section>
-        )}
+        ) : null}
       </div>
     </ProductFrame>
   )

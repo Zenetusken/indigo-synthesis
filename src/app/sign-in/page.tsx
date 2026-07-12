@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getInstallationStatus } from '@/modules/identity/application/installation'
 import { getActor } from '@/modules/identity/server/actor'
@@ -27,12 +28,12 @@ export default async function SignInPage({
   return (
     <main className={styles.page}>
       <section className={styles.frame} aria-labelledby="sign-in-heading">
-        <a className={styles.wordmark} href="/">
+        <Link className={styles.wordmark} href={{ pathname: '/' }}>
           <span className={styles.mark} aria-hidden="true">
             IS
           </span>
           Indigo Synthesis
-        </a>
+        </Link>
 
         {query.created === '1' ? (
           <p className={styles.notice} role="status">

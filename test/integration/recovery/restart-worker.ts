@@ -73,7 +73,7 @@ async function writeActiveSession() {
     limitations: null,
     confirmedAt: new Date('2026-07-11T12:00:00.000Z'),
   })
-  await db.insert(programs).values({ id: programId, userId, status: 'active' })
+  await db.insert(programs).values({ id: programId, userId, status: 'draft' })
   await db.insert(programRevisions).values({
     id: revisionId,
     programId,
@@ -135,6 +135,10 @@ async function writeActiveSession() {
     .update(programRevisions)
     .set({ status: 'active', activatedAt: new Date() })
     .where(eq(programRevisions.id, revisionId))
+  await db
+    .update(programs)
+    .set({ status: 'active', updatedAt: new Date() })
+    .where(eq(programs.id, programId))
 
   const sessionId = await startWorkout(
     userId,

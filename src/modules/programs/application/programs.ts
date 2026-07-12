@@ -26,6 +26,7 @@ import {
   exercisePrescriptions,
   plannedWorkouts,
   programRevisionLineage,
+  programRevisionInvalidations,
   programRevisions,
   programs,
   safetyHoldResolutions,
@@ -346,6 +347,17 @@ export async function activatePersistedProgramRevision(
     throw new ProgramUnavailableError(
       'program.revision-not-draft',
       'Only a draft revision can be activated.',
+    )
+  }
+  const [invalidation] = await transaction
+    .select({ revisionId: programRevisionInvalidations.revisionId })
+    .from(programRevisionInvalidations)
+    .where(eq(programRevisionInvalidations.revisionId, revisionId))
+    .limit(1)
+  if (invalidation) {
+    throw new ProgramUnavailableError(
+      'program.revision-invalidated',
+      'This program revision was permanently invalidated by a training correction.',
     )
   }
 
@@ -747,6 +759,10 @@ export async function getProgramOverview(
       and(
         eq(programRevisions.programId, program.id),
         inArray(programRevisions.status, ['active', 'draft']),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${programRevisionInvalidations}
+          WHERE ${programRevisionInvalidations.revisionId} = ${programRevisions.id}
+        )`,
       ),
     )
     .orderBy(desc(programRevisions.revisionNumber))
