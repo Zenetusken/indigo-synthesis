@@ -23,6 +23,8 @@ Deferred means intentionally absent—not forgotten and not partially scaffolded
 | Multi-instance/HA/multi-region | No availability or scale evidence | Measured load/SLO and operational ownership |
 | Coach marketplace/teams | Different actor, auth, billing, and privacy model | Validated coach/client workflow and authorization model |
 | Advanced media/object storage | No upload in first slice | Licensed upload use case and storage lifecycle |
+| Multiple profiles per account | Release 1 is one profile per account; the account axis (auth, recovery, admin) is built first so this stays additive | Server-side profile-ownership resolution (a request-supplied profile id is never an authorization key), immutable profile→account binding (no reparenting), no profile is authenticatable, and isolation tests that reject a cross-account profile id — mandatory because there is no RLS backstop |
+| Second factor (TOTP, passkeys) | Password plus host/owner-mediated recovery is the Release 1 access model; a second factor's own loss path still routes through owner/host mediation | Recovery journeys J7/J8 shipped, a defined enrollment and second-factor-loss path, and no dependency on email/SMS/cloud identity |
 
 ## Re-entry process
 

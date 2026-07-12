@@ -23,6 +23,22 @@ The first release may use the same person for both product actors. Coach, review
 content editor are not application-account roles until their workflows exist; Gate 0
 review independence remains an external release requirement.
 
+### Account, profile, and vocabulary
+
+To keep identity terms stable across this spec and the code:
+
+- **Account** — an authenticated identity with a credential and a derived role (owner
+  or trainee); the unit of authentication, authorization, session, and audit.
+- **Profile** — a training context (units, timezone, program, history, safety state).
+  Today exactly one profile per account; the code's existing **subject** /
+  `subjectUserId` vocabulary refers to this profile-today.
+- **Member** — a synonym for a non-owner (trainee) account, used where the contrast is
+  "owner versus the accounts the owner administers". Not a separate role.
+
+Access, recovery, and administration operate on the **account** axis. Detailed
+journeys, invariants, hardening, and success metrics live in
+[Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md).
+
 ## Core journeys
 
 ### J1 — Bootstrap and sign in
@@ -75,6 +91,31 @@ review independence remains an external release requirement.
 3. The instance owner can back up PostgreSQL plus local media as the complete data
    boundary.
 
+### J7 — Recover a trainee credential (owner-mediated)
+
+1. The owner, re-authenticating, issues a one-use, expiring reset code for a trainee
+   account and hands it over out of band.
+2. The trainee redeems it on a public page, choosing a new password.
+3. Redemption revokes that account's sessions and is audited; the owner does not learn
+   the chosen password in the honest flow.
+
+### J8 — Recover the owner credential (host-mediated)
+
+1. The owner issues a one-use, expiring recovery code from the host (shell access).
+2. The owner redeems it — on the host CLI or a public web page — sets a new password,
+   revokes sessions, and the event is audited.
+
+### J9 — Orient a locked-out visitor (cold start)
+
+1. A claimed instance's sign-in page offers an explicit next action for a trainee who
+   forgot their password, an owner who forgot theirs, and a person with no account —
+   without revealing whether any account exists.
+
+Owner recovery (FR-006) already exists; trainee reset (J7) and cold-start orientation
+(J9) are the new additions. These access/recovery journeys are governed by the success
+metrics in [Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md), not the Release 1
+J1–J6 acceptance gate.
+
 ## Functional requirements
 
 ### Identity and access
@@ -92,6 +133,16 @@ review independence remains an external release requirement.
 - **FR-006** Sole-owner recovery requires local host/administrative access, an expiring
   one-use recovery code, session revocation, and a non-secret audit record. It is never a
   public browser-only reset path.
+- **FR-007** An authenticated, re-authenticated owner may issue a one-use, expiring,
+  HMAC-keyed reset code for a trainee account (at most one outstanding, throttled under
+  abuse, never destroyed by wrong guesses). Redemption lets the trainee set their own
+  password, revokes that account's sessions, and writes a non-secret audit record.
+  Trainee recovery never routes through account deletion, and the owner does not learn
+  the chosen password in the honest flow.
+- **FR-008** A claimed instance's sign-in surface provides an explicit next action for
+  each locked-out persona — trainee, owner, no-account — without disclosing whether any
+  account exists; failure responses are uniform across cause and across whether the
+  submitted account exists.
 
 ### Athlete profile
 
