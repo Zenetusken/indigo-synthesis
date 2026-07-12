@@ -75,6 +75,58 @@
   font-size: 0.9rem;
 }
 
+.holdResolution,
+.holdForm {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.holdForm label {
+  display: grid;
+  font-weight: 700;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.holdForm input[type="text"] {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  width: 100%;
+}
+
+.holdForm .checkboxLabel {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  min-height: 3rem;
+}
+
+.holdForm .checkboxLabel input {
+  accent-color: var(--indigo-enamel);
+  flex: 0 0 auto;
+  height: 1.35rem;
+  width: 1.35rem;
+}
+
+.holdError {
+  background: var(--danger-soft);
+  border-inline-start: 0.3rem solid var(--danger);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+}
+
+.primaryAction:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 @media (max-width: 38rem) {
   .preview li {
     gap: var(--space-2);

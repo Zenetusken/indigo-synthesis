@@ -43,6 +43,7 @@ export async function resetProductData(): Promise<void> {
       audit_event,
       deletion_plan,
       deletion_tombstone,
+      safety_hold_resolution,
       safety_hold,
       strength_baseline,
       athlete_equipment,

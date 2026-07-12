@@ -7,6 +7,10 @@ import {
 } from '@/modules/programs/domain/executable-prescription'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import {
+  readE2eSupervisorState,
+  restartE2eApplication,
+} from './support/supervisor-client'
 
 // Server-side modules read DATABASE_URL and BETTER_AUTH_SECRET; the E2E harness
 // exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET. Point
@@ -254,7 +258,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     programs: { revisions: unknown[] }[]
     sessions: unknown[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.2.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.3.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)
@@ -338,10 +342,139 @@ test('a pain report atomically pauses training and creates a safety hold', async
       'SELECT status FROM workout_session LIMIT 1',
     )
     const holds = await client.query<{ count: string }>(
-      'SELECT count(*) FROM safety_hold WHERE cleared_at IS NULL',
+      'SELECT count(*) FROM safety_hold sh WHERE NOT EXISTS (SELECT 1 FROM safety_hold_resolution shr WHERE shr.hold_id = sh.id)',
     )
     expect(session.rows[0]?.status).toBe('paused')
     expect(Number(holds.rows[0]?.count)).toBe(1)
+  } finally {
+    await client.end()
+  }
+})
+
+test('a reported issue can be abandoned and resolved to unblock training decisions', async ({
+  page,
+}) => {
+  await bootstrapAndSignIn(page)
+  await completeSetup(page)
+  await generateAndActivate(page)
+  await page.getByRole('button', { name: 'Start workout' }).click()
+
+  await page.getByLabel('Optional factual context').fill('User-reported shoulder pain')
+  await page.getByRole('button', { name: 'Stop and report issue' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Training stopped for a reported issue' }),
+  ).toBeVisible()
+
+  await page.goto('/today')
+  await expect(
+    page.getByRole('heading', {
+      name: 'Training is stopped for a reported safety issue.',
+    }),
+  ).toBeVisible()
+  const abandonSourceLink = page.getByRole('link', {
+    name: 'Open it and abandon the session',
+  })
+  await expect(abandonSourceLink).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Resolve safety hold' })).toHaveCount(0)
+  await expect(
+    page.getByLabel('Factual reason for resolving the hold (required)'),
+  ).toHaveCount(0)
+
+  await abandonSourceLink.click()
+  await page.getByRole('button', { name: 'Abandon workout' }).click()
+  await page
+    .getByLabel('Factual reason for abandoning (required)')
+    .fill('Pain blocks safe continuation')
+  await page
+    .getByLabel('I understand that this product does not assess or clear symptoms.')
+    .check()
+  await page.getByRole('button', { name: 'Confirm abandon' }).click()
+  await expect(page).toHaveURL(/\/today$/)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  const resolutionReason = page.getByLabel(
+    'Factual reason for resolving the hold (required)',
+  )
+  const resolutionAcknowledgement = page.getByLabel(
+    'I understand that this product does not assess or clear symptoms.',
+  )
+  const resolutionButton = page.getByRole('button', { name: 'Resolve safety hold' })
+  await expect(resolutionReason).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '200%'
+  })
+  await expectNoHorizontalOverflow(page)
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '100%'
+  })
+
+  await resolutionButton.click()
+  const resolutionAlert = page
+    .getByRole('alert')
+    .filter({ hasText: 'Safety hold not resolved' })
+  await expect(resolutionAlert).toBeVisible()
+  await expect(resolutionAlert).toBeFocused()
+  await expect(resolutionAlert).toContainText('Enter a factual reason')
+
+  const reason = 'I am recording my independent decision to continue.'
+  await resolutionReason.fill(reason)
+  await resolutionButton.click()
+  await expect(resolutionAlert).toBeVisible()
+  await expect(resolutionAlert).toBeFocused()
+  await expect(resolutionAlert).toContainText('does not assess or clear symptoms')
+  await expect(resolutionReason).toHaveValue(reason)
+
+  await resolutionAcknowledgement.check()
+  await resolutionButton.click()
+
+  await expect(
+    page.getByRole('heading', {
+      name: 'Training is stopped for a reported safety issue.',
+    }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('heading', { name: /Today’s workout was abandoned./ }),
+  ).toBeVisible()
+  await expect(page.getByRole('status')).toContainText(
+    'Safety hold resolution recorded. The abandoned workout remains closed.',
+  )
+
+  const supervisorBefore = await readE2eSupervisorState()
+  const supervisorAfter = await restartE2eApplication()
+  expect(supervisorAfter.phase).toBe('ready')
+  expect(supervisorAfter.generation).toBe(supervisorBefore.generation + 1)
+  expect(supervisorAfter.pid).not.toBe(supervisorBefore.pid)
+
+  await page.goto('/today')
+  await expect(
+    page.getByRole('heading', { name: /Today’s workout was abandoned./ }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('heading', {
+      name: 'Training is stopped for a reported safety issue.',
+    }),
+  ).toHaveCount(0)
+
+  const client = await databaseClient()
+  try {
+    const unresolvedHolds = await client.query<{ count: string }>(
+      'SELECT count(*) FROM safety_hold sh WHERE NOT EXISTS (SELECT 1 FROM safety_hold_resolution shr WHERE shr.hold_id = sh.id)',
+    )
+    const resolutions = await client.query<{
+      acknowledged: boolean
+      reason: string
+      session_status: string
+    }>(
+      `SELECT shr.acknowledged, shr.reason, ws.status AS session_status
+       FROM safety_hold_resolution shr
+       JOIN safety_hold sh ON sh.id = shr.hold_id
+       JOIN workout_session ws ON ws.id = sh.source_session_id`,
+    )
+    expect(Number(unresolvedHolds.rows[0]?.count)).toBe(0)
+    expect(resolutions.rows).toEqual([
+      { acknowledged: true, reason, session_status: 'abandoned' },
+    ])
   } finally {
     await client.end()
   }

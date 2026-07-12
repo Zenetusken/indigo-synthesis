@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { requireActor } from '@/modules/identity/server/actor'
 import {
+  resolveSafetyHold,
   startWorkout,
   WorkoutCommandError,
 } from '@/modules/training/application/workouts'
@@ -23,4 +24,45 @@ export async function startWorkoutAction(formData: FormData): Promise<void> {
   }
 
   redirect(`/workouts/${sessionId}` as never)
+}
+
+export type SafetyHoldResolutionActionState = {
+  readonly errorCode: string | null
+  readonly values: {
+    readonly acknowledged: boolean
+    readonly reason: string
+  }
+}
+
+export async function resolveSafetyHoldAction(
+  _previousState: SafetyHoldResolutionActionState,
+  formData: FormData,
+): Promise<SafetyHoldResolutionActionState> {
+  const actor = await requireActor()
+  const values = {
+    acknowledged: formData.get('acknowledged') === 'on',
+    reason: String(formData.get('reason') ?? ''),
+  }
+
+  if (!values.reason.trim()) {
+    return { errorCode: 'hold.reason-required', values }
+  }
+  if (!values.acknowledged) {
+    return { errorCode: 'hold.ack-required', values }
+  }
+
+  try {
+    await resolveSafetyHold({
+      userId: actor.userId,
+      holdId: String(formData.get('holdId') ?? ''),
+      commandId: String(formData.get('commandId') ?? ''),
+      reason: values.reason,
+      acknowledged: values.acknowledged,
+    })
+  } catch (error) {
+    const code = error instanceof WorkoutCommandError ? error.code : 'hold.resolve-failed'
+    return { errorCode: code, values }
+  }
+
+  redirect('/today?notice=hold-resolved')
 }

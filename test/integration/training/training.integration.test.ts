@@ -27,6 +27,7 @@ import {
   getTodayState,
   getWorkoutSession,
   reportPain,
+  resolveSafetyHold,
   setSessionPaused,
   skipSet,
   startWorkout,
@@ -48,6 +49,7 @@ import {
   programRevisionLineage,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   sessionFeedback,
   setPrescriptions,
@@ -856,14 +858,14 @@ describe('training PostgreSQL command boundary', () => {
     ).rejects.toMatchObject({ cause: { code: '55000' } })
   })
 
-  it('accepts pain from a paused session and coalesces an existing safety hold', async () => {
+  it('creates a source-linked pain hold without coalescing an unrelated eligibility hold', async () => {
     const { sessionId } = await startedSession()
     await setSessionPaused(owner.id, sessionId, true)
     const existingHoldId = newUuidV7()
     await getDb().insert(safetyHolds).values({
       id: existingHoldId,
       userId: owner.id,
-      reasonCode: 'pre-existing-review',
+      reasonCode: 'eligibility-restriction',
       details: 'already under review',
     })
 
@@ -896,17 +898,68 @@ describe('training PostgreSQL command boundary', () => {
       painReported: true,
       details: 'pain while paused',
     })
-    expect(holds).toHaveLength(1)
-    expect(holds[0]).toMatchObject({
-      id: existingHoldId,
-      reasonCode: 'pre-existing-review',
-      details: 'already under review',
-      clearedAt: null,
-    })
+    expect(holds).toHaveLength(2)
+    expect(holds).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: existingHoldId,
+          reasonCode: 'eligibility-restriction',
+          sourceSessionId: null,
+        }),
+        expect.objectContaining({
+          reasonCode: 'session-pain-reported',
+          sourceSessionId: sessionId,
+          details: 'pain while paused',
+        }),
+      ]),
+    )
     expect(safetyAudit?.metadata).toMatchObject({
       action: 'paused-and-held',
-      coalescedWithExistingHold: true,
+      coalescedWithExistingHold: false,
     })
+  })
+
+  it('keeps pain holds independent across different source sessions', async () => {
+    const { seeded, sessionId } = await startedSession()
+    const priorSessionId = newUuidV7()
+    await getDb()
+      .insert(workoutSessions)
+      .values({
+        id: priorSessionId,
+        userId: owner.id,
+        plannedWorkoutId: seeded.nextWorkoutId,
+        plannedWorkoutName: 'Prior concluded safety source',
+        scheduledDate: TEST_NEXT_DAY,
+        slotCode: 'B',
+        status: 'abandoned',
+        startedAt: new Date('2026-07-10T10:00:00.000Z'),
+        abandonedAt: new Date('2026-07-10T10:05:00.000Z'),
+        abandonedReason: 'Prior pain report source.',
+        startCommandId: newUuidV7(),
+      })
+    await getDb().insert(safetyHolds).values({
+      id: newUuidV7(),
+      userId: owner.id,
+      sourceSessionId: priorSessionId,
+      reasonCode: 'session-pain-reported',
+      details: 'pain from the prior session',
+    })
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'new pain from the current session',
+    })
+
+    const painHolds = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.reasonCode, 'session-pain-reported'))
+    expect(painHolds).toHaveLength(2)
+    expect(painHolds.map((hold) => hold.sourceSessionId).sort()).toEqual(
+      [priorSessionId, sessionId].sort(),
+    )
   })
 
   it('coalesces concurrent pain replays and rejects a reused identifier conflict', async () => {
@@ -934,6 +987,30 @@ describe('training PostgreSQL command boundary', () => {
       .where(eq(auditEvents.eventType, 'session-safety-stop'))
     expect(receiptCount?.value).toBe(1)
     expect(auditCount?.value).toBe(1)
+  })
+
+  it('coalesces separate pain commands only for the exact same source session', async () => {
+    const { sessionId } = await startedSession()
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'first report for this session',
+    })
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'additional context for the same session',
+    })
+
+    const painHolds = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.reasonCode, 'session-pain-reported'))
+    expect(painHolds).toHaveLength(1)
+    expect(painHolds[0]).toMatchObject({ sourceSessionId: sessionId })
   })
 
   it('reports a same-day abandoned session truthfully instead of returning planned', async () => {
@@ -1101,5 +1178,331 @@ describe('training PostgreSQL command boundary', () => {
       else Reflect.set(process.env, 'NODE_ENV', previousNodeEnv)
       resetServerConfigForTests()
     }
+  })
+
+  it('links a new pain hold to its source session and blocks resolution while live', async () => {
+    const { sessionId } = await startedSession()
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'sharp shoulder pain',
+    })
+
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    expect(hold).toMatchObject({
+      sourceSessionId: sessionId,
+      reasonCode: 'session-pain-reported',
+    })
+    expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
+      kind: 'hold',
+      holdId: hold.id,
+      resolutionAvailability: {
+        kind: 'requires-abandonment',
+        sessionId,
+      },
+    })
+
+    await expect(
+      resolveSafetyHold({
+        userId: owner.id,
+        holdId: hold.id,
+        commandId: newUuidV7(),
+        reason: 'Pain has subsided.',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({ code: 'hold.live-session-not-abandoned' })
+  })
+
+  it('resolves a pain hold after abandoning the source session and records an append-only resolution', async () => {
+    const { sessionId } = await startedSession()
+    const reason = 'Shoulder mobility work completed; I am choosing to resume.'
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'shoulder pain',
+    })
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    await abandonWorkout(owner.id, sessionId, 'Equipment unavailable at gym.')
+    expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
+      kind: 'hold',
+      holdId: hold.id,
+      resolutionAvailability: { kind: 'available' },
+    })
+
+    const commandId = newUuidV7()
+    await resolveSafetyHold({
+      userId: owner.id,
+      holdId: hold.id,
+      commandId,
+      reason,
+      acknowledged: true,
+    })
+
+    const [resolution] = await getDb()
+      .select()
+      .from(safetyHoldResolutions)
+      .where(eq(safetyHoldResolutions.holdId, hold.id))
+    const [audit] = await getDb()
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'safety-hold-resolved'))
+    const [receipt] = await getDb()
+      .select()
+      .from(trainingCommandReceipts)
+      .where(eq(trainingCommandReceipts.commandId, commandId))
+
+    expect(resolution).toMatchObject({
+      userId: owner.id,
+      reason,
+      acknowledged: true,
+    })
+    expect(audit).toMatchObject({
+      actorUserId: owner.id,
+      subjectUserId: owner.id,
+      entityId: hold.id,
+      metadata: {
+        sourceSessionId: sessionId,
+        reasonLength: reason.length,
+        acknowledged: true,
+      },
+    })
+    expect(receipt).toMatchObject({
+      commandType: 'resolve-safety-hold',
+      sessionId,
+      targetId: hold.id,
+    })
+
+    const today = await getTodayState(owner.id, 'UTC', TEST_NOW)
+    expect(today.kind).not.toBe('hold')
+  })
+
+  it('fails closed for a completed-session pain hold until H1 invalidation exists', async () => {
+    const { sessionId, setId } = await startedSession()
+    await completeSet({
+      userId: owner.id,
+      sessionId,
+      setId,
+      commandId: newUuidV7(),
+      actualLoadGrams: TEST_TARGET_LOAD_GRAMS,
+      actualRepetitions: TEST_TARGET_REPETITIONS,
+      rpe: 8,
+      note: null,
+    })
+    await completeWorkout({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      noPainAttested: true,
+    })
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'pain reported after completion',
+    })
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+
+    expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
+      kind: 'hold',
+      holdId: hold.id,
+      resolutionAvailability: {
+        kind: 'blocked',
+        reason: 'completed-source-awaiting-invalidation',
+      },
+    })
+
+    await expect(
+      resolveSafetyHold({
+        userId: owner.id,
+        holdId: hold.id,
+        commandId: newUuidV7(),
+        reason: 'Choosing to continue with qualified guidance.',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({
+      code: 'hold.completed-source-invalidation-required',
+    })
+    expect(
+      await getDb()
+        .select()
+        .from(safetyHoldResolutions)
+        .where(eq(safetyHoldResolutions.holdId, hold.id)),
+    ).toEqual([])
+  })
+
+  it('denies self-resolution of a source-less eligibility hold', async () => {
+    const holdId = newUuidV7()
+    await getDb().insert(safetyHolds).values({
+      id: holdId,
+      userId: owner.id,
+      sourceSessionId: null,
+      reasonCode: 'eligibility-restriction',
+      details: 'source-less hold fixture',
+    })
+
+    expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
+      kind: 'hold',
+      holdId,
+      resolutionAvailability: {
+        kind: 'blocked',
+        reason: 'not-session-pain-hold',
+      },
+    })
+    await expect(
+      resolveSafetyHold({
+        userId: owner.id,
+        holdId,
+        commandId: newUuidV7(),
+        reason: 'Attempted self-resolution.',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({ code: 'hold.not-resolvable' })
+
+    const [receiptCount] = await getDb()
+      .select({ value: count() })
+      .from(trainingCommandReceipts)
+    const [resolutionCount] = await getDb()
+      .select({ value: count() })
+      .from(safetyHoldResolutions)
+    expect(receiptCount?.value).toBe(0)
+    expect(resolutionCount?.value).toBe(0)
+  })
+
+  it('prevents another user from resolving the hold and preserves the live session', async () => {
+    const { sessionId } = await startedSession()
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'knee pain',
+    })
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    await abandonWorkout(owner.id, sessionId, 'Equipment unavailable at gym.')
+
+    await expect(
+      resolveSafetyHold({
+        userId: member.id,
+        holdId: hold.id,
+        commandId: newUuidV7(),
+        reason: 'I am an attacker.',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({ code: 'hold.not-found' })
+
+    const [resolutionCount] = await getDb()
+      .select({ value: count() })
+      .from(safetyHoldResolutions)
+    expect(resolutionCount?.value).toBe(0)
+  })
+
+  it('coalesces concurrent hold resolutions and rejects a reused command identifier conflict', async () => {
+    const { sessionId } = await startedSession()
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'wrist pain',
+    })
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    await abandonWorkout(owner.id, sessionId, 'Equipment unavailable at gym.')
+
+    const command = {
+      userId: owner.id,
+      holdId: hold.id,
+      commandId: newUuidV7(),
+      reason: 'Resolution replay test.',
+      acknowledged: true,
+    }
+
+    await Promise.all([
+      resolveSafetyHold(command),
+      resolveSafetyHold(command),
+      resolveSafetyHold(command),
+    ])
+    await resolveSafetyHold(command)
+    await expect(
+      resolveSafetyHold({
+        ...command,
+        reason: 'Different payload under reused identifier.',
+      }),
+    ).rejects.toMatchObject({ code: 'command.idempotency-conflict' })
+
+    const [resolutionCount] = await getDb()
+      .select({ value: count() })
+      .from(safetyHoldResolutions)
+    const [auditCount] = await getDb()
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'safety-hold-resolved'))
+    const [receiptCount] = await getDb()
+      .select({ value: count() })
+      .from(trainingCommandReceipts)
+      .where(eq(trainingCommandReceipts.commandId, command.commandId))
+
+    expect(resolutionCount?.value).toBe(1)
+    expect(auditCount?.value).toBe(1)
+    expect(receiptCount?.value).toBe(1)
+  })
+
+  it('requires acknowledgement and a non-empty reason to resolve a hold', async () => {
+    const { sessionId } = await startedSession()
+
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'elbow pain',
+    })
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    await abandonWorkout(owner.id, sessionId, 'Equipment unavailable at gym.')
+
+    await expect(
+      resolveSafetyHold({
+        userId: owner.id,
+        holdId: hold.id,
+        commandId: newUuidV7(),
+        reason: '',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({ code: 'input.invalid' })
+    await expect(
+      resolveSafetyHold({
+        userId: owner.id,
+        holdId: hold.id,
+        commandId: newUuidV7(),
+        reason: 'Reason provided.',
+        acknowledged: false,
+      }),
+    ).rejects.toMatchObject({ code: 'hold.ack-required' })
+
+    const [resolutionCount] = await getDb()
+      .select({ value: count() })
+      .from(safetyHoldResolutions)
+    expect(resolutionCount?.value).toBe(0)
   })
 })

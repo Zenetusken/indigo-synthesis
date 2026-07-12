@@ -25,6 +25,7 @@ import {
   programRevisionLineage,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   setPrescriptions,
   workoutSessions,
@@ -544,7 +545,16 @@ export async function activatePersistedProgramRevision(
   const [hold] = await transaction
     .select({ id: safetyHolds.id })
     .from(safetyHolds)
-    .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
+    .where(
+      and(
+        eq(safetyHolds.userId, userId),
+        isNull(safetyHolds.clearedAt),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${safetyHoldResolutions}
+          WHERE ${safetyHoldResolutions.holdId} = ${safetyHolds.id}
+        )`,
+      ),
+    )
     .limit(1)
   if (hold) {
     throw new ProgramUnavailableError(
