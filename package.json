@@ -2,6 +2,7 @@
   "name": "indigo-synthesis",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Clean-slate, self-hosted strength training system restart",
   "engines": {

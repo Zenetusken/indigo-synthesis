@@ -179,3 +179,7 @@ Start with [the product vision](docs/product/VISION.md), then read
 
 No legacy code, branded imagery, program prose, or third-party training material was
 copied into this implementation.
+
+## License
+
+Indigo Synthesis is available under the [MIT License](LICENSE).
