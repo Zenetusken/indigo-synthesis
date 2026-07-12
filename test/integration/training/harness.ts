@@ -29,6 +29,7 @@ export type SeededProgram = {
   readonly programId: string
   readonly revisionId: string
   readonly originalOutputHash: string
+  readonly outputSnapshot: ExecutablePrescriptionProjection
   readonly currentWorkoutId: string
   readonly currentPrescriptionId: string
   readonly currentSetPrescriptionId: string
@@ -275,6 +276,7 @@ export async function seedCoherentProgram(
     programId,
     revisionId,
     originalOutputHash: outputHash,
+    outputSnapshot,
     currentWorkoutId,
     currentPrescriptionId,
     currentSetPrescriptionId,

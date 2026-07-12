@@ -7,6 +7,13 @@ import {
 export const EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION =
   'executable-prescription-v2' as const
 
+export const LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION =
+  'executable-prescription-v1' as const
+
+export type ExecutablePrescriptionHashMaterialVersion =
+  | typeof LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION
+  | typeof EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION
+
 export type ExecutableSetProjection = {
   readonly ordinal: number
   readonly setKind: string
@@ -24,17 +31,23 @@ export type ExecutableExerciseProjection = {
   readonly sets: readonly ExecutableSetProjection[]
 }
 
-export type ExecutableWorkoutProjection = {
+export type ExecutableWorkoutProjectionV1 = {
   readonly scheduledDate: string
   readonly ordinal: number
-  readonly programOrdinal: number
   readonly slotCode: string
   readonly name: string
   readonly exercises: readonly ExecutableExerciseProjection[]
 }
 
-export type ExecutablePrescriptionProjection = {
-  readonly hashMaterialVersion: typeof EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION
+export type ExecutableWorkoutProjectionV2 = ExecutableWorkoutProjectionV1 & {
+  readonly programOrdinal: number
+}
+
+type ExecutablePrescriptionProjectionBase<
+  Version extends ExecutablePrescriptionHashMaterialVersion,
+  Workout,
+> = {
+  readonly hashMaterialVersion: Version
   readonly engineVersion: string
   readonly methodology: {
     readonly id: string
@@ -47,8 +60,26 @@ export type ExecutablePrescriptionProjection = {
     readonly reviewStatus: string
   }
   readonly normalizedInputHash: string
-  readonly workouts: readonly ExecutableWorkoutProjection[]
+  readonly workouts: readonly Workout[]
 }
+
+export type ExecutablePrescriptionProjectionV1 = ExecutablePrescriptionProjectionBase<
+  typeof LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  ExecutableWorkoutProjectionV1
+>
+
+export type ExecutablePrescriptionProjectionV2 = ExecutablePrescriptionProjectionBase<
+  typeof EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  ExecutableWorkoutProjectionV2
+>
+
+/** Current writers must emit only v2 hash material. */
+export type ExecutablePrescriptionProjection = ExecutablePrescriptionProjectionV2
+
+/** Readers retain the exact historical v1 format without allowing writers to emit it. */
+export type SupportedExecutablePrescriptionProjection =
+  | ExecutablePrescriptionProjectionV1
+  | ExecutablePrescriptionProjectionV2
 
 export type ExecutablePrescriptionIntegrityResult =
   | { readonly valid: true }
@@ -60,12 +91,32 @@ export type ExecutablePrescriptionIntegrityResult =
         | 'output-hash-mismatch'
     }
 
-function canonicalProjection(value: ExecutablePrescriptionProjection): CanonicalValue {
+function canonicalProjection(
+  value: SupportedExecutablePrescriptionProjection,
+): CanonicalValue {
   return value as unknown as CanonicalValue
 }
 
+export function executablePrescriptionHashMaterialVersion(
+  storedSnapshot: unknown,
+): ExecutablePrescriptionHashMaterialVersion | null {
+  if (
+    storedSnapshot === null ||
+    typeof storedSnapshot !== 'object' ||
+    Array.isArray(storedSnapshot)
+  ) {
+    return null
+  }
+
+  const version = Reflect.get(storedSnapshot, 'hashMaterialVersion')
+  return version === LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION ||
+    version === EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION
+    ? version
+    : null
+}
+
 export function executablePrescriptionHash(
-  projection: ExecutablePrescriptionProjection,
+  projection: SupportedExecutablePrescriptionProjection,
 ): string {
   return canonicalSha256(canonicalProjection(projection))
 }
@@ -75,7 +126,7 @@ export function verifyExecutablePrescriptionIntegrity(input: {
   readonly storedNormalizedInputHash: string
   readonly storedOutputSnapshot: CanonicalValue
   readonly storedOutputHash: string
-  readonly persistedProjection: ExecutablePrescriptionProjection
+  readonly persistedProjection: SupportedExecutablePrescriptionProjection
 }): ExecutablePrescriptionIntegrityResult {
   if (canonicalSha256(input.normalizedInput) !== input.storedNormalizedInputHash) {
     return { valid: false, reason: 'normalized-input-hash-mismatch' }

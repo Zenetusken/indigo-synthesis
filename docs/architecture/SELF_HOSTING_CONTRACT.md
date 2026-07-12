@@ -82,9 +82,10 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18, the committed migration ledger, owner
-bootstrap enforcement, current snapshot/revision columns, and the required integrity
-triggers. `pnpm start` runs this preflight before starting the production server. Both
+`pnpm db:preflight` verifies PostgreSQL 18, the committed migration ledger including the
+exact canonical 0004 program-ordinal hash, owner bootstrap enforcement, current
+snapshot/revision columns, and the required integrity triggers. `pnpm start` runs this
+preflight before starting the production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.

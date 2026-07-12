@@ -22,7 +22,13 @@ CREATE TABLE "training_command_receipt" (
 );
 --> statement-breakpoint
 ALTER TABLE "planned_workout" ADD COLUMN "program_ordinal" integer;--> statement-breakpoint
+-- The 0002 release guard correctly blocks every prescription-row update below an
+-- active or superseded revision. This migration already holds an ACCESS EXCLUSIVE
+-- table lock, so suspend only that guard for the deterministic ordinal backfill and
+-- restore it before the transaction can commit.
+ALTER TABLE "planned_workout" DISABLE TRIGGER "planned_workout_immutability_guard";--> statement-breakpoint
 UPDATE "planned_workout" SET "program_ordinal" = "ordinal";--> statement-breakpoint
+ALTER TABLE "planned_workout" ENABLE TRIGGER "planned_workout_immutability_guard";--> statement-breakpoint
 ALTER TABLE "planned_workout" ALTER COLUMN "program_ordinal" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "program_revision_lineage" ADD CONSTRAINT "program_revision_lineage_revision_id_program_revision_id_fk" FOREIGN KEY ("revision_id") REFERENCES "public"."program_revision"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "program_revision_lineage" ADD CONSTRAINT "program_revision_lineage_parent_revision_id_program_revision_id_fk" FOREIGN KEY ("parent_revision_id") REFERENCES "public"."program_revision"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

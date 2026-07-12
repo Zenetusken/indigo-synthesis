@@ -1,6 +1,6 @@
 # PR #1 adversarial remediation
 
-Status: in progress — phase 1 complete  
+Status: in progress — phases 1 and 2 complete
 Source: PR #1 adversarial swarm review  
 Scope: every unresolved implementation and release-evidence finding
 
@@ -20,10 +20,11 @@ license finding was resolved separately by commit `0c9b5f1`.
 2. **Serialize credential authority.** Password sign-in and owner recovery use the same
    per-user PostgreSQL advisory lock, covering password verification through session
    creation or recovery session revocation respectively.
-3. **Make safety precedence durable.** A post-completion pain report appends an
-   invalidation and permanently blocks/supersedes every progression descendant carrying
-   that decision. It never invents replacement loads. Clearing a hold can never
-   reactivate a blocked revision; the trainee must generate a new valid program.
+3. **Make safety precedence durable in phase 3 (H1).** A post-completion pain report
+   must append an invalidation and permanently block/supersede every progression
+   descendant carrying that decision. It must never invent replacement loads. Until
+   that path exists, completed-source holds remain active and non-resolvable; once it
+   exists, resolving a hold must never reactivate an invalidated revision.
 4. **Resolve holds without implying medical clearance.** In this self-directed product,
    the trainee may resolve a hold only after abandoning an affected live session,
    selecting a factual reason, acknowledging that the product does not assess or clear
@@ -104,6 +105,32 @@ is attached and the re-review finds no unresolved high- or medium-severity regre
 
 All phase 1 changes pass `pnpm validate`, `pnpm test:integration` (42/42), and `pnpm test:e2e` (11/11).
 
-### Remaining for phase 2 or later
+### Phase 2 — safety hold resolution (H3)
 
-H1, H3, H4, M7/M8, M10, M12, L22.
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| H3 | Fixed for source-linked live-session reports | Migrations `0007`–`0009` add source-linked holds, append-only resolutions, composite ownership/provenance, immutable hold facts, an exact abandoned-source rule, and a conservative `0006` upgrade bridge. Unique audit-backed or sole-candidate legacy sources are recovered; contradictory or ambiguous legacy evidence remains source-less and fail-closed for explicit administrator remediation rather than being guessed. `resolveSafetyHold` is subject-only and idempotent; the typed Today form preserves values, locks while pending, focuses errors, and states that resolution is not symptom clearance. Integration tests cover lifecycle, authorization, concurrency, direct-SQL integrity, export/deletion, and the real `0006`→`0009` upgrade. The unmocked browser journey proves report → required abandonment → resolve → process restart with persisted UI/database state. |
+| H1 boundary | Fail-closed pending phase 3 | A report against a completed session remains non-resolvable and Today explains that progression invalidation is pending. H1 must append the correction and invalidate every affected decision/revision before this path can become resolvable; clearing a live-session hold cannot reactivate a completed-session progression. |
+| Preflight | Fixed | `src/platform/db/preflight.ts` expects 11 migration entries, requires the canonical corrected 0004 ledger hash, and verifies the exact enabled public hold triggers/functions, ownership constraints, semantic checks, and valid/ready unique indexes. |
+
+Phase 2 plus the compatibility follow-up pass `pnpm validate` (including 257/257
+unit/architecture tests and the reviewed-mode build), 69/69 fresh/upgrade database
+integration tests, the dedicated `0006`→`0009` upgrade test, current-development
+migration/preflight, and the complete 12/12 Playwright suite including the
+supervised-restart H3 journey.
+
+### Compatibility follow-up — executable v1 and migration provenance
+
+The canonical executable reader now models v1 and v2 separately, keeps all writers on
+v2, rejects missing/unknown persisted discriminators, and retains a fixed historical v1
+hash vector. A real `0003`-ledger fixture proves that corrected migration 0004 can
+backfill an already-active prescription without weakening the released-row guard.
+Migration `0010_program_migration_ledger_provenance.sql` recognizes only the exact LF
+and CRLF byte hashes of origin/main and corrected 0004, normalizes them to the canonical
+LF hash, and fails closed for missing, duplicate, or unknown provenance. `.gitattributes`
+keeps migration SQL on LF for future clones, while preflight requires the canonical row
+after all 11 migrations.
+
+### Remaining for phase 3 or later
+
+H1, H4, M7/M8, M10, M12, L22.

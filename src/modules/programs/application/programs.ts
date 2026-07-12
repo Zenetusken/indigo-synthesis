@@ -12,6 +12,9 @@ import {
   EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
+  executablePrescriptionHashMaterialVersion,
+  LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  type SupportedExecutablePrescriptionProjection,
   verifyExecutablePrescriptionIntegrity,
 } from '@/modules/programs/domain/executable-prescription'
 import { validatePersistedPrescriptionForActivation } from '@/modules/programs/domain/prescription-activation'
@@ -466,22 +469,58 @@ export async function activatePersistedProgramRevision(
           })),
       })),
   }))
-  const persistedProjection: ExecutablePrescriptionProjection = {
-    hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
-    engineVersion: owned.engineVersion,
-    methodology: {
-      id: owned.methodologyId,
-      version: owned.methodologyVersion,
-      reviewStatus: owned.methodologyReviewStatus,
-    },
-    template: {
-      id: owned.templateId,
-      version: owned.templateVersion,
-      reviewStatus: owned.templateReviewStatus,
-    },
-    normalizedInputHash: owned.normalizedInputHash,
-    workouts: persistedWorkouts,
+  const snapshotHashMaterialVersion = executablePrescriptionHashMaterialVersion(
+    owned.outputSnapshot,
+  )
+  if (snapshotHashMaterialVersion === null) {
+    throw new ProgramUnavailableError(
+      'program.prescription-integrity-failed',
+      'The saved executable prescription uses an unsupported hash material version.',
+    )
   }
+  // v1 snapshots were written before the programOrdinal field was added to the
+  // canonical workout projection. Activation must reconstruct the projection in
+  // the same format that produced the stored output hash.
+  const persistedProjection: SupportedExecutablePrescriptionProjection =
+    snapshotHashMaterialVersion === LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION
+      ? {
+          hashMaterialVersion: LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+          engineVersion: owned.engineVersion,
+          methodology: {
+            id: owned.methodologyId,
+            version: owned.methodologyVersion,
+            reviewStatus: owned.methodologyReviewStatus,
+          },
+          template: {
+            id: owned.templateId,
+            version: owned.templateVersion,
+            reviewStatus: owned.templateReviewStatus,
+          },
+          normalizedInputHash: owned.normalizedInputHash,
+          workouts: persistedWorkouts.map((workout) => ({
+            scheduledDate: workout.scheduledDate,
+            ordinal: workout.ordinal,
+            slotCode: workout.slotCode,
+            name: workout.name,
+            exercises: workout.exercises,
+          })),
+        }
+      : {
+          hashMaterialVersion: snapshotHashMaterialVersion,
+          engineVersion: owned.engineVersion,
+          methodology: {
+            id: owned.methodologyId,
+            version: owned.methodologyVersion,
+            reviewStatus: owned.methodologyReviewStatus,
+          },
+          template: {
+            id: owned.templateId,
+            version: owned.templateVersion,
+            reviewStatus: owned.templateReviewStatus,
+          },
+          normalizedInputHash: owned.normalizedInputHash,
+          workouts: persistedWorkouts,
+        }
   const integrity = verifyExecutablePrescriptionIntegrity({
     normalizedInput: owned.normalizedInput as CanonicalValue,
     storedNormalizedInputHash: owned.normalizedInputHash,
