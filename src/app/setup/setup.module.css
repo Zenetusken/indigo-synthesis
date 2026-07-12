@@ -1,0 +1,208 @@
+.page {
+  margin-inline: auto;
+  max-width: 76rem;
+  padding: clamp(1.5rem, 5vw, 4rem);
+}
+
+.header {
+  border-block-end: 1px solid var(--hairline);
+  margin-block-end: var(--space-8);
+  padding-block-end: var(--space-8);
+}
+
+.header p {
+  color: var(--steel);
+  max-width: 52rem;
+}
+
+.header h1 {
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 8vw, 6rem);
+  font-stretch: condensed;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+  margin: 0;
+}
+
+.form {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.form section {
+  background: var(--paper);
+  border-block-start: 0.25rem solid var(--rack-ink);
+  display: grid;
+  gap: var(--space-6);
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.form h2,
+.form p {
+  margin: 0;
+}
+
+.form h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 4vw, 2.6rem);
+  font-stretch: condensed;
+  line-height: 1;
+}
+
+.step {
+  color: var(--indigo-deep);
+  font: 500 0.75rem / 1 var(--font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fieldGrid,
+.loadGrid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.loadGrid {
+  grid-template-columns: repeat(5, minmax(7rem, 1fr));
+}
+
+.form label:not(.choiceGrid label, .checkStack label, .radioStack label) {
+  display: grid;
+  font-weight: 700;
+  gap: var(--space-2);
+}
+
+.form input:not([type="checkbox"], [type="radio"]),
+.form select,
+.form textarea {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  font: inherit;
+  min-height: 3rem;
+  padding: 0.7rem 0.8rem;
+  width: 100%;
+}
+
+.form input[type="number"] {
+  font-family: var(--font-data);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.form fieldset {
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+}
+
+.form legend {
+  font-weight: 700;
+  margin-block-end: var(--space-3);
+}
+
+.choiceGrid {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.choiceGrid label,
+.checkStack label,
+.radioStack label {
+  align-items: center;
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline);
+  display: flex;
+  gap: var(--space-3);
+  min-height: 3rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.choiceGrid input,
+.checkStack input,
+.radioStack input {
+  accent-color: var(--indigo-enamel);
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.checkStack,
+.radioStack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.shortField {
+  max-width: 20rem;
+}
+
+.form small {
+  color: var(--steel);
+  font-weight: 400;
+}
+
+.actionBar {
+  align-items: center;
+  background: var(--rack-ink);
+  color: var(--paper);
+  display: flex;
+  gap: var(--space-6);
+  justify-content: space-between;
+  padding: var(--space-6);
+}
+
+.actionBar div,
+.errorSummary {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.actionBar span {
+  color: #cdd4dd;
+  font-size: 0.9rem;
+}
+
+.actionBar button {
+  background: var(--plate-yellow);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.85rem 1.25rem;
+}
+
+.errorSummary {
+  background: var(--danger-soft);
+  border-inline-start: 0.3rem solid var(--danger);
+  padding: var(--space-4);
+}
+
+.errorSummary ul {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+
+@media (max-width: 54rem) {
+  .loadGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 38rem) {
+  .fieldGrid,
+  .loadGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .actionBar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

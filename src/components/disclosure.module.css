@@ -1,0 +1,28 @@
+.disclosure {
+  border-block: 1px solid var(--hairline);
+}
+
+.disclosure summary {
+  color: var(--indigo-deep);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.75rem var(--space-1);
+}
+
+.disclosure summary:hover {
+  color: var(--rack-ink);
+}
+
+.content {
+  color: var(--rack-ink-soft);
+  padding: 0 var(--space-6) var(--space-4);
+}
+
+.content > :first-child {
+  margin-top: 0;
+}
+
+.content > :last-child {
+  margin-bottom: 0;
+}

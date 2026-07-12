@@ -1,0 +1,63 @@
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.label {
+  align-items: baseline;
+  display: flex;
+  font-weight: 700;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+
+.optional {
+  color: var(--steel);
+  font-family: var(--font-data);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.hint,
+.error {
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.hint {
+  color: var(--steel);
+}
+
+.error {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.control :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  background: var(--paper-raised);
+  border: 1px solid var(--steel);
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  font-size: 1rem;
+  min-height: 3rem;
+  padding: 0.7rem var(--space-3);
+  width: 100%;
+}
+
+.control textarea {
+  min-height: 7.5rem;
+  resize: vertical;
+}
+
+.control :is(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+
+.control :is(input, select, textarea):disabled {
+  background: var(--primer);
+  color: var(--steel);
+  cursor: not-allowed;
+}

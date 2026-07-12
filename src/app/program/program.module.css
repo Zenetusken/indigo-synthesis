@@ -1,0 +1,210 @@
+.content {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.warning {
+  background: #fff6dc;
+  border-inline-start: 0.35rem solid var(--plate-yellow);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-6);
+}
+
+.warning p,
+.empty p {
+  margin: 0;
+}
+
+.empty {
+  background: var(--paper);
+  border-block-start: 0.3rem solid var(--rack-ink);
+  display: grid;
+  gap: var(--space-6);
+  max-width: 48rem;
+  padding: clamp(1.5rem, 5vw, 3rem);
+}
+
+.generateForm {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.generateForm label {
+  display: grid;
+  font-weight: 700;
+  gap: var(--space-2);
+}
+
+.generateForm input {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  font: 500 1rem / 1 var(--font-data);
+  min-height: 3rem;
+  padding: 0.75rem;
+}
+
+.primaryButton {
+  background: var(--indigo-enamel);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.8rem 1.2rem;
+}
+
+.sheet {
+  background: var(--paper);
+  border-block-start: 0.35rem solid var(--rack-ink);
+}
+
+.sheetHeader {
+  align-items: start;
+  border-block-end: 1px solid var(--hairline);
+  display: flex;
+  gap: var(--space-6);
+  justify-content: space-between;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.sheetHeader h2,
+.sheetHeader p {
+  margin: 0;
+}
+
+.sheetHeader h2 {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-stretch: condensed;
+  line-height: 0.95;
+}
+
+.sheetHeader p {
+  color: var(--steel);
+  margin-block-start: var(--space-2);
+}
+
+.schedule {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workout {
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.28fr) minmax(0, 1fr);
+}
+
+.workoutMeta {
+  background: color-mix(in srgb, var(--primer) 55%, var(--paper));
+  border-inline-end: 1px solid var(--hairline);
+  padding: var(--space-6);
+}
+
+.workoutMeta strong,
+.workoutMeta span {
+  display: block;
+}
+
+.workoutMeta strong {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-stretch: condensed;
+}
+
+.workoutMeta span {
+  color: var(--steel);
+  font: 500 0.75rem / 1.5 var(--font-data);
+  margin-block-start: var(--space-2);
+}
+
+.exercises {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+}
+
+.exercises li {
+  align-items: baseline;
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 2rem minmax(12rem, 1fr) auto;
+  padding-block: var(--space-3);
+}
+
+.exercises li:last-child {
+  border-block-end: 0;
+}
+
+.ordinal,
+.prescription {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.ordinal {
+  color: var(--steel);
+  font-size: 0.75rem;
+}
+
+.prescription {
+  font-size: 0.9rem;
+}
+
+.versions {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.versions div {
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+}
+
+.versions dt {
+  color: var(--steel);
+  font-size: 0.8rem;
+}
+
+.versions dd {
+  font: 500 0.8rem / 1.5 var(--font-data);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 45rem) {
+  .sheetHeader,
+  .workout {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .workoutMeta {
+    border-block-end: 1px solid var(--hairline);
+    border-inline-end: 0;
+  }
+
+  .exercises li {
+    gap: var(--space-2);
+    grid-template-columns: 2rem 1fr;
+  }
+
+  .prescription {
+    grid-column: 2;
+  }
+
+  .versions {
+    grid-template-columns: 1fr;
+  }
+}

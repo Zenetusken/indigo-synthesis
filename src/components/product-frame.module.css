@@ -1,0 +1,200 @@
+.frame {
+  min-height: 100dvh;
+}
+
+.skipLink {
+  background: var(--rack-ink);
+  color: var(--paper-raised);
+  font-weight: 700;
+  left: var(--space-4);
+  min-height: 3rem;
+  padding: var(--space-3) var(--space-4);
+  position: fixed;
+  top: var(--space-3);
+  transform: translateY(calc(-100% - var(--space-6)));
+  transition: transform 120ms ease;
+  z-index: 100;
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+.masthead {
+  align-items: center;
+  border-bottom: 1px solid var(--hairline);
+  display: grid;
+  gap: clamp(var(--space-6), 4vw, var(--space-12));
+  grid-template-columns: minmax(12rem, 1fr) auto minmax(8rem, 1fr);
+  margin-inline: auto;
+  max-width: 90rem;
+  min-height: 5rem;
+  padding: var(--space-4) clamp(1rem, 4vw, 4rem);
+}
+
+.wordmark {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-3);
+  justify-self: start;
+  min-height: 3rem;
+  text-decoration: none;
+}
+
+.mark {
+  align-items: center;
+  background: var(--indigo-enamel);
+  border-radius: var(--radius-sm);
+  color: white;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--font-data);
+  font-size: 0.8rem;
+  height: 2.5rem;
+  justify-content: center;
+  letter-spacing: -0.06em;
+  width: 2.5rem;
+}
+
+.wordmarkText strong,
+.wordmarkText small {
+  display: block;
+}
+
+.wordmarkText strong {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-stretch: condensed;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.wordmarkText small {
+  color: var(--steel);
+  font-family: var(--font-data);
+  font-size: 0.62rem;
+  letter-spacing: 0.07em;
+  margin-top: var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.navigation ul {
+  align-items: stretch;
+  display: flex;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.navigationLink {
+  align-items: center;
+  border-bottom: 0.2rem solid transparent;
+  display: flex;
+  font-size: 0.9rem;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0 var(--space-4);
+  text-decoration: none;
+}
+
+.navigationLink:hover {
+  background: color-mix(in srgb, var(--paper-raised) 60%, transparent);
+}
+
+.navigationLink[aria-current="page"] {
+  border-bottom-color: var(--plate-yellow);
+  color: var(--indigo-deep);
+}
+
+.accountActions {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  justify-self: end;
+}
+
+.accountActions :is(a, button) {
+  align-items: center;
+  display: inline-flex;
+  min-height: 3rem;
+}
+
+.main {
+  margin-inline: auto;
+  max-width: 90rem;
+  padding: clamp(2rem, 5vw, 4rem) clamp(1rem, 4vw, 4rem) clamp(4rem, 8vw, 7rem);
+}
+
+@media (max-width: 52rem) {
+  .frame {
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom));
+  }
+
+  .masthead {
+    display: flex;
+    gap: var(--space-4);
+    justify-content: space-between;
+    min-height: 4.5rem;
+    padding-block: var(--space-3);
+  }
+
+  .navigation {
+    background: color-mix(in srgb, var(--paper-raised) 96%, transparent);
+    border-top: 1px solid var(--hairline);
+    bottom: 0;
+    left: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    position: fixed;
+    right: 0;
+    z-index: 50;
+  }
+
+  .navigation ul {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .navigationLink {
+    border-bottom: 0;
+    border-top: 0.2rem solid transparent;
+    font-size: clamp(0.72rem, 3.5vw, 0.88rem);
+    justify-content: center;
+    min-height: 3rem;
+    overflow: hidden;
+    padding: 0 var(--space-1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .navigationLink[aria-current="page"] {
+    border-top-color: var(--plate-yellow);
+  }
+
+  .accountActions {
+    flex: 0 0 auto;
+  }
+
+  .main {
+    scroll-margin-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 26rem) {
+  .wordmarkText small {
+    max-width: 9rem;
+  }
+
+  .accountActions {
+    font-size: 0.82rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink {
+    transition: none;
+  }
+}

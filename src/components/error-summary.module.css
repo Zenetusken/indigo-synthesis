@@ -1,0 +1,33 @@
+.summary {
+  background: var(--danger-soft);
+  border-left: 0.3rem solid var(--danger);
+  color: var(--rack-ink);
+  padding: var(--space-4) var(--space-6);
+}
+
+.summary:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.summary h2 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-stretch: condensed;
+  line-height: 1.1;
+  margin: 0 0 var(--space-2);
+}
+
+.summary ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.summary li + li {
+  margin-top: var(--space-1);
+}
+
+.summary a {
+  color: var(--danger-deep);
+  font-weight: 700;
+}
