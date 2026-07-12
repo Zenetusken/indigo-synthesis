@@ -6,6 +6,7 @@ export type DatabasePreflight = {
   readonly databaseVersion: string
   readonly databaseVersionNumber: number
   readonly migrationLedgerPresent: boolean
+  readonly migrationLedgerCanonical: boolean
   readonly appliedMigrationCount: number
   readonly bootstrapTriggerPresent: boolean
   readonly workoutSnapshotColumnsPresent: boolean
@@ -14,7 +15,11 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 10
+const expectedMigrationCount = 11
+const canonicalProgramOrdinalMigration = {
+  createdAt: 1_783_823_225_722,
+  hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
+} as const
 const requiredIntegrityTriggers = [
   {
     name: 'workout_session_owner_guard',
@@ -337,20 +342,30 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
   ])
 
   const migrationLedgerPresent = migrationResult.rows[0]?.present ?? false
-  const appliedMigrationCount = migrationLedgerPresent
-    ? Number(
-        (
-          await db.execute<{ count: number }>(sql`
-            SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations
-          `)
-        ).rows[0]?.count ?? 0,
-      )
-    : 0
+  const migrationLedgerState = migrationLedgerPresent
+    ? (
+        await db.execute<{ canonical: boolean; count: number }>(sql`
+          SELECT
+            count(*)::int AS count,
+            count(*) FILTER (
+              WHERE created_at = ${canonicalProgramOrdinalMigration.createdAt}
+                AND hash = ${canonicalProgramOrdinalMigration.hash}
+            ) = 1
+            AND count(*) FILTER (
+              WHERE created_at = ${canonicalProgramOrdinalMigration.createdAt}
+            ) = 1 AS canonical
+          FROM drizzle.__drizzle_migrations
+        `)
+      ).rows[0]
+    : undefined
+  const appliedMigrationCount = Number(migrationLedgerState?.count ?? 0)
+  const migrationLedgerCanonical = migrationLedgerState?.canonical ?? false
 
   return {
     databaseVersion: versionResult.rows[0]?.version ?? 'unknown',
     databaseVersionNumber: Number(versionResult.rows[0]?.versionNumber ?? 0),
     migrationLedgerPresent,
+    migrationLedgerCanonical,
     appliedMigrationCount,
     bootstrapTriggerPresent: triggerResult.rows[0]?.present ?? false,
     workoutSnapshotColumnsPresent: columnsResult.rows[0]?.present ?? false,
@@ -365,6 +380,9 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   const failures: string[] = []
 
   if (!result.migrationLedgerPresent) failures.push('Drizzle migration ledger is absent')
+  if (!result.migrationLedgerCanonical) {
+    failures.push('program-ordinal migration ledger provenance is not canonical')
+  }
   if (result.appliedMigrationCount !== expectedMigrationCount) {
     failures.push(
       `expected ${expectedMigrationCount} applied migrations, found ${result.appliedMigrationCount}`,

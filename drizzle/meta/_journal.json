@@ -71,6 +71,13 @@
       "when": 1783834404364,
       "tag": "0009_safety_hold_clearance_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783837252623,
+      "tag": "0010_program_migration_ledger_provenance",
+      "breakpoints": true
     }
   ]
 }

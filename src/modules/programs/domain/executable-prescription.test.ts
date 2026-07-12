@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { CanonicalValue } from '@/modules/methodology/domain/canonical'
 import {
+  EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
   type ExecutablePrescriptionProjection,
+  type ExecutablePrescriptionProjectionV1,
   executablePrescriptionHash,
+  executablePrescriptionHashMaterialVersion,
+  LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  type SupportedExecutablePrescriptionProjection,
   verifyExecutablePrescriptionIntegrity,
 } from './executable-prescription'
 
@@ -57,8 +62,39 @@ function projection(): ExecutablePrescriptionProjection {
   }
 }
 
+function projectionV1(): ExecutablePrescriptionProjectionV1 {
+  const current = projection()
+  return {
+    hashMaterialVersion: LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+    engineVersion: current.engineVersion,
+    methodology: current.methodology,
+    template: current.template,
+    normalizedInputHash: current.normalizedInputHash,
+    workouts: current.workouts.map((workout) => ({
+      scheduledDate: workout.scheduledDate,
+      ordinal: workout.ordinal,
+      slotCode: workout.slotCode,
+      name: workout.name,
+      exercises: workout.exercises,
+    })),
+  }
+}
+
 function verifiedInput(persistedProjection = projection()) {
   const expected = projection()
+  return {
+    normalizedInput,
+    storedNormalizedInputHash: expected.normalizedInputHash,
+    storedOutputSnapshot: expected as unknown as CanonicalValue,
+    storedOutputHash: executablePrescriptionHash(expected),
+    persistedProjection,
+  }
+}
+
+function verifiedV1Input(
+  persistedProjection: SupportedExecutablePrescriptionProjection = projectionV1(),
+) {
+  const expected = projectionV1()
   return {
     normalizedInput,
     storedNormalizedInputHash: expected.normalizedInputHash,
@@ -112,10 +148,58 @@ describe('canonical executable prescription', () => {
     )
   })
 
+  it('retains the fixed historical v1 hash vector', () => {
+    expect(executablePrescriptionHash(projectionV1())).toBe(
+      '54cfd5100dbb5f9a6dc46fdbb6637147ce2731647a10f3ff55183aac5e19a8ed',
+    )
+  })
+
   it('accepts an exact normalized input, snapshot, projection, and hash', () => {
     expect(verifyExecutablePrescriptionIntegrity(verifiedInput())).toEqual({
       valid: true,
     })
+  })
+
+  it('accepts the exact typed historical v1 projection and hash', () => {
+    expect(verifyExecutablePrescriptionIntegrity(verifiedV1Input())).toEqual({
+      valid: true,
+    })
+  })
+
+  it.each([
+    ['null', null],
+    ['array', []],
+    ['missing version', {}],
+    ['unknown version', { hashMaterialVersion: 'executable-prescription-v3' }],
+  ] as const)('rejects a %s persisted hash-material discriminator', (_case, value) => {
+    expect(executablePrescriptionHashMaterialVersion(value)).toBeNull()
+  })
+
+  it('recognizes only the two supported persisted hash-material versions', () => {
+    expect(
+      executablePrescriptionHashMaterialVersion({
+        hashMaterialVersion: LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+      }),
+    ).toBe(LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION)
+    expect(
+      executablePrescriptionHashMaterialVersion({
+        hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+      }),
+    ).toBe(EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION)
+  })
+
+  it('rejects a v2-shaped snapshot retagged as v1', () => {
+    const retaggedSnapshot = {
+      ...projection(),
+      hashMaterialVersion: LEGACY_EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+    } satisfies CanonicalValue
+
+    expect(
+      verifyExecutablePrescriptionIntegrity({
+        ...verifiedV1Input(),
+        storedOutputSnapshot: retaggedSnapshot,
+      }),
+    ).toEqual({ valid: false, reason: 'output-snapshot-mismatch' })
   })
 
   it('rejects a normalized-input hash that does not describe the saved input', () => {

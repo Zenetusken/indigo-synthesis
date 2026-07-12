@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -34,5 +35,18 @@ describe('clean-clone operator contract', () => {
     expect(readme).toContain('pnpm exec playwright install chromium')
     expect(readme).toContain('cp .env.e2e.example .env.e2e.local')
     expect(readme).toContain('drops and recreates')
+  })
+
+  it('keeps migration SQL byte-stable with a canonical LF checkout policy', () => {
+    const attributes = readFileSync(resolve(projectRoot, '.gitattributes'), 'utf8')
+    expect(attributes).toMatch(/^drizzle\/\*\.sql text eol=lf$/m)
+
+    const migration = readFileSync(
+      resolve(projectRoot, 'drizzle/0004_magenta_the_spike.sql'),
+    )
+    expect(migration.includes(13)).toBe(false)
+    expect(createHash('sha256').update(migration).digest('hex')).toBe(
+      'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
+    )
   })
 })
