@@ -42,6 +42,7 @@ export async function resetProductData(): Promise<void> {
   await getDb().execute(`
     TRUNCATE TABLE
       audit_event,
+      content_release_revocation,
       deletion_plan,
       deletion_tombstone,
       safety_hold_resolution,

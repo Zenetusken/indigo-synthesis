@@ -49,6 +49,9 @@ export default async function HistoryPage() {
                         )
                       : '—'}
                   </span>
+                  {!session.contentEligibility.eligible ? (
+                    <span className={styles.contentStatus}>Content release revoked</span>
+                  ) : null}
                 </Link>
               </li>
             ))}

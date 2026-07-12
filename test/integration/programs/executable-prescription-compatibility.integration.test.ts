@@ -255,7 +255,7 @@ async function withPendingLedgerProvenanceMigration(
     client = new Client({ connectionString: database.databaseUrl })
     await client.connect()
     const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-    expect(migrations).toHaveLength(13)
+    expect(migrations).toHaveLength(14)
     await applyMigrationPrefixWithLedger(client, migrations.slice(0, 10))
 
     database.activateDatabaseUrl()
@@ -503,7 +503,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(ledger.rows).toEqual([{ hash: canonicalProgramOrdinalMigrationHash }])
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 13,
+        appliedMigrationCount: 14,
         migrationLedgerCanonical: true,
       })
 
@@ -535,7 +535,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(after.rows).toEqual(before.rows)
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 13,
+        appliedMigrationCount: 14,
         migrationLedgerCanonical: true,
       })
     })

@@ -83,7 +83,15 @@ export function createNextProcessLifecycle(
       const detached = process.platform !== 'win32'
       const childProcess = spawn(
         process.execPath,
-        [nextBin, 'dev', '--hostname', options.host, '--port', String(options.port)],
+        [
+          nextBin,
+          'dev',
+          '--webpack',
+          '--hostname',
+          options.host,
+          '--port',
+          String(options.port),
+        ],
         {
           cwd: options.projectRoot,
           detached,

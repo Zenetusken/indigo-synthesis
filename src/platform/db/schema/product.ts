@@ -253,6 +253,39 @@ export const programRevisions = pgTable(
   ],
 )
 
+export const contentReleaseRevocations = pgTable(
+  'content_release_revocation',
+  {
+    id: text('id').primaryKey(),
+    contentKind: text('content_kind').notNull(),
+    contentId: text('content_id').notNull(),
+    contentVersion: text('content_version').notNull(),
+    reason: text('reason').notNull(),
+    actorUserId: text('actor_user_id').references(() => user.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('content_release_revocation_exact_uidx').on(
+      table.contentKind,
+      table.contentId,
+      table.contentVersion,
+    ),
+    index('content_release_revocation_actor_idx').on(table.actorUserId),
+    check(
+      'content_release_revocation_kind_check',
+      sql`${table.contentKind} IN ('methodology', 'template')`,
+    ),
+    check(
+      'content_release_revocation_reason_check',
+      sql`char_length(${table.reason}) BETWEEN 1 AND 300
+        AND left(${table.reason}, 1) !~ '[[:space:]]'
+        AND right(${table.reason}, 1) !~ '[[:space:]]'`,
+    ),
+  ],
+)
+
 export const plannedWorkouts = pgTable(
   'planned_workout',
   {

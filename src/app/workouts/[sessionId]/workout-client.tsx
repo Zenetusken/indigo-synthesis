@@ -13,7 +13,6 @@ import type {
   WorkoutSessionView,
   WorkoutSetView,
 } from '@/modules/training/application/workouts'
-import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import {
   abandonWorkoutAction,
   completeSetAction,
@@ -28,6 +27,13 @@ import {
 import { ContinuationFocus } from './continuation-focus'
 import { RestCountdown } from './rest-countdown'
 import styles from './workout.module.css'
+
+function newClientCommandId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
 
 const errorMessages: Readonly<Record<string, string>> = {
   'profile.missing': 'Profile not found.',
@@ -129,7 +135,7 @@ function SetForm({
   unitLabel: 'kg' | 'lb'
 }) {
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(completeSetAction)
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [actualLoad, setActualLoad] = useState(() =>
     String(displayLoadValue(set.targetLoadGrams, units)),
   )
@@ -215,7 +221,7 @@ function SetForm({
 
 function SkipForm({ sessionId, set }: { sessionId: string; set: WorkoutSetView }) {
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(skipSetAction)
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [reason, setReason] = useState('')
 
   return (
@@ -255,7 +261,7 @@ function SubstitutionProposalForm({
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(
     proposeExerciseSubstitutionAction,
   )
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [requestedExerciseCode, setRequestedExerciseCode] = useState('')
 
   return (
@@ -309,7 +315,7 @@ function SubstitutionProposalForm({
 
 function CompleteWorkoutForm({ sessionId }: { sessionId: string }) {
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(completeWorkoutAction)
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [checked, setChecked] = useState(false)
 
   return (
@@ -342,7 +348,7 @@ function CompleteWorkoutForm({ sessionId }: { sessionId: string }) {
 
 function ReportPainForm({ sessionId }: { sessionId: string }) {
   const { isPending, errorCode, alertRef, submit } = useWorkoutForm(reportPainAction)
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [details, setDetails] = useState('')
 
   return (

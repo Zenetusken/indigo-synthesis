@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { evaluatePersistedContentEligibility } from './content-eligibility'
 
 describe('persisted content eligibility', () => {
+  it('denies exact-version revoked releases before status checks', () => {
+    expect(
+      evaluatePersistedContentEligibility({
+        contentMode: 'development',
+        methodologyStatus: 'reviewed',
+        templateStatus: 'reviewed',
+        revoked: true,
+      }),
+    ).toEqual({ eligible: false, code: 'content.revoked' })
+  })
+
   it.each([
     'methodologyStatus',
     'templateStatus',

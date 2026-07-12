@@ -1,8 +1,10 @@
-import { asc, eq, inArray } from 'drizzle-orm'
+import { asc, eq, inArray, sql } from 'drizzle-orm'
 import {
   type CanonicalValue,
   canonicalSha256,
 } from '@/modules/methodology/domain/canonical'
+import { evaluatePersistedContentEligibility } from '@/modules/programs/domain/content-eligibility'
+import { getServerConfig } from '@/platform/config/server'
 import { getDb } from '@/platform/db/client'
 import {
   adjustmentDecisionInvalidations,
@@ -11,6 +13,7 @@ import {
   athleteProfiles,
   athleteTrainingDays,
   auditEvents,
+  contentReleaseRevocations,
   exercisePrescriptions,
   performedSetCorrections,
   performedSets,
@@ -36,6 +39,15 @@ export const exportSchemaVersion = '1.4.0-development'
 
 function canonical(value: unknown): CanonicalValue {
   return JSON.parse(JSON.stringify(value)) as CanonicalValue
+}
+
+function actorClassForExport(
+  exportedSubjectUserId: string,
+  actorUserId: string | null,
+): 'self' | 'local-administrator' | 'system' {
+  if (actorUserId === exportedSubjectUserId) return 'self'
+  if (actorUserId === null) return 'system'
+  return 'local-administrator'
 }
 
 export class DataExportError extends Error {
@@ -126,6 +138,36 @@ export async function createDataExport(actor: {
                 asc(programRevisions.revisionNumber),
               )
       const revisionIds = revisions.map((revision) => revision.id)
+      const revisionContentRevocations =
+        revisionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(contentReleaseRevocations)
+              .where(sql`EXISTS (
+                SELECT 1
+                FROM ${programRevisions} AS revision
+                WHERE revision.id IN (${sql.join(
+                  revisionIds.map((revisionId) => sql`${revisionId}`),
+                  sql`, `,
+                )})
+                  AND (
+                    (
+                      ${contentReleaseRevocations.contentKind} = 'methodology'
+                      AND ${contentReleaseRevocations.contentId} = revision.methodology_id
+                      AND ${contentReleaseRevocations.contentVersion} = revision.methodology_version
+                    )
+                    OR (
+                      ${contentReleaseRevocations.contentKind} = 'template'
+                      AND ${contentReleaseRevocations.contentId} = revision.template_id
+                      AND ${contentReleaseRevocations.contentVersion} = revision.template_version
+                    )
+                  )
+              )`)
+              .orderBy(
+                asc(contentReleaseRevocations.createdAt),
+                asc(contentReleaseRevocations.id),
+              )
       const revisionLineage =
         revisionIds.length === 0
           ? []
@@ -283,6 +325,35 @@ export async function createDataExport(actor: {
       const workoutById = new Map(workouts.map((workout) => [workout.id, workout]))
       const revisionById = new Map(revisions.map((revision) => [revision.id, revision]))
       const programById = new Map(ownedPrograms.map((program) => [program.id, program]))
+      const exportedContentRevocations = revisionContentRevocations.map(
+        ({ actorUserId, ...revocation }) => ({
+          ...revocation,
+          actorClass: actorClassForExport(actor.userId, actorUserId),
+        }),
+      )
+      const revocationsForRevision = (revision: (typeof revisions)[number]) =>
+        exportedContentRevocations.filter(
+          (revocation) =>
+            (revocation.contentKind === 'methodology' &&
+              revocation.contentId === revision.methodologyId &&
+              revocation.contentVersion === revision.methodologyVersion) ||
+            (revocation.contentKind === 'template' &&
+              revocation.contentId === revision.templateId &&
+              revocation.contentVersion === revision.templateVersion),
+        )
+      const contentMode = getServerConfig().contentMode
+      const contentStatusForRevision = (revision: (typeof revisions)[number]) => {
+        const revocations = revocationsForRevision(revision)
+        return {
+          eligibility: evaluatePersistedContentEligibility({
+            contentMode,
+            methodologyStatus: revision.methodologyReviewStatus,
+            templateStatus: revision.templateReviewStatus,
+            revoked: revocations.length > 0,
+          }),
+          revocations,
+        }
+      }
       const correctionById = new Map(
         correctionRows.map((correction) => [correction.id, correction]),
       )
@@ -317,6 +388,7 @@ export async function createDataExport(actor: {
             .filter((revision) => revision.programId === program.id)
             .map((revision) => ({
               ...revision,
+              contentStatus: contentStatusForRevision(revision),
               invalidation: (() => {
                 const invalidation = revisionInvalidationRows.find(
                   (entry) => entry.revisionId === revision.id,
@@ -377,6 +449,7 @@ export async function createDataExport(actor: {
                   },
                   normalizedInputHash: sourceRevision.normalizedInputHash,
                   outputHash: sourceRevision.outputHash,
+                  contentStatus: contentStatusForRevision(sourceRevision),
                   plannedWorkout: {
                     id: sourceWorkout.id,
                     scheduledDate: sourceWorkout.scheduledDate,
@@ -510,14 +583,10 @@ export async function createDataExport(actor: {
             ),
           }
         }),
+        contentReleaseRevocations: exportedContentRevocations,
         auditEvents: auditRows.map(({ actorUserId, ...event }) => ({
           ...event,
-          actorClass:
-            actorUserId === actor.userId
-              ? ('self' as const)
-              : actorUserId === null
-                ? ('system' as const)
-                : ('local-administrator' as const),
+          actorClass: actorClassForExport(actor.userId, actorUserId),
         })),
         provenance: {
           programRevision:
@@ -530,6 +599,8 @@ export async function createDataExport(actor: {
             'Each adjustment records the source session, rule version, reason code, prior load, proposed load, applied revision, and permanent correction-attributed invalidation when present.',
           correction:
             'Original feedback and resolved-set facts are retained. Ordered, actor-attributed corrections expose a separate effective projection without rewriting history.',
+          contentRevocation:
+            'Exact methodology/template release revocations are append-only instance facts. Relevant revocations are exported with each affected revision and session provenance; actorClass is redacted to self, local-administrator, or system.',
           commandReceipt:
             'Every idempotent training mutation records an append-only command identifier, canonical request hash, target, and result snapshot.',
           safetyHold:

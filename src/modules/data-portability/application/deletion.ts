@@ -15,6 +15,7 @@ import {
   athleteProfiles,
   athleteTrainingDays,
   auditEvents,
+  contentReleaseRevocations,
   deletionPlans,
   deletionTombstones,
   destructiveReauthenticationStates,
@@ -78,6 +79,7 @@ export type InstanceResetCounts = {
   readonly performedSetCorrections: number
   readonly adjustmentDecisionInvalidations: number
   readonly programRevisionInvalidations: number
+  readonly contentReleaseRevocations: number
   readonly auditEvents: number
   readonly deletionPlans: number
 }
@@ -225,6 +227,7 @@ async function countInstanceRows(
       (SELECT count(*)::int FROM performed_set_correction) AS "performedSetCorrections",
       (SELECT count(*)::int FROM adjustment_decision_invalidation) AS "adjustmentDecisionInvalidations",
       (SELECT count(*)::int FROM program_revision_invalidation) AS "programRevisionInvalidations",
+      (SELECT count(*)::int FROM content_release_revocation) AS "contentReleaseRevocations",
       (SELECT count(*)::int FROM audit_event) AS "auditEvents",
       (SELECT count(*)::int FROM deletion_plan) AS "deletionPlans"
   `)
@@ -796,6 +799,7 @@ export async function executeInstanceReset(input: {
           await transaction.delete(athleteEquipment)
           await transaction.delete(athleteTrainingDays)
           await transaction.delete(athleteProfiles)
+          await transaction.delete(contentReleaseRevocations)
           await transaction.delete(auditEvents)
           await transaction.delete(deletionPlans)
 

@@ -5,6 +5,7 @@ export type ContentEligibilityResult =
   | {
       readonly eligible: false
       readonly code:
+        | 'content.revoked'
         | 'content.prohibited'
         | 'content.expired'
         | 'content.development-forbidden-in-production'
@@ -14,9 +15,13 @@ export function evaluatePersistedContentEligibility(input: {
   readonly contentMode: 'development' | 'reviewed'
   readonly methodologyStatus: string
   readonly templateStatus: string
+  readonly revoked?: boolean
 }): ContentEligibilityResult {
   const statuses = [input.methodologyStatus, input.templateStatus]
 
+  if (input.revoked) {
+    return { eligible: false, code: 'content.revoked' }
+  }
   if (statuses.includes('prohibited')) {
     return { eligible: false, code: 'content.prohibited' }
   }

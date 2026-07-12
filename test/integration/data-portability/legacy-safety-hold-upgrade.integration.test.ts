@@ -222,7 +222,7 @@ describe('legacy source-less safety hold migration', () => {
       client = new Client({ connectionString: database.databaseUrl })
       await client.connect()
       const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-      expect(migrations).toHaveLength(13)
+      expect(migrations).toHaveLength(14)
       await applyMigrations(client, migrations.slice(0, 7))
 
       const users = [

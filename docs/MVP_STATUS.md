@@ -84,7 +84,7 @@ implemented behavior.
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
 | Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, a source guard against runtime outbound clients/remote assets, and browser request observation | Run and retain the complete browser proof in an environment whose outbound network is actually denied |
-| Database integrity | Eleven Drizzle migration entries, canonical 0004 ledger provenance, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, terminal-history and published-prescription guards, audit immutability, terminal/monotonic feedback enforcement, immutable hold provenance, append-only hold-resolution records, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, `0003`/`0006` upgrade, and preflight proof in final release evidence |
+| Database integrity | Fourteen Drizzle migration entries, canonical 0004 ledger provenance, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, terminal-history and published-prescription guards, audit immutability, terminal/monotonic feedback enforcement, immutable hold provenance, append-only hold-resolution and content-release revocation records, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
 | Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with abandonment prerequisite and no medical-clearance implication, completed-source resolution blocked pending H1, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
@@ -102,11 +102,10 @@ pnpm test:e2e
 INDIGO_CONTENT_MODE=reviewed pnpm build
 ```
 
-At this snapshot, Biome, TypeScript, 257 unit/domain/architecture tests, 69 database
-integration tests, dedicated `0003`→latest and `0006`→`0009` upgrade proofs, the
-twelve-path Playwright suite including the supervised H3 browser journey, PostgreSQL
-preflight/fresh migration across eleven ledger entries, and the reviewed-mode production
-build are green.
+At this snapshot, Biome, TypeScript, 262 unit/domain/architecture tests, 89 database
+integration tests, dedicated upgrade proofs, the 15-path Playwright suite including the
+supervised restart/replay journeys, PostgreSQL preflight/fresh migration across fourteen
+ledger entries and 28 required integrity triggers, and the production build are green.
 The Playwright suite runs against a freshly recreated PostgreSQL database with
 application APIs unmocked.
 

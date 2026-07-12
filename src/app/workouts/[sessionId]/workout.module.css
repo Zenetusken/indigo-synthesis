@@ -47,14 +47,25 @@
   display: grid;
   gap: var(--space-8);
   margin-inline: auto;
-  max-width: 82rem;
+  max-width: min(82rem, 100%);
   min-width: 0;
+  width: 100%;
   padding: clamp(1.5rem, 5vw, 4rem);
+}
+
+.content > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.heading {
+  min-width: 0;
 }
 
 .heading h1,
 .heading p {
   margin: 0;
+  max-width: 100%;
 }
 
 .heading h1 {
@@ -70,6 +81,7 @@
   color: var(--steel);
   font-family: var(--font-data);
   margin-block-start: var(--space-3);
+  overflow-wrap: anywhere;
 }
 
 .error,
@@ -78,6 +90,9 @@
   border-inline-start: 0.35rem solid var(--danger);
   display: grid;
   gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-4);
 }
 
@@ -434,6 +449,14 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.dockActions > *,
+.safetyForm > * {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .dockSafetyLink {
@@ -452,6 +475,9 @@
   color: var(--paper);
   display: grid;
   gap: var(--space-4);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-6);
 }
 
@@ -465,6 +491,15 @@
   display: flex;
   gap: var(--space-3);
   min-height: 3rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.completePanel form {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .completePanel input[type="checkbox"] {
@@ -551,6 +586,9 @@
   .restContext {
     align-items: start;
     flex-direction: column;
+    max-width: 100%;
+    min-width: 0;
+    padding: var(--space-4);
   }
 
   .priorPerformance,
@@ -564,6 +602,11 @@
   .priorPerformance,
   .topbar span {
     overflow-wrap: anywhere;
+  }
+
+  .exerciseHeader > * {
+    max-width: 100%;
+    width: 100%;
   }
 
   .setList {

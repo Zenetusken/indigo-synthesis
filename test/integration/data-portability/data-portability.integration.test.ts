@@ -33,6 +33,7 @@ import {
   athleteProfiles,
   athleteTrainingDays,
   auditEvents,
+  contentReleaseRevocations,
   deletionTombstones,
   exercisePrescriptions,
   installationState,
@@ -697,8 +698,17 @@ describe('subject export and exact instance reset', () => {
       }),
     ])
     expect(Object.keys(archive.manifest.hashes).sort()).toEqual(
-      ['auditEvents', 'identity', 'profile', 'programs', 'provenance', 'sessions'].sort(),
+      [
+        'auditEvents',
+        'contentReleaseRevocations',
+        'identity',
+        'profile',
+        'programs',
+        'provenance',
+        'sessions',
+      ].sort(),
     )
+    expect(archive.contentReleaseRevocations).toEqual([])
     expect(archive.manifest.hashes.programs).toBe(
       canonicalSha256(JSON.parse(JSON.stringify(archive.programs))),
     )
@@ -735,6 +745,90 @@ describe('subject export and exact instance reset', () => {
     expect(
       pausedArchive.sessions.find((session) => session.id === activeSessionId),
     ).toMatchObject({ status: 'paused' })
+  })
+
+  it('redacts content revocation actor identities from member exports', async () => {
+    const memberProgramId = newUuidV7()
+    const memberRevisionId = newUuidV7()
+    const revocationId = newUuidV7()
+    const contentId = `member-redaction-methodology-${revocationId}`
+    const now = new Date('2026-07-11T15:00:00.000Z')
+
+    try {
+      await getDb().transaction(async (transaction) => {
+        await transaction.insert(programs).values({
+          id: memberProgramId,
+          userId: otherUser.id,
+          status: 'draft',
+          createdAt: now,
+          updatedAt: now,
+        })
+        await transaction.insert(programRevisions).values({
+          id: memberRevisionId,
+          programId: memberProgramId,
+          revisionNumber: 1,
+          status: 'draft',
+          engineVersion: 'engine-v1',
+          methodologyId: contentId,
+          methodologyVersion: '1.0.0',
+          methodologyReviewStatus: 'reviewed',
+          templateId: 'member-redaction-template',
+          templateVersion: '1.0.0',
+          templateReviewStatus: 'reviewed',
+          normalizedInputHash: 'member-redaction-input',
+          outputHash: 'member-redaction-output',
+          normalizedInput: { fixture: 'member-redaction' },
+          outputSnapshot: { fixture: 'member-redaction' },
+          warnings: [],
+          manualReviewRequired: false,
+          createdAt: now,
+        })
+        await transaction.insert(contentReleaseRevocations).values({
+          id: revocationId,
+          contentKind: 'methodology',
+          contentId,
+          contentVersion: '1.0.0',
+          reason: 'Member export redaction fixture.',
+          actorUserId: actor.userId,
+          createdAt: now,
+        })
+      })
+
+      const archive = await createDataExport({
+        userId: otherUser.id,
+        name: 'Other Local User',
+        email: otherUser.email,
+      })
+
+      expect(archive.contentReleaseRevocations).toEqual([
+        expect.objectContaining({
+          id: revocationId,
+          actorClass: 'local-administrator',
+        }),
+      ])
+      expect(archive.contentReleaseRevocations[0]).not.toHaveProperty('actorUserId')
+      expect(
+        archive.programs[0]?.revisions[0]?.contentStatus.revocations[0],
+      ).toMatchObject({
+        id: revocationId,
+        actorClass: 'local-administrator',
+      })
+      expect(
+        archive.programs[0]?.revisions[0]?.contentStatus.revocations[0],
+      ).not.toHaveProperty('actorUserId')
+      expect(JSON.stringify(archive.contentReleaseRevocations)).not.toContain(
+        actor.userId,
+      )
+      expect(JSON.stringify(archive.programs)).not.toContain(actor.userId)
+    } finally {
+      await getDb().transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`)
+        await transaction
+          .delete(contentReleaseRevocations)
+          .where(eq(contentReleaseRevocations.id, revocationId))
+        await transaction.delete(programs).where(eq(programs.id, memberProgramId))
+      })
+    }
   })
 
   it('exports correction history and binds append-only correction facts into deletion previews', async () => {
@@ -1206,7 +1300,7 @@ describe('subject export and exact instance reset', () => {
 
   it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(31)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(32)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
@@ -1236,6 +1330,7 @@ describe('subject export and exact instance reset', () => {
       performedSetCorrections: 1,
       adjustmentDecisionInvalidations: 1,
       programRevisionInvalidations: 1,
+      contentReleaseRevocations: 0,
       auditEvents: 4,
       deletionPlans: 1,
     })
@@ -1317,6 +1412,7 @@ describe('subject export and exact instance reset', () => {
         (SELECT count(*) FROM performed_set_correction) +
         (SELECT count(*) FROM adjustment_decision_invalidation) +
         (SELECT count(*) FROM program_revision_invalidation) +
+        (SELECT count(*) FROM content_release_revocation) +
         (SELECT count(*) FROM destructive_reauthentication_state) +
         (SELECT count(*) FROM audit_event) +
         (SELECT count(*) FROM deletion_plan)
