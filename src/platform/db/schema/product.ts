@@ -706,10 +706,7 @@ export const sessionFeedbackCorrections = pgTable(
         trainingFactCorrections.userId,
       ],
     }).onDelete('cascade'),
-    check(
-      'session_feedback_correction_pain_check',
-      sql`${table.painReported} = true`,
-    ),
+    check('session_feedback_correction_pain_check', sql`${table.painReported} = true`),
   ],
 )
 
@@ -802,7 +799,9 @@ export const adjustmentDecisionInvalidations = pgTable(
       .references(() => trainingFactCorrections.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
   },
-  (table) => [index('adjustment_decision_invalidation_correction_idx').on(table.correctionId)],
+  (table) => [
+    index('adjustment_decision_invalidation_correction_idx').on(table.correctionId),
+  ],
 )
 
 export const programRevisionInvalidations = pgTable(
@@ -816,7 +815,9 @@ export const programRevisionInvalidations = pgTable(
       .references(() => trainingFactCorrections.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
   },
-  (table) => [index('program_revision_invalidation_correction_idx').on(table.correctionId)],
+  (table) => [
+    index('program_revision_invalidation_correction_idx').on(table.correctionId),
+  ],
 )
 
 export const auditEvents = pgTable(

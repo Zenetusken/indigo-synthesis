@@ -350,10 +350,7 @@ function holdResolutionAvailability(input: {
     (input.sourceSessionStatus === 'completed' && input.completedSourceInvalidated)
   )
     return { kind: 'available' }
-  if (
-    input.sourceSessionStatus === 'completed' &&
-    input.blockingAffectedSessionId
-  ) {
+  if (input.sourceSessionStatus === 'completed' && input.blockingAffectedSessionId) {
     return {
       kind: 'requires-abandonment',
       sessionId: input.blockingAffectedSessionId,
@@ -871,10 +868,7 @@ export async function getWorkoutSession(
             ),
           )
           .orderBy(desc(trainingFactCorrections.sequence))
-  const effectiveSetCorrection = new Map<
-    string,
-    (typeof setCorrections)[number]
-  >()
+  const effectiveSetCorrection = new Map<string, (typeof setCorrections)[number]>()
   for (const correction of setCorrections) {
     if (!effectiveSetCorrection.has(correction.performedSetId)) {
       effectiveSetCorrection.set(correction.performedSetId, correction)
@@ -936,9 +930,7 @@ export async function getWorkoutSession(
     seenPriorSets.add(row.setId)
     const status = row.correctedStatus ?? row.status
     const loadGrams = row.correctedStatus ? row.correctedLoadGrams : row.loadGrams
-    const repetitions = row.correctedStatus
-      ? row.correctedRepetitions
-      : row.repetitions
+    const repetitions = row.correctedStatus ? row.correctedRepetitions : row.repetitions
     const rpe = row.correctedStatus ? row.correctedRpe : row.rpe
     return status === 'performed' ? [{ ...row, status, loadGrams, repetitions, rpe }] : []
   })
@@ -1696,9 +1688,7 @@ export async function correctPerformedSet(rawInput: {
       loadProvenance:
         input.actualLoadGrams === target.targetLoadGrams ? 'copied-target' : 'edited',
       repetitionsProvenance:
-        input.actualRepetitions === target.targetRepetitions
-          ? 'copied-target'
-          : 'edited',
+        input.actualRepetitions === target.targetRepetitions ? 'copied-target' : 'edited',
       explicitlyConfirmed: true,
       confirmedAt: now,
       note: input.note,
@@ -1817,10 +1807,7 @@ export async function resolveSafetyHold(rawInput: {
     }
     if (
       sourceSession.status === 'completed' &&
-      !(await completedSessionInvalidationIsDurable(
-        transaction,
-        hold.sourceSessionId,
-      ))
+      !(await completedSessionInvalidationIsDurable(transaction, hold.sourceSessionId))
     ) {
       throw new WorkoutCommandError(
         'hold.completed-source-invalidation-required',
