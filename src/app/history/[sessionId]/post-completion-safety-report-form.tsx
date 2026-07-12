@@ -5,9 +5,15 @@ import { SubmitButton } from '@/components'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import styles from '../history.module.css'
 import {
-  initialPostCompletionSafetyReportState,
+  type PostCompletionSafetyReportState,
   reportPostCompletionSafetyIssueAction,
 } from './actions'
+
+const initialPostCompletionSafetyReportState: PostCompletionSafetyReportState = {
+  errorCode: null,
+  success: false,
+  values: { details: '' },
+}
 
 const errorMessages: Readonly<Record<string, string>> = {
   'input.invalid': 'The report was incomplete. Review it and try again.',
