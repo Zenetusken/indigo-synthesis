@@ -16,6 +16,7 @@ import {
   programRevisionLineage,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   sessionExercises,
   sessionFeedback,
@@ -26,7 +27,7 @@ import {
   workoutSessions,
 } from '@/platform/db/schema'
 
-export const exportSchemaVersion = '1.2.0-development'
+export const exportSchemaVersion = '1.3.0-development'
 
 function canonical(value: unknown): CanonicalValue {
   return JSON.parse(JSON.stringify(value)) as CanonicalValue
@@ -96,6 +97,11 @@ export async function createDataExport(actor: {
         .from(safetyHolds)
         .where(eq(safetyHolds.userId, actor.userId))
         .orderBy(asc(safetyHolds.createdAt), asc(safetyHolds.id))
+      const holdResolutions = await transaction
+        .select()
+        .from(safetyHoldResolutions)
+        .where(eq(safetyHoldResolutions.userId, actor.userId))
+        .orderBy(asc(safetyHoldResolutions.createdAt), asc(safetyHoldResolutions.id))
 
       const ownedPrograms = await transaction
         .select()
@@ -236,6 +242,7 @@ export async function createDataExport(actor: {
           equipment,
           strengthBaselines: baselines,
           safetyHolds: holds,
+          safetyHoldResolutions: holdResolutions,
         },
         programs: ownedPrograms.map((program) => ({
           ...program,
@@ -341,6 +348,8 @@ export async function createDataExport(actor: {
             'Each adjustment records the source session, rule version, reason code, prior load, proposed load, and applied revision when one was created.',
           commandReceipt:
             'Every idempotent training mutation records an append-only command identifier, canonical request hash, target, and result snapshot.',
+          safetyHold:
+            'Session-linked pain holds retain their source session. Append-only resolutions retain the trainee acknowledgement and bounded reason.',
           auditActor:
             'actorClass is self, local-administrator, or system. Other local account identifiers are intentionally not disclosed.',
         },

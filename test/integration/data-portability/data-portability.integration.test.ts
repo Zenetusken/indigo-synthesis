@@ -1,4 +1,4 @@
-import { count, eq, sql } from 'drizzle-orm'
+import { and, count, eq, isNull, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
@@ -25,6 +25,7 @@ import {
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
+import { assertDatabaseReady } from '@/platform/db/preflight'
 import {
   adjustmentDecisions,
   athleteEquipment,
@@ -38,6 +39,7 @@ import {
   plannedWorkouts,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   sessionExercises,
   sessionFeedback,
@@ -62,6 +64,8 @@ const completedWorkoutId = newUuidV7()
 const abandonedSessionId = newUuidV7()
 const activeSessionId = newUuidV7()
 const completedSessionId = newUuidV7()
+const resolvedHoldId = newUuidV7()
+const resolvedHoldResolutionId = newUuidV7()
 
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let actor: AuthenticatedActor
@@ -117,15 +121,6 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
       provenance: 'user-attested',
       createdAt: now,
     })
-    await transaction.insert(safetyHolds).values({
-      id: newUuidV7(),
-      userId,
-      reasonCode: 'historical-test-hold',
-      details: 'Cleared historical hold for export coverage.',
-      createdAt: now,
-      clearedAt: new Date('2026-07-11T12:05:00.000Z'),
-    })
-
     await transaction.insert(programs).values({
       id: programId,
       userId,
@@ -365,6 +360,22 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           .where(eq(workoutSessions.id, fixture.sessionId))
       }
     }
+    await transaction.insert(safetyHolds).values({
+      id: resolvedHoldId,
+      userId,
+      sourceSessionId: abandonedSessionId,
+      reasonCode: 'session-pain-reported',
+      details: 'Historical pain hold with retained workout provenance.',
+      createdAt: new Date('2026-07-09T12:10:00.000Z'),
+    })
+    await transaction.insert(safetyHoldResolutions).values({
+      id: resolvedHoldResolutionId,
+      holdId: resolvedHoldId,
+      userId,
+      reason: 'Symptoms were reviewed; I am choosing to resume training.',
+      acknowledged: true,
+      createdAt: new Date('2026-07-11T12:05:00.000Z'),
+    })
     await transaction.insert(trainingCommandReceipts).values({
       commandId: 'complete-completed',
       userId,
@@ -391,6 +402,64 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
       value: recoveryDigest,
       expiresAt: new Date('2026-07-12T12:00:00.000Z'),
     })
+  })
+}
+
+async function seedResolvedHoldForSubject(userId: string): Promise<{
+  readonly sessionId: string
+  readonly holdId: string
+  readonly resolutionId: string
+}> {
+  return getDb().transaction(async (transaction) => {
+    const [workout] = await transaction
+      .select({
+        id: plannedWorkouts.id,
+        name: plannedWorkouts.name,
+        scheduledDate: plannedWorkouts.scheduledDate,
+        slotCode: plannedWorkouts.slotCode,
+      })
+      .from(plannedWorkouts)
+      .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+      .innerJoin(programs, eq(programs.id, programRevisions.programId))
+      .where(eq(programs.userId, userId))
+      .limit(1)
+    if (!workout) throw new Error('Member deletion fixture has no planned workout.')
+
+    const sessionId = newUuidV7()
+    const holdId = newUuidV7()
+    const resolutionId = newUuidV7()
+    const abandonedAt = new Date('2026-07-11T14:00:00.000Z')
+    await transaction.insert(workoutSessions).values({
+      id: sessionId,
+      userId,
+      plannedWorkoutId: workout.id,
+      plannedWorkoutName: workout.name,
+      scheduledDate: workout.scheduledDate,
+      slotCode: workout.slotCode,
+      status: 'abandoned',
+      startedAt: new Date('2026-07-11T13:30:00.000Z'),
+      abandonedAt,
+      abandonedReason: 'Stopped after reporting pain.',
+      optimisticVersion: 1,
+      startCommandId: newUuidV7(),
+    })
+    await transaction.insert(safetyHolds).values({
+      id: holdId,
+      userId,
+      sourceSessionId: sessionId,
+      reasonCode: 'session-pain-reported',
+      details: 'Member deletion provenance fixture.',
+      createdAt: abandonedAt,
+    })
+    await transaction.insert(safetyHoldResolutions).values({
+      id: resolutionId,
+      holdId,
+      userId,
+      reason: 'I understand this is not symptom clearance and choose to continue.',
+      acknowledged: true,
+      createdAt: new Date('2026-07-11T14:05:00.000Z'),
+    })
+    return { sessionId, holdId, resolutionId }
   })
 }
 
@@ -477,7 +546,22 @@ describe('subject export and exact instance reset', () => {
         requestHash: 'canonical-completion-request-hash',
       }),
     ])
-    expect(archive.profile.safetyHolds).toHaveLength(1)
+    expect(archive.manifest.schemaVersion).toBe('1.3.0-development')
+    expect(archive.profile.safetyHolds).toEqual([
+      expect.objectContaining({
+        id: resolvedHoldId,
+        sourceSessionId: abandonedSessionId,
+        reasonCode: 'session-pain-reported',
+      }),
+    ])
+    expect(archive.profile.safetyHoldResolutions).toEqual([
+      expect.objectContaining({
+        id: resolvedHoldResolutionId,
+        holdId: resolvedHoldId,
+        reason: 'Symptoms were reviewed; I am choosing to resume training.',
+        acknowledged: true,
+      }),
+    ])
     expect(Object.keys(archive.manifest.hashes).sort()).toEqual(
       ['auditEvents', 'identity', 'profile', 'programs', 'provenance', 'sessions'].sort(),
     )
@@ -517,6 +601,198 @@ describe('subject export and exact instance reset', () => {
     ).toMatchObject({ status: 'paused' })
   })
 
+  it('enforces durable hold provenance and fail-closed append-only resolution facts', async () => {
+    const preflight = await assertDatabaseReady()
+    expect(preflight.safetyHoldIntegrityPresent).toBe(true)
+
+    await expect(
+      getDb()
+        .update(safetyHoldResolutions)
+        .set({ reason: 'tampered resolution reason' })
+        .where(eq(safetyHoldResolutions.id, resolvedHoldResolutionId)),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+    await expect(
+      getDb()
+        .delete(safetyHoldResolutions)
+        .where(eq(safetyHoldResolutions.id, resolvedHoldResolutionId)),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+    await expect(
+      getDb()
+        .update(safetyHolds)
+        .set({ details: 'tampered hold provenance' })
+        .where(eq(safetyHolds.id, resolvedHoldId)),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+    await expect(
+      getDb().delete(safetyHolds).where(eq(safetyHolds.id, resolvedHoldId)),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+
+    await expect(
+      getDb().insert(safetyHoldResolutions).values({
+        id: newUuidV7(),
+        holdId: resolvedHoldId,
+        userId: actor.userId,
+        reason: 'Acknowledgement bypass attempt.',
+        acknowledged: false,
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23514',
+        constraint: 'safety_hold_resolution_acknowledged_check',
+      },
+    })
+    await expect(
+      getDb().insert(safetyHoldResolutions).values({
+        id: newUuidV7(),
+        holdId: resolvedHoldId,
+        userId: actor.userId,
+        reason: '   ',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'safety_hold_resolution_reason_check' },
+    })
+    await expect(
+      getDb().execute(sql`
+        INSERT INTO safety_hold_resolution
+          (id, hold_id, user_id, reason, acknowledged)
+        VALUES
+          (${newUuidV7()}, ${resolvedHoldId}, ${actor.userId}, ${'\t\n'}, true)
+      `),
+    ).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'safety_hold_resolution_reason_check' },
+    })
+    await expect(
+      getDb().execute(sql`
+        INSERT INTO safety_hold_resolution
+          (id, hold_id, user_id, reason, acknowledged)
+        VALUES
+          (${newUuidV7()}, ${resolvedHoldId}, ${actor.userId}, ${'\tSurrounded by tabs\t'}, true)
+      `),
+    ).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'safety_hold_resolution_reason_check' },
+    })
+    await expect(
+      getDb().insert(safetyHoldResolutions).values({
+        id: newUuidV7(),
+        holdId: resolvedHoldId,
+        userId: actor.userId,
+        reason: ' untrimmed reason ',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'safety_hold_resolution_reason_check' },
+    })
+    await expect(
+      getDb().insert(safetyHoldResolutions).values({
+        id: newUuidV7(),
+        holdId: resolvedHoldId,
+        userId: otherUser.id,
+        reason: 'Cross-subject resolution attempt.',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({ cause: { code: '23503' } })
+    await expect(
+      getDb().insert(safetyHolds).values({
+        id: newUuidV7(),
+        userId: actor.userId,
+        sourceSessionId: abandonedSessionId,
+        reasonCode: 'session-pain-reported',
+        details: 'Duplicate source attempt.',
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: '23505', constraint: 'safety_hold_source_session_uidx' },
+    })
+
+    const activePainHoldId = newUuidV7()
+    await expect(
+      getDb().execute(sql`
+        INSERT INTO safety_hold
+          (id, user_id, source_session_id, reason_code, details, cleared_at)
+        VALUES
+          (
+            ${newUuidV7()},
+            ${actor.userId},
+            ${activeSessionId},
+            'session-pain-reported',
+            'Pre-cleared insertion attempt.',
+            ${new Date('2026-07-11T12:20:00.000Z')}
+          )
+      `),
+    ).rejects.toMatchObject({ cause: { code: '23514' } })
+    await getDb().insert(safetyHolds).values({
+      id: activePainHoldId,
+      userId: actor.userId,
+      sourceSessionId: activeSessionId,
+      reasonCode: 'session-pain-reported',
+      details: 'Direct clearance mutation fixture.',
+    })
+    await expect(
+      getDb().execute(sql`
+        UPDATE safety_hold
+        SET cleared_at = ${new Date('2026-07-11T12:20:00.000Z')}
+        WHERE id = ${activePainHoldId}
+      `),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+    const [stillActivePainHold] = await getDb()
+      .select({ id: safetyHolds.id, clearedAt: safetyHolds.clearedAt })
+      .from(safetyHolds)
+      .where(
+        and(
+          eq(safetyHolds.id, activePainHoldId),
+          isNull(safetyHolds.clearedAt),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${safetyHoldResolutions}
+            WHERE ${safetyHoldResolutions.holdId} = ${safetyHolds.id}
+          )`,
+        ),
+      )
+      .limit(1)
+    expect(stillActivePainHold).toEqual({ id: activePainHoldId, clearedAt: null })
+    await getDb().transaction(async (transaction) => {
+      await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'trainee-data'`)
+      await transaction.delete(safetyHolds).where(eq(safetyHolds.id, activePainHoldId))
+    })
+
+    await expect(
+      getDb().transaction(async (transaction) => {
+        const holdId = newUuidV7()
+        await transaction.insert(safetyHolds).values({
+          id: holdId,
+          userId: actor.userId,
+          reasonCode: 'eligibility-restriction',
+          details: 'Legacy-compatible source-less hold.',
+        })
+        await transaction.insert(safetyHoldResolutions).values({
+          id: newUuidV7(),
+          holdId,
+          userId: actor.userId,
+          reason: 'Source fabrication is forbidden.',
+          acknowledged: true,
+        })
+      }),
+    ).rejects.toMatchObject({ cause: { code: '23514' } })
+
+    await expect(
+      getDb().transaction(async (transaction) => {
+        const holdId = newUuidV7()
+        await transaction.insert(safetyHolds).values({
+          id: holdId,
+          userId: actor.userId,
+          sourceSessionId: completedSessionId,
+          reasonCode: 'session-pain-reported',
+          details: 'Completed source must remain fail-closed.',
+        })
+        await transaction.insert(safetyHoldResolutions).values({
+          id: newUuidV7(),
+          holdId,
+          userId: actor.userId,
+          reason: 'Completed source bypass attempt.',
+          acknowledged: true,
+        })
+      }),
+    ).rejects.toMatchObject({ cause: { code: '23514' } })
+  })
+
   it('deletes one member subject while retaining owner data and redacting foreign audit identity', async () => {
     const memberActor: AuthenticatedActor = {
       userId: otherUser.id,
@@ -544,6 +820,7 @@ describe('subject export and exact instance reset', () => {
       },
     })
     await generateDraftProgram(memberActor.userId, '2026-07-11')
+    const memberResolvedHold = await seedResolvedHoldForSubject(memberActor.userId)
     const foreignAuditId = newUuidV7()
     await getDb().insert(auditEvents).values({
       id: foreignAuditId,
@@ -563,6 +840,9 @@ describe('subject export and exact instance reset', () => {
       programs: 1,
       programRevisions: 1,
       plannedWorkouts: 6,
+      workoutSessions: 1,
+      safetyHolds: 1,
+      safetyHoldResolutions: 1,
       auditActorReferencesRedacted: 1,
       deletionPlans: 1,
     })
@@ -591,6 +871,18 @@ describe('subject export and exact instance reset', () => {
       .select()
       .from(auditEvents)
       .where(eq(auditEvents.id, foreignAuditId))
+    const [deletedMemberHold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.id, memberResolvedHold.holdId))
+    const [deletedMemberResolution] = await getDb()
+      .select()
+      .from(safetyHoldResolutions)
+      .where(eq(safetyHoldResolutions.id, memberResolvedHold.resolutionId))
+    const [deletedMemberWorkout] = await getDb()
+      .select()
+      .from(workoutSessions)
+      .where(eq(workoutSessions.id, memberResolvedHold.sessionId))
     const [tombstone] = await getDb()
       .select()
       .from(deletionTombstones)
@@ -604,6 +896,9 @@ describe('subject export and exact instance reset', () => {
       actorUserId: null,
       subjectUserId: actor.userId,
     })
+    expect(deletedMemberHold).toBeUndefined()
+    expect(deletedMemberResolution).toBeUndefined()
+    expect(deletedMemberWorkout).toBeUndefined()
     expect(tombstone).toMatchObject({
       actorClass: 'trainee',
       scope: 'trainee-data',
@@ -616,7 +911,7 @@ describe('subject export and exact instance reset', () => {
 
   it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(24)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(25)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
@@ -627,6 +922,7 @@ describe('subject export and exact instance reset', () => {
       athleteEquipment: 1,
       strengthBaselines: 1,
       safetyHolds: 1,
+      safetyHoldResolutions: 1,
       programs: 1,
       programRevisions: 2,
       plannedWorkouts: 3,
@@ -700,14 +996,17 @@ describe('subject export and exact instance reset', () => {
         (SELECT count(*) FROM athlete_equipment) +
         (SELECT count(*) FROM strength_baseline) +
         (SELECT count(*) FROM safety_hold) +
+        (SELECT count(*) FROM safety_hold_resolution) +
         (SELECT count(*) FROM program) +
         (SELECT count(*) FROM program_revision) +
+        (SELECT count(*) FROM program_revision_lineage) +
         (SELECT count(*) FROM planned_workout) +
         (SELECT count(*) FROM exercise_prescription) +
         (SELECT count(*) FROM set_prescription) +
         (SELECT count(*) FROM workout_session) +
         (SELECT count(*) FROM session_exercise) +
         (SELECT count(*) FROM performed_set) +
+        (SELECT count(*) FROM training_command_receipt) +
         (SELECT count(*) FROM session_feedback) +
         (SELECT count(*) FROM adjustment_decision) +
         (SELECT count(*) FROM audit_event) +

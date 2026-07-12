@@ -50,6 +50,27 @@
       "when": 1783826637890,
       "tag": "0006_workout_abandon_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783831929760,
+      "tag": "0007_lucky_ezekiel",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783833197195,
+      "tag": "0008_volatile_carlie_cooper",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783834404364,
+      "tag": "0009_safety_hold_clearance_guards",
+      "breakpoints": true
     }
   ]
 }

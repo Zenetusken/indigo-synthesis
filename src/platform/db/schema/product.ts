@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -130,16 +131,58 @@ export const safetyHolds = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
+    sourceSessionId: text('source_session_id'),
     reasonCode: text('reason_code').notNull(),
     details: text('details'),
     createdAt: createdAt(),
     clearedAt: timestamp('cleared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
+    uniqueIndex('safety_hold_id_user_uidx').on(table.id, table.userId),
+    uniqueIndex('safety_hold_source_session_uidx')
+      .on(table.sourceSessionId)
+      .where(sql`${table.sourceSessionId} IS NOT NULL`),
     index('safety_hold_user_id_idx').on(table.userId),
-    uniqueIndex('safety_hold_active_user_uidx')
-      .on(table.userId)
-      .where(sql`${table.clearedAt} IS NULL`),
+    index('safety_hold_source_session_id_idx').on(table.sourceSessionId),
+    foreignKey({
+      name: 'safety_hold_source_session_user_fk',
+      columns: [table.sourceSessionId, table.userId],
+      foreignColumns: [workoutSessions.id, workoutSessions.userId],
+    }).onDelete('restrict'),
+    check(
+      'safety_hold_clearance_shape_check',
+      sql`${table.clearedAt} IS NULL OR (${table.reasonCode} = 'eligibility-restriction' AND ${table.sourceSessionId} IS NULL)`,
+    ),
+  ],
+)
+
+export const safetyHoldResolutions = pgTable(
+  'safety_hold_resolution',
+  {
+    id: text('id').primaryKey(),
+    holdId: text('hold_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    acknowledged: boolean('acknowledged').notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('safety_hold_resolution_hold_id_uidx').on(table.holdId),
+    index('safety_hold_resolution_user_id_idx').on(table.userId),
+    foreignKey({
+      name: 'safety_hold_resolution_hold_user_fk',
+      columns: [table.holdId, table.userId],
+      foreignColumns: [safetyHolds.id, safetyHolds.userId],
+    }).onDelete('restrict'),
+    check(
+      'safety_hold_resolution_reason_check',
+      sql`char_length(${table.reason}) BETWEEN 1 AND 300
+        AND left(${table.reason}, 1) !~ '[[:space:]]'
+        AND right(${table.reason}, 1) !~ '[[:space:]]'`,
+    ),
+    check('safety_hold_resolution_acknowledged_check', sql`${table.acknowledged} = true`),
   ],
 )
 
@@ -327,6 +370,7 @@ export const workoutSessions = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    uniqueIndex('workout_session_id_user_uidx').on(table.id, table.userId),
     uniqueIndex('workout_session_planned_workout_uidx').on(table.plannedWorkoutId),
     uniqueIndex('workout_session_active_user_uidx')
       .on(table.userId)
@@ -523,7 +567,7 @@ export const trainingCommandReceipts = pgTable(
     index('training_command_receipt_session_idx').on(table.sessionId),
     check(
       'training_command_receipt_type_check',
-      sql`${table.commandType} IN ('complete-set', 'skip-set', 'complete-workout', 'report-pain')`,
+      sql`${table.commandType} IN ('complete-set', 'skip-set', 'complete-workout', 'report-pain', 'resolve-safety-hold')`,
     ),
   ],
 )

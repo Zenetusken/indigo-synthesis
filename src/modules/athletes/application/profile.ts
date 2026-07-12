@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { formatIsoDateInTimezone } from '@/modules/athletes/domain/time'
 import type { DisplayUnits } from '@/modules/athletes/domain/units'
@@ -9,6 +9,7 @@ import {
   athleteProfiles,
   athleteTrainingDays,
   auditEvents,
+  safetyHoldResolutions,
   safetyHolds,
   strengthBaselines,
 } from '@/platform/db/schema'
@@ -96,9 +97,20 @@ export async function getAthleteProfile(userId: string) {
       .orderBy(asc(athleteTrainingDays.ordinal)),
     db.select().from(athleteEquipment).where(eq(athleteEquipment.userId, userId)),
     db.select().from(strengthBaselines).where(eq(strengthBaselines.userId, userId)),
-    db.query.safetyHolds.findFirst({
-      where: and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)),
-    }),
+    db
+      .select({ id: safetyHolds.id })
+      .from(safetyHolds)
+      .where(
+        and(
+          eq(safetyHolds.userId, userId),
+          isNull(safetyHolds.clearedAt),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${safetyHoldResolutions}
+            WHERE ${safetyHoldResolutions.holdId} = ${safetyHolds.id}
+          )`,
+        ),
+      )
+      .limit(1),
   ])
 
   if (!profile) return null
@@ -108,7 +120,7 @@ export async function getAthleteProfile(userId: string) {
     days,
     equipment,
     baselines,
-    activeHold: activeHold ?? null,
+    activeHold: activeHold[0] ?? null,
   }
 }
 
@@ -190,6 +202,10 @@ export async function saveAthleteProfile(
           eq(safetyHolds.userId, actorUserId),
           eq(safetyHolds.reasonCode, 'eligibility-restriction'),
           isNull(safetyHolds.clearedAt),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${safetyHoldResolutions}
+            WHERE ${safetyHoldResolutions.holdId} = ${safetyHolds.id}
+          )`,
         ),
       )
       .limit(1)

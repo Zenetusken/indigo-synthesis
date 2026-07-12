@@ -47,3 +47,10 @@ export const abandonWorkoutCommandSchema = z.object({
   sessionId: recordIdSchema,
   reason: z.string().trim().min(1).max(300),
 })
+
+export const resolveSafetyHoldCommandSchema = z.object({
+  holdId: recordIdSchema,
+  commandId: commandIdSchema,
+  reason: z.string().trim().min(1).max(300),
+  acknowledged: z.boolean(),
+})

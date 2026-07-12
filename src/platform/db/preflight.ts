@@ -9,11 +9,12 @@ export type DatabasePreflight = {
   readonly appliedMigrationCount: number
   readonly bootstrapTriggerPresent: boolean
   readonly workoutSnapshotColumnsPresent: boolean
+  readonly safetyHoldIntegrityPresent: boolean
   readonly integrityTriggerCount: number
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 7
+const expectedMigrationCount = 10
 const requiredIntegrityTriggers = [
   {
     name: 'workout_session_owner_guard',
@@ -85,6 +86,16 @@ const requiredIntegrityTriggers = [
     table: 'training_command_receipt',
     function: 'indigo_guard_append_only_training_fact',
   },
+  {
+    name: 'safety_hold_provenance_guard',
+    table: 'safety_hold',
+    function: 'indigo_guard_safety_hold_provenance',
+  },
+  {
+    name: 'safety_hold_resolution_append_only_guard',
+    table: 'safety_hold_resolution',
+    function: 'indigo_guard_safety_hold_resolution',
+  },
 ] as const
 
 export async function inspectDatabase(): Promise<DatabasePreflight> {
@@ -94,6 +105,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     migrationResult,
     triggerResult,
     columnsResult,
+    safetyHoldResult,
     integrityResult,
     contentResult,
   ] = await Promise.all([
@@ -155,7 +167,15 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
                 'request_hash',
                 'result_snapshot'
               )
-          ) = 7 AS present
+          ) = 7
+          AND count(*) FILTER (
+            WHERE table_name = 'safety_hold'
+              AND column_name = 'source_session_id'
+          ) = 1
+          AND count(*) FILTER (
+            WHERE table_name = 'safety_hold_resolution'
+              AND column_name IN ('hold_id', 'user_id', 'reason', 'acknowledged')
+          ) = 4 AS present
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name IN (
@@ -163,9 +183,134 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             'adjustment_decision',
             'planned_workout',
             'program_revision_lineage',
-            'training_command_receipt'
+            'training_command_receipt',
+            'safety_hold',
+            'safety_hold_resolution'
           )
       `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.workout_session_id_user_uidx')
+            AND indrelid = 'public.workout_session'::regclass
+            AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['id', 'user_id']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.safety_hold_id_user_uidx')
+            AND indrelid = 'public.safety_hold'::regclass
+            AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['id', 'user_id']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.safety_hold_source_session_uidx')
+            AND indrelid = 'public.safety_hold'::regclass
+            AND indisunique AND indisvalid AND indisready
+            AND indpred IS NOT NULL
+            AND pg_get_expr(indpred, indrelid) = '(source_session_id IS NOT NULL)'
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['source_session_id']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.safety_hold_resolution_hold_id_uidx')
+            AND indrelid = 'public.safety_hold_resolution'::regclass
+            AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['hold_id']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.safety_hold'::regclass
+            AND conname = 'safety_hold_source_session_user_fk'
+            AND contype = 'f'
+            AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.safety_hold_resolution'::regclass
+            AND conname = 'safety_hold_resolution_hold_user_fk'
+            AND contype = 'f'
+            AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.safety_hold_resolution'::regclass
+            AND conname = 'safety_hold_resolution_reason_check'
+            AND contype = 'c'
+            AND convalidated
+            AND pg_get_constraintdef(oid) LIKE '%char_length%'
+            AND pg_get_constraintdef(oid) LIKE '%[[:space:]]%'
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.safety_hold_resolution'::regclass
+            AND conname = 'safety_hold_resolution_acknowledged_check'
+            AND contype = 'c'
+            AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.safety_hold'::regclass
+            AND conname = 'safety_hold_clearance_shape_check'
+            AND contype = 'c'
+            AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM pg_trigger AS trigger
+          JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+          JOIN pg_namespace AS relation_namespace
+            ON relation_namespace.oid = relation.relnamespace
+          JOIN pg_proc AS trigger_function ON trigger_function.oid = trigger.tgfoid
+          JOIN pg_namespace AS function_namespace
+            ON function_namespace.oid = trigger_function.pronamespace
+          WHERE trigger.tgname = 'safety_hold_provenance_guard'
+            AND relation.relname = 'safety_hold'
+            AND relation_namespace.nspname = 'public'
+            AND trigger_function.proname = 'indigo_guard_safety_hold_provenance'
+            AND function_namespace.nspname = 'public'
+            AND NOT trigger.tgisinternal
+            AND trigger.tgenabled = 'O'
+            AND trigger.tgtype = 31
+            AND pg_get_functiondef(trigger_function.oid)
+              LIKE '%New safety holds cannot be inserted pre-cleared.%'
+            AND pg_get_functiondef(trigger_function.oid)
+              LIKE '%Only a source-less eligibility restriction hold may be cleared once.%'
+        ) AS present
+    `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
@@ -195,9 +340,9 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
   const appliedMigrationCount = migrationLedgerPresent
     ? Number(
         (
-          await db.execute<{ count: number }>(
-            sql`SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations`,
-          )
+          await db.execute<{ count: number }>(sql`
+            SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations
+          `)
         ).rows[0]?.count ?? 0,
       )
     : 0
@@ -209,6 +354,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     appliedMigrationCount,
     bootstrapTriggerPresent: triggerResult.rows[0]?.present ?? false,
     workoutSnapshotColumnsPresent: columnsResult.rows[0]?.present ?? false,
+    safetyHoldIntegrityPresent: safetyHoldResult.rows[0]?.present ?? false,
     integrityTriggerCount: integrityResult.rows[0]?.count ?? 0,
     ineligibleContentRevisionCount: contentResult.rows[0]?.count ?? 0,
   }
@@ -229,6 +375,11 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   }
   if (!result.workoutSnapshotColumnsPresent) {
     failures.push('latest workout snapshot and revision-lineage columns are absent')
+  }
+  if (!result.safetyHoldIntegrityPresent) {
+    failures.push(
+      'safety-hold ownership, provenance, and resolution constraints are absent',
+    )
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {
     failures.push(

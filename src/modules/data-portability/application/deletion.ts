@@ -23,6 +23,7 @@ import {
   programRevisionLineage,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   session,
   sessionExercises,
@@ -48,6 +49,7 @@ export type InstanceResetCounts = {
   readonly athleteEquipment: number
   readonly strengthBaselines: number
   readonly safetyHolds: number
+  readonly safetyHoldResolutions: number
   readonly programs: number
   readonly programRevisions: number
   readonly programRevisionLineage: number
@@ -81,6 +83,7 @@ export type SubjectDeletionCounts = {
   readonly athleteEquipment: number
   readonly strengthBaselines: number
   readonly safetyHolds: number
+  readonly safetyHoldResolutions: number
   readonly programs: number
   readonly programRevisions: number
   readonly programRevisionLineage: number
@@ -132,6 +135,7 @@ async function countInstanceRows(database: Executable): Promise<InstanceResetCou
       (SELECT count(*)::int FROM athlete_equipment) AS "athleteEquipment",
       (SELECT count(*)::int FROM strength_baseline) AS "strengthBaselines",
       (SELECT count(*)::int FROM safety_hold) AS "safetyHolds",
+      (SELECT count(*)::int FROM safety_hold_resolution) AS "safetyHoldResolutions",
       (SELECT count(*)::int FROM program) AS programs,
       (SELECT count(*)::int FROM program_revision) AS "programRevisions",
       (SELECT count(*)::int FROM program_revision_lineage) AS "programRevisionLineage",
@@ -172,6 +176,8 @@ async function countSubjectRows(
       (SELECT count(*)::int FROM athlete_equipment WHERE user_id = ${userId}) AS "athleteEquipment",
       (SELECT count(*)::int FROM strength_baseline WHERE user_id = ${userId}) AS "strengthBaselines",
       (SELECT count(*)::int FROM safety_hold WHERE user_id = ${userId}) AS "safetyHolds",
+      (SELECT count(*)::int FROM safety_hold_resolution
+        WHERE user_id = ${userId}) AS "safetyHoldResolutions",
       (SELECT count(*)::int FROM program WHERE user_id = ${userId}) AS programs,
       (SELECT count(*)::int FROM program_revision pr
         JOIN program p ON p.id = pr.program_id WHERE p.user_id = ${userId}) AS "programRevisions",
@@ -496,6 +502,12 @@ export async function executeSubjectDeletion(input: {
         )
       `)
       await transaction
+        .delete(safetyHoldResolutions)
+        .where(eq(safetyHoldResolutions.userId, input.actor.userId))
+      await transaction
+        .delete(safetyHolds)
+        .where(eq(safetyHolds.userId, input.actor.userId))
+      await transaction
         .delete(workoutSessions)
         .where(eq(workoutSessions.userId, input.actor.userId))
       await transaction.delete(programs).where(eq(programs.userId, input.actor.userId))
@@ -636,6 +648,8 @@ export async function executeInstanceReset(input: {
       // Product modules first, in referential order. Identity is deliberately last.
       await transaction.delete(trainingCommandReceipts)
       await transaction.delete(programRevisionLineage)
+      await transaction.delete(safetyHoldResolutions)
+      await transaction.delete(safetyHolds)
       await transaction.delete(workoutSessions)
       await transaction.delete(programs)
       await transaction.delete(adjustmentDecisions)
@@ -646,7 +660,6 @@ export async function executeInstanceReset(input: {
       await transaction.delete(exercisePrescriptions)
       await transaction.delete(plannedWorkouts)
       await transaction.delete(programRevisions)
-      await transaction.delete(safetyHolds)
       await transaction.delete(strengthBaselines)
       await transaction.delete(athleteEquipment)
       await transaction.delete(athleteTrainingDays)

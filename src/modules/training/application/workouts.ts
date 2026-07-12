@@ -30,6 +30,7 @@ import {
   completeSetCommandSchema,
   completeWorkoutCommandSchema,
   reportPainCommandSchema,
+  resolveSafetyHoldCommandSchema,
   sessionPauseCommandSchema,
   skipSetCommandSchema,
   startWorkoutCommandSchema,
@@ -46,6 +47,7 @@ import {
   programRevisionLineage,
   programRevisions,
   programs,
+  safetyHoldResolutions,
   safetyHolds,
   sessionExercises,
   sessionFeedback,
@@ -123,6 +125,17 @@ async function claimCommandReceipt(
 
 const developmentExerciseIds = new Set<string>(DEVELOPMENT_EXERCISE_IDS)
 
+function activeHoldWhere(userId: string) {
+  return and(
+    eq(safetyHolds.userId, userId),
+    isNull(safetyHolds.clearedAt),
+    sql`NOT EXISTS (
+      SELECT 1 FROM ${safetyHoldResolutions}
+      WHERE ${safetyHoldResolutions.holdId} = ${safetyHolds.id}
+    )`,
+  )
+}
+
 export type TodayState =
   | { readonly kind: 'program-required' }
   | {
@@ -163,6 +176,54 @@ export type TodayState =
         readonly name: string
       } | null
     }
+  | {
+      readonly kind: 'hold'
+      readonly holdId: string
+      readonly sourceSessionId: string | null
+      readonly sourceSessionStatus: string | null
+      readonly resolutionAvailability: HoldResolutionAvailability
+    }
+
+export type HoldResolutionAvailability =
+  | { readonly kind: 'available' }
+  | {
+      readonly kind: 'requires-abandonment'
+      readonly sessionId: string
+    }
+  | {
+      readonly kind: 'blocked'
+      readonly reason:
+        | 'not-session-pain-hold'
+        | 'source-session-missing'
+        | 'completed-source-awaiting-invalidation'
+    }
+
+function holdResolutionAvailability(input: {
+  readonly reasonCode: string
+  readonly sourceSessionId: string | null
+  readonly sourceSessionStatus: string | null
+}): HoldResolutionAvailability {
+  if (input.reasonCode !== 'session-pain-reported') {
+    return { kind: 'blocked', reason: 'not-session-pain-hold' }
+  }
+  if (!input.sourceSessionId || !input.sourceSessionStatus) {
+    return { kind: 'blocked', reason: 'source-session-missing' }
+  }
+  if (input.sourceSessionStatus === 'abandoned') return { kind: 'available' }
+  if (input.sourceSessionStatus === 'active' || input.sourceSessionStatus === 'paused') {
+    return {
+      kind: 'requires-abandonment',
+      sessionId: input.sourceSessionId,
+    }
+  }
+  return {
+    kind: 'blocked',
+    reason:
+      input.sourceSessionStatus === 'completed'
+        ? 'completed-source-awaiting-invalidation'
+        : 'source-session-missing',
+  }
+}
 
 export type WorkoutSetView = {
   readonly id: string
@@ -224,6 +285,27 @@ export async function getTodayState(
   now = new Date(),
 ): Promise<TodayState> {
   const db = getDb()
+  const [activeHold] = await db
+    .select({
+      id: safetyHolds.id,
+      reasonCode: safetyHolds.reasonCode,
+      sourceSessionId: safetyHolds.sourceSessionId,
+      sourceSessionStatus: workoutSessions.status,
+    })
+    .from(safetyHolds)
+    .leftJoin(workoutSessions, eq(workoutSessions.id, safetyHolds.sourceSessionId))
+    .where(activeHoldWhere(userId))
+    .limit(1)
+  if (activeHold) {
+    return {
+      kind: 'hold',
+      holdId: activeHold.id,
+      sourceSessionId: activeHold.sourceSessionId,
+      sourceSessionStatus: activeHold.sourceSessionStatus,
+      resolutionAvailability: holdResolutionAvailability(activeHold),
+    }
+  }
+
   const [activeSession] = await db
     .select({
       id: workoutSessions.id,
@@ -330,7 +412,7 @@ export async function startWorkout(
     const [hold] = await transaction
       .select({ id: safetyHolds.id })
       .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
+      .where(activeHoldWhere(userId))
       .limit(1)
     if (hold) {
       throw new WorkoutCommandError(
@@ -702,7 +784,7 @@ export async function completeSet(rawInput: {
     const [hold] = await transaction
       .select({ id: safetyHolds.id })
       .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, input.userId), isNull(safetyHolds.clearedAt)))
+      .where(activeHoldWhere(input.userId))
       .limit(1)
     if (hold)
       throw new WorkoutCommandError('safety.hold-active', 'Set recording is blocked.')
@@ -883,7 +965,7 @@ export async function setSessionPaused(
       const [hold] = await transaction
         .select({ id: safetyHolds.id })
         .from(safetyHolds)
-        .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
+        .where(activeHoldWhere(userId))
         .limit(1)
       if (hold)
         throw new WorkoutCommandError(
@@ -960,9 +1042,15 @@ export async function reportPain(rawInput: {
       )
 
     const [existingHold] = await transaction
-      .select({ id: safetyHolds.id })
+      .select({ id: safetyHolds.id, sourceSessionId: safetyHolds.sourceSessionId })
       .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, input.userId), isNull(safetyHolds.clearedAt)))
+      .where(
+        and(
+          activeHoldWhere(input.userId),
+          eq(safetyHolds.reasonCode, 'session-pain-reported'),
+          eq(safetyHolds.sourceSessionId, input.sessionId),
+        ),
+      )
       .for('update')
       .limit(1)
     if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
@@ -1006,6 +1094,7 @@ export async function reportPain(rawInput: {
       await transaction.insert(safetyHolds).values({
         id: newUuidV7(),
         userId: input.userId,
+        sourceSessionId: input.sessionId,
         reasonCode: 'session-pain-reported',
         details: input.details || null,
       })
@@ -1021,6 +1110,133 @@ export async function reportPain(rawInput: {
         action:
           session.status === 'completed' ? 'post-completion-hold' : 'paused-and-held',
         coalescedWithExistingHold: Boolean(existingHold),
+      },
+    })
+  })
+}
+
+export async function resolveSafetyHold(rawInput: {
+  readonly userId: string
+  readonly holdId: string
+  readonly commandId: string
+  readonly reason: string
+  readonly acknowledged: boolean
+}): Promise<void> {
+  const input = {
+    userId: rawInput.userId,
+    ...parseWorkoutCommand(resolveSafetyHoldCommandSchema, rawInput),
+  }
+
+  await getDb().transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
+    )
+    const [hold] = await transaction
+      .select({
+        id: safetyHolds.id,
+        userId: safetyHolds.userId,
+        reasonCode: safetyHolds.reasonCode,
+        sourceSessionId: safetyHolds.sourceSessionId,
+        clearedAt: safetyHolds.clearedAt,
+      })
+      .from(safetyHolds)
+      .where(eq(safetyHolds.id, input.holdId))
+      .for('update')
+      .limit(1)
+    if (!hold || hold.userId !== input.userId) {
+      throw new WorkoutCommandError('hold.not-found', 'Hold not found.')
+    }
+    if (
+      hold.reasonCode !== 'session-pain-reported' ||
+      !hold.sourceSessionId ||
+      hold.clearedAt
+    ) {
+      throw new WorkoutCommandError(
+        'hold.not-resolvable',
+        'This hold is not an independently source-linked pain hold.',
+      )
+    }
+
+    const receiptRequest = {
+      commandType: 'resolve-safety-hold',
+      userId: input.userId,
+      sessionId: hold.sourceSessionId,
+      targetId: input.holdId,
+      payload: {
+        reason: input.reason,
+        acknowledged: input.acknowledged,
+      },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (!input.acknowledged) {
+      throw new WorkoutCommandError(
+        'hold.ack-required',
+        'Confirm that you understand this product does not assess or clear symptoms.',
+      )
+    }
+
+    const [existingResolution] = await transaction
+      .select({ id: safetyHoldResolutions.id })
+      .from(safetyHoldResolutions)
+      .where(eq(safetyHoldResolutions.holdId, input.holdId))
+      .limit(1)
+    if (existingResolution) {
+      throw new WorkoutCommandError(
+        'hold.already-resolved',
+        'This hold has already been resolved.',
+      )
+    }
+
+    const [sourceSession] = await transaction
+      .select({ status: workoutSessions.status, userId: workoutSessions.userId })
+      .from(workoutSessions)
+      .where(eq(workoutSessions.id, hold.sourceSessionId))
+      .limit(1)
+    if (!sourceSession || sourceSession.userId !== input.userId) {
+      throw new WorkoutCommandError(
+        'hold.not-resolvable',
+        'The source session is missing or does not belong to this trainee.',
+      )
+    }
+    if (sourceSession.status === 'active' || sourceSession.status === 'paused') {
+      throw new WorkoutCommandError(
+        'hold.live-session-not-abandoned',
+        'Abandon the affected workout before resolving this hold.',
+      )
+    }
+    if (sourceSession.status === 'completed') {
+      throw new WorkoutCommandError(
+        'hold.completed-source-invalidation-required',
+        'This hold remains active until affected future training is invalidated.',
+      )
+    }
+    if (sourceSession.status !== 'abandoned') {
+      throw new WorkoutCommandError(
+        'hold.not-resolvable',
+        'The source session is not in a resolvable terminal state.',
+      )
+    }
+
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
+
+    await transaction.insert(safetyHoldResolutions).values({
+      id: newUuidV7(),
+      holdId: input.holdId,
+      userId: input.userId,
+      reason: input.reason,
+      acknowledged: input.acknowledged,
+    })
+    await transaction.insert(auditEvents).values({
+      id: newUuidV7(),
+      actorUserId: input.userId,
+      subjectUserId: input.userId,
+      eventType: 'safety-hold-resolved',
+      entityType: 'safety-hold',
+      entityId: input.holdId,
+      metadata: {
+        sourceSessionId: hold.sourceSessionId,
+        reasonLength: input.reason.length,
+        acknowledged: input.acknowledged,
       },
     })
   })
@@ -1142,7 +1358,7 @@ export async function completeWorkout(rawInput: {
     const [hold] = await transaction
       .select({ id: safetyHolds.id })
       .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, input.userId), isNull(safetyHolds.clearedAt)))
+      .where(activeHoldWhere(input.userId))
       .limit(1)
     if (hold) {
       throw new WorkoutCommandError(

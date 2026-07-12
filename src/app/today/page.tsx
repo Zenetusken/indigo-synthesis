@@ -8,6 +8,7 @@ import { requireActor } from '@/modules/identity/server/actor'
 import { getTodayState } from '@/modules/training/application/workouts'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import { startWorkoutAction } from './actions'
+import { SafetyHoldResolutionForm } from './safety-hold-resolution-form'
 import styles from './today.module.css'
 
 export const dynamic = 'force-dynamic'
@@ -25,10 +26,19 @@ const errorMessages: Readonly<Record<string, string>> = {
   'session.start-failed': 'The workout could not be started from the saved prescription.',
 }
 
+const blockedHoldMessages = {
+  'not-session-pain-hold':
+    'This hold was not created from a session pain report, so it cannot be self-resolved here. Training remains stopped.',
+  'source-session-missing':
+    'The source workout record is unavailable, so this hold cannot be self-resolved. Training remains stopped.',
+  'completed-source-awaiting-invalidation':
+    'This report came from a completed workout whose progression has not yet been safely invalidated. The hold cannot be resolved here, and training remains stopped.',
+} as const
+
 export default async function TodayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>
+  searchParams: Promise<{ error?: string; notice?: string }>
 }) {
   const actor = await requireActor()
   const profile = await getAthleteProfile(actor.userId)
@@ -41,6 +51,10 @@ export default async function TodayPage({
   const error = query.error
     ? (errorMessages[query.error] ?? 'The requested action was denied.')
     : null
+  const notice =
+    query.notice === 'hold-resolved'
+      ? 'Safety hold resolution recorded. The abandoned workout remains closed.'
+      : null
 
   return (
     <ProductFrame current="today">
@@ -53,7 +67,13 @@ export default async function TodayPage({
 
         {error ? (
           <InlineStatus tone="error" live="assertive">
-            {error} No session was created.
+            {error}
+          </InlineStatus>
+        ) : null}
+
+        {notice ? (
+          <InlineStatus tone="success" live="polite" role="status">
+            {notice}
           </InlineStatus>
         ) : null}
 
@@ -89,6 +109,37 @@ export default async function TodayPage({
                 ? 'Resume workout'
                 : 'Review blocked session'}
             </Link>
+          </section>
+        ) : null}
+
+        {state.kind === 'hold' ? (
+          <section className={styles.statePanel} aria-labelledby="safety-hold-heading">
+            <h2 id="safety-hold-heading">
+              Training is stopped for a reported safety issue.
+            </h2>
+            <p>
+              This product cannot assess pain or other symptoms. Resolving this hold is
+              only a record of your decision; it is not a medical clearance.
+            </p>
+            {state.resolutionAvailability.kind === 'requires-abandonment' ? (
+              <p>
+                The affected workout is still live.{' '}
+                <Link
+                  href={`/workouts/${state.resolutionAvailability.sessionId}` as Route}
+                >
+                  Open it and abandon the session
+                </Link>{' '}
+                before you can resolve this hold.
+              </p>
+            ) : null}
+            {state.resolutionAvailability.kind === 'blocked' ? (
+              <p className={styles.holdConstraint} role="status">
+                {blockedHoldMessages[state.resolutionAvailability.reason]}
+              </p>
+            ) : null}
+            {state.resolutionAvailability.kind === 'available' ? (
+              <SafetyHoldResolutionForm commandId={newUuidV7()} holdId={state.holdId} />
+            ) : null}
           </section>
         ) : null}
 
