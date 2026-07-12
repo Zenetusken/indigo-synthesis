@@ -5,6 +5,7 @@
   gap: var(--space-8);
   grid-template-columns: minmax(0, 1fr) auto;
   margin-bottom: clamp(var(--space-8), 5vw, var(--space-12));
+  min-width: 0;
   padding-bottom: var(--space-6);
 }
 
@@ -29,7 +30,8 @@
   letter-spacing: -0.035em;
   line-height: 0.92;
   margin: 0;
-  max-width: 16ch;
+  max-width: min(16ch, 100%);
+  overflow-wrap: anywhere;
   text-wrap: balance;
 }
 
@@ -37,7 +39,8 @@
   color: var(--rack-ink-soft);
   font-size: clamp(1rem, 1.5vw, 1.15rem);
   margin-top: var(--space-4);
-  max-width: 45rem;
+  max-width: min(45rem, 100%);
+  overflow-wrap: anywhere;
 }
 
 .description > :first-child {

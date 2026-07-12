@@ -12,11 +12,12 @@ export type DatabasePreflight = {
   readonly workoutSnapshotColumnsPresent: boolean
   readonly safetyHoldIntegrityPresent: boolean
   readonly trainingCorrectionIntegrityPresent: boolean
+  readonly contentRevocationIntegrityPresent: boolean
   readonly integrityTriggerCount: number
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 13
+const expectedMigrationCount = 14
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -157,6 +158,11 @@ const requiredIntegrityTriggers = [
     table: 'program_revision_invalidation',
     function: 'indigo_guard_append_only_training_fact',
   },
+  {
+    name: 'content_release_revocation_append_only_guard',
+    table: 'content_release_revocation',
+    function: 'indigo_guard_content_release_revocation',
+  },
 ] as const
 
 export async function inspectDatabase(): Promise<DatabasePreflight> {
@@ -168,8 +174,8 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     columnsResult,
     safetyHoldResult,
     trainingCorrectionResult,
+    contentRevocationResult,
     integrityResult,
-    contentResult,
   ] = await Promise.all([
     db.execute<{ version: string; versionNumber: string }>(sql`
         SELECT version(), current_setting('server_version_num') AS "versionNumber"
@@ -415,6 +421,62 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             AND indisunique AND indisvalid AND indisready
         ) AS present
     `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        to_regclass('public.content_release_revocation') IS NOT NULL
+        AND (
+          SELECT count(*)
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'content_release_revocation'
+            AND column_name IN (
+              'id', 'content_kind', 'content_id', 'content_version',
+              'reason', 'actor_user_id', 'created_at'
+            )
+        ) = 7
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.content_release_revocation_exact_uidx'
+          )
+            AND indrelid = to_regclass('public.content_release_revocation')
+            AND indisunique AND indisvalid AND indisready
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.content_release_revocation')
+            AND conname = 'content_release_revocation_kind_check'
+            AND contype = 'c' AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.content_release_revocation')
+            AND conname = 'content_release_revocation_reason_check'
+            AND contype = 'c' AND convalidated
+            AND pg_get_constraintdef(oid) LIKE '%char_length%'
+            AND pg_get_constraintdef(oid) LIKE '%[[:space:]]%'
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM pg_trigger AS trigger
+          JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+          JOIN pg_namespace AS relation_namespace
+            ON relation_namespace.oid = relation.relnamespace
+          JOIN pg_proc AS trigger_function ON trigger_function.oid = trigger.tgfoid
+          JOIN pg_namespace AS function_namespace
+            ON function_namespace.oid = trigger_function.pronamespace
+          WHERE trigger.tgname = 'content_release_revocation_append_only_guard'
+            AND relation.relname = 'content_release_revocation'
+            AND relation_namespace.nspname = 'public'
+            AND trigger_function.proname = 'indigo_guard_content_release_revocation'
+            AND function_namespace.nspname = 'public'
+            AND NOT trigger.tgisinternal
+            AND trigger.tgenabled = 'O'
+            AND trigger.tgtype = 27
+            AND pg_get_functiondef(trigger_function.oid)
+              LIKE '%Content release revocations are append-only.%'
+        ) AS present
+    `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
@@ -431,12 +493,6 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND namespace.nspname = 'public'
           AND NOT trigger.tgisinternal
           AND trigger.tgenabled = 'O'
-      `),
-    db.execute<{ count: number }>(sql`
-        SELECT count(*)::int AS count
-        FROM program_revision
-        WHERE methodology_review_status <> 'reviewed'
-           OR template_review_status <> 'reviewed'
       `),
   ])
 
@@ -459,6 +515,14 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     : undefined
   const appliedMigrationCount = Number(migrationLedgerState?.count ?? 0)
   const migrationLedgerCanonical = migrationLedgerState?.canonical ?? false
+  const contentRevocationIntegrityPresent =
+    contentRevocationResult.rows[0]?.present ?? false
+  const contentResult = await db.execute<{ count: number }>(sql`
+        SELECT count(*)::int AS count
+        FROM program_revision
+        WHERE methodology_review_status <> 'reviewed'
+           OR template_review_status <> 'reviewed'
+      `)
 
   return {
     databaseVersion: versionResult.rows[0]?.version ?? 'unknown',
@@ -471,6 +535,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     safetyHoldIntegrityPresent: safetyHoldResult.rows[0]?.present ?? false,
     trainingCorrectionIntegrityPresent:
       trainingCorrectionResult.rows[0]?.present ?? false,
+    contentRevocationIntegrityPresent,
     integrityTriggerCount: integrityResult.rows[0]?.count ?? 0,
     ineligibleContentRevisionCount: contentResult.rows[0]?.count ?? 0,
   }
@@ -504,6 +569,9 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
     failures.push(
       'training correction, invalidation, and finalized-snapshot structures are absent',
     )
+  }
+  if (!result.contentRevocationIntegrityPresent) {
+    failures.push('content release revocation structures are absent')
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {
     failures.push(

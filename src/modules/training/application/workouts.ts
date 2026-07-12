@@ -22,6 +22,11 @@ import {
   type DevelopmentExerciseId,
 } from '@/modules/methodology/domain/development-fixture'
 import {
+  contentRevokedForProgramRevisionSql,
+  lockProgramRevisionContentReleases,
+  programRevisionContentIsRevoked,
+} from '@/modules/programs/application/content-revocations'
+import {
   activatePersistedProgramRevision,
   getProgramOverview,
 } from '@/modules/programs/application/programs'
@@ -283,6 +288,7 @@ export type TodayState =
       readonly workout: NonNullable<
         Awaited<ReturnType<typeof getProgramOverview>>
       >['workouts'][number]
+      readonly contentEligibility: ReturnType<typeof evaluatePersistedContentEligibility>
     }
   | {
       readonly kind: 'completed'
@@ -511,6 +517,7 @@ export async function getTodayState(
       status: workoutSessions.status,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
       invalidatedRevisionId: programRevisionInvalidations.revisionId,
     })
     .from(workoutSessions)
@@ -538,6 +545,7 @@ export async function getTodayState(
         contentMode: getServerConfig().contentMode,
         methodologyStatus: activeSession.methodologyReviewStatus,
         templateStatus: activeSession.templateReviewStatus,
+        revoked: activeSession.contentRevoked,
       }),
     }
   }
@@ -573,7 +581,17 @@ export async function getTodayState(
   const workout = program.workouts.find((entry) => entry.scheduledDate === today)
   if (!workout) return { kind: 'rest-day', nextWorkout }
 
-  return { kind: 'planned', workout }
+  const contentRevoked = await programRevisionContentIsRevoked(db, program.revisionId)
+  return {
+    kind: 'planned',
+    workout,
+    contentEligibility: evaluatePersistedContentEligibility({
+      contentMode: getServerConfig().contentMode,
+      methodologyStatus: program.methodologyReviewStatus,
+      templateStatus: program.templateReviewStatus,
+      revoked: contentRevoked,
+    }),
+  }
 }
 
 export async function startWorkout(
@@ -629,6 +647,7 @@ export async function startWorkout(
     const [ownedWorkout] = await transaction
       .select({
         id: plannedWorkouts.id,
+        revisionId: programRevisions.id,
         name: plannedWorkouts.name,
         scheduledDate: plannedWorkouts.scheduledDate,
         slotCode: plannedWorkouts.slotCode,
@@ -665,10 +684,23 @@ export async function startWorkout(
         'Only the workout scheduled for your current local date can be started.',
       )
     }
+    if (
+      !(await lockProgramRevisionContentReleases(transaction, ownedWorkout.revisionId))
+    ) {
+      throw new WorkoutCommandError(
+        'content.release-missing',
+        'The persisted content release is unavailable.',
+      )
+    }
+    const contentRevoked = await programRevisionContentIsRevoked(
+      transaction,
+      ownedWorkout.revisionId,
+    )
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: ownedWorkout.methodologyReviewStatus,
       templateStatus: ownedWorkout.templateReviewStatus,
+      revoked: contentRevoked,
     })
     if (!eligibility.eligible) {
       throw new WorkoutCommandError(
@@ -785,6 +817,7 @@ export async function getWorkoutSession(
       session: workoutSessions,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
       invalidatedRevisionId: programRevisionInvalidations.revisionId,
     })
     .from(workoutSessions)
@@ -947,6 +980,7 @@ export async function getWorkoutSession(
       contentMode: getServerConfig().contentMode,
       methodologyStatus: sessionContext.methodologyReviewStatus,
       templateStatus: sessionContext.templateReviewStatus,
+      revoked: sessionContext.contentRevoked,
     }),
     plannedWorkout: {
       id: session.plannedWorkoutId,
@@ -1086,6 +1120,7 @@ export async function completeSet(rawInput: {
         commandId: performedSets.commandId,
         targetLoadGrams: performedSets.targetLoadGrams,
         targetRepetitions: performedSets.targetRepetitions,
+        revisionId: programRevisions.id,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
         invalidatedRevisionId: programRevisionInvalidations.revisionId,
@@ -1128,10 +1163,21 @@ export async function completeSet(rawInput: {
       },
     } satisfies TrainingCommandRequest
     if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (!(await lockProgramRevisionContentReleases(transaction, set.revisionId))) {
+      throw new WorkoutCommandError(
+        'content.release-missing',
+        'The persisted content release is unavailable.',
+      )
+    }
+    const contentRevoked = await programRevisionContentIsRevoked(
+      transaction,
+      set.revisionId,
+    )
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: set.methodologyReviewStatus,
       templateStatus: set.templateReviewStatus,
+      revoked: contentRevoked,
     })
     if (!eligibility.eligible) {
       throw new WorkoutCommandError(
@@ -1268,6 +1314,7 @@ export async function skipSet(rawInput: {
         status: performedSets.status,
         commandId: performedSets.commandId,
         sessionStatus: workoutSessions.status,
+        revisionId: programRevisions.id,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
         invalidatedRevisionId: programRevisionInvalidations.revisionId,
@@ -1305,10 +1352,21 @@ export async function skipSet(rawInput: {
       payload: { reason: input.reason },
     } satisfies TrainingCommandRequest
     if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (!(await lockProgramRevisionContentReleases(transaction, set.revisionId))) {
+      throw new WorkoutCommandError(
+        'content.release-missing',
+        'The persisted content release is unavailable.',
+      )
+    }
+    const contentRevoked = await programRevisionContentIsRevoked(
+      transaction,
+      set.revisionId,
+    )
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: set.methodologyReviewStatus,
       templateStatus: set.templateReviewStatus,
+      revoked: contentRevoked,
     })
     if (!eligibility.eligible) {
       throw new WorkoutCommandError(
@@ -1377,6 +1435,7 @@ export async function setSessionPaused(
     if (!command.paused) {
       const [contentContext] = await transaction
         .select({
+          revisionId: programRevisions.id,
           methodologyReviewStatus: programRevisions.methodologyReviewStatus,
           templateReviewStatus: programRevisions.templateReviewStatus,
           invalidatedRevisionId: programRevisionInvalidations.revisionId,
@@ -1407,10 +1466,26 @@ export async function setSessionPaused(
             'This session progression was invalidated by a training correction.',
           )
         }
+        if (
+          !(await lockProgramRevisionContentReleases(
+            transaction,
+            contentContext.revisionId,
+          ))
+        ) {
+          throw new WorkoutCommandError(
+            'content.release-missing',
+            'The persisted content release is unavailable.',
+          )
+        }
+        const contentRevoked = await programRevisionContentIsRevoked(
+          transaction,
+          contentContext.revisionId,
+        )
         const eligibility = evaluatePersistedContentEligibility({
           contentMode: getServerConfig().contentMode,
           methodologyStatus: contentContext.methodologyReviewStatus,
           templateStatus: contentContext.templateReviewStatus,
+          revoked: contentRevoked,
         })
         if (!eligibility.eligible) {
           throw new WorkoutCommandError(
@@ -1896,6 +1971,7 @@ export async function completeWorkout(rawInput: {
 
     const [adjustmentContext] = await transaction
       .select({
+        revisionId: programRevisions.id,
         methodologyId: programRevisions.methodologyId,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
@@ -1926,10 +2002,26 @@ export async function completeWorkout(rawInput: {
         'This session progression was invalidated by a training correction.',
       )
     }
+    if (
+      !(await lockProgramRevisionContentReleases(
+        transaction,
+        adjustmentContext.revisionId,
+      ))
+    ) {
+      throw new WorkoutCommandError(
+        'content.release-missing',
+        'The persisted content release is unavailable.',
+      )
+    }
+    const contentRevoked = await programRevisionContentIsRevoked(
+      transaction,
+      adjustmentContext.revisionId,
+    )
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: adjustmentContext.methodologyReviewStatus,
       templateStatus: adjustmentContext.templateReviewStatus,
+      revoked: contentRevoked,
     })
     if (!eligibility.eligible) {
       throw new WorkoutCommandError(
@@ -2369,6 +2461,7 @@ export async function getCompletedSessions(userId: string) {
       slotCode: workoutSessions.slotCode,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
     })
     .from(workoutSessions)
     .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
@@ -2379,14 +2472,17 @@ export async function getCompletedSessions(userId: string) {
     .orderBy(asc(workoutSessions.completedAt))
 
   return sessions.flatMap(
-    ({ methodologyReviewStatus, templateReviewStatus, ...session }) =>
-      evaluatePersistedContentEligibility({
+    ({ methodologyReviewStatus, templateReviewStatus, contentRevoked, ...session }) => {
+      const contentEligibility = evaluatePersistedContentEligibility({
         contentMode: getServerConfig().contentMode,
         methodologyStatus: methodologyReviewStatus,
         templateStatus: templateReviewStatus,
-      }).eligible
-        ? [session]
-        : [],
+        revoked: contentRevoked,
+      })
+      return contentEligibility.eligible || contentEligibility.code === 'content.revoked'
+        ? [{ ...session, contentEligibility }]
+        : []
+    },
   )
 }
 
@@ -2396,6 +2492,7 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
       id: workoutSessions.id,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
     })
     .from(workoutSessions)
     .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
@@ -2409,13 +2506,13 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
     )
     .limit(1)
   if (!owned) return null
-  if (
-    !evaluatePersistedContentEligibility({
-      contentMode: getServerConfig().contentMode,
-      methodologyStatus: owned.methodologyReviewStatus,
-      templateStatus: owned.templateReviewStatus,
-    }).eligible
-  ) {
+  const contentEligibility = evaluatePersistedContentEligibility({
+    contentMode: getServerConfig().contentMode,
+    methodologyStatus: owned.methodologyReviewStatus,
+    templateStatus: owned.templateReviewStatus,
+    revoked: owned.contentRevoked,
+  })
+  if (!contentEligibility.eligible && contentEligibility.code !== 'content.revoked') {
     return null
   }
   return getDb()

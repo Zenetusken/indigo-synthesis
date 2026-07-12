@@ -153,6 +153,8 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 
 test.beforeEach(async () => {
   await clearApplicationData()
+  await closeDb()
+  await restartE2eApplication()
 })
 
 test('rejects bootstrap with an invalid or missing code', async ({ page }) => {
@@ -261,7 +263,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     programs: { revisions: unknown[] }[]
     sessions: unknown[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.3.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.4.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)
@@ -568,6 +570,8 @@ test('a post-completion safety correction invalidates progression before hold re
   await completeSetup(page)
   await generateAndActivate(page)
   await page.getByRole('button', { name: 'Start workout' }).click()
+  await expect(page).toHaveURL(/\/workouts\//)
+  await expect(page.getByRole('button', { name: 'Complete set' }).first()).toBeVisible()
 
   let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
   while (remaining > 0) {

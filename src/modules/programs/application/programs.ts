@@ -7,6 +7,7 @@ import {
   generateDevelopmentProgram,
   type Weekday,
 } from '@/modules/methodology/domain/program'
+import { contentRevokedForProgramRevisionSql } from '@/modules/programs/application/content-revocations'
 import { evaluatePersistedContentEligibility } from '@/modules/programs/domain/content-eligibility'
 import {
   EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
@@ -329,6 +330,7 @@ export async function activatePersistedProgramRevision(
       templateVersion: programRevisions.templateVersion,
       templateReviewStatus: programRevisions.templateReviewStatus,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
       normalizedInputHash: programRevisions.normalizedInputHash,
       normalizedInput: programRevisions.normalizedInput,
       outputHash: programRevisions.outputHash,
@@ -418,6 +420,7 @@ export async function activatePersistedProgramRevision(
     contentMode: config.contentMode,
     methodologyStatus: owned.methodologyReviewStatus,
     templateStatus: owned.templateReviewStatus,
+    revoked: owned.contentRevoked,
   })
   if (!eligibility.eligible) {
     throw new ProgramUnavailableError(

@@ -35,6 +35,15 @@
   font: 500 var(--text-sm) / 1.5 var(--font-data);
 }
 
+.contentStatus {
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  font: 700 var(--text-xs) / 1.2 var(--font-data);
+  justify-self: end;
+  padding: var(--space-1) var(--space-2);
+  text-transform: uppercase;
+}
+
 .empty {
   background: var(--paper);
   border-block-start: var(--accent-bar) solid var(--rack-ink);
@@ -190,5 +199,9 @@
 @media (max-width: 38rem) {
   .list a {
     grid-template-columns: 1fr;
+  }
+
+  .contentStatus {
+    justify-self: start;
   }
 }

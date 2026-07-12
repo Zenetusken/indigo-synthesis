@@ -101,7 +101,7 @@ is attached and the re-review finds no unresolved high- or medium-severity regre
 | H6 | Fixed | `test/e2e/mvp.spec.ts` issues a host bootstrap code and fills the form; negative test rejects missing/invalid code; `pnpm test:e2e` passes (11/11). |
 | M15 | Fixed | Workout actions return typed results; `src/app/workouts/[sessionId]/workout-client.tsx` preserves values, focuses alerts, and disables controls while pending; Playwright failure-then-retry test passes. |
 | M19 | Fixed | `abandoned_reason` column and migration `0006_workout_abandon_reason`; reason validation; `auditEvents` `workout-abandoned` record; UI confirmation panel with acknowledgement; integration and browser tests pass. |
-| Preflight | Fixed | `src/platform/db/preflight.ts` `expectedMigrationCount` updated to 7 to match the new migration. |
+| Preflight | Fixed | `src/platform/db/preflight.ts` was updated for the phase's new migration count. |
 
 All phase 1 changes pass `pnpm validate`, `pnpm test:integration` (42/42), and `pnpm test:e2e` (11/11).
 
@@ -111,7 +111,7 @@ All phase 1 changes pass `pnpm validate`, `pnpm test:integration` (42/42), and `
 | --- | --- | --- |
 | H3 | Fixed for source-linked live-session reports | Migrations `0007`–`0009` add source-linked holds, append-only resolutions, composite ownership/provenance, immutable hold facts, an exact abandoned-source rule, and a conservative `0006` upgrade bridge. Unique audit-backed or sole-candidate legacy sources are recovered; contradictory or ambiguous legacy evidence remains source-less and fail-closed for explicit administrator remediation rather than being guessed. `resolveSafetyHold` is subject-only and idempotent; the typed Today form preserves values, locks while pending, focuses errors, and states that resolution is not symptom clearance. Integration tests cover lifecycle, authorization, concurrency, direct-SQL integrity, export/deletion, and the real `0006`→`0009` upgrade. The unmocked browser journey proves report → required abandonment → resolve → process restart with persisted UI/database state. |
 | H1 boundary | Fail-closed pending phase 3 | A report against a completed session remains non-resolvable and Today explains that progression invalidation is pending. H1 must append the correction and invalidate every affected decision/revision before this path can become resolvable; clearing a live-session hold cannot reactivate a completed-session progression. |
-| Preflight | Fixed | `src/platform/db/preflight.ts` expects 11 migration entries, requires the canonical corrected 0004 ledger hash, and verifies the exact enabled public hold triggers/functions, ownership constraints, semantic checks, and valid/ready unique indexes. |
+| Preflight | Fixed | `src/platform/db/preflight.ts` expects the current committed migration count, requires the canonical corrected 0004 ledger hash, and verifies the exact enabled public hold triggers/functions, ownership constraints, semantic checks, and valid/ready unique indexes. |
 
 Phase 2 plus the compatibility follow-up pass `pnpm validate` (including 257/257
 unit/architecture tests and the reviewed-mode build), 69/69 fresh/upgrade database
@@ -129,8 +129,27 @@ Migration `0010_program_migration_ledger_provenance.sql` recognizes only the exa
 and CRLF byte hashes of origin/main and corrected 0004, normalizes them to the canonical
 LF hash, and fails closed for missing, duplicate, or unknown provenance. `.gitattributes`
 keeps migration SQL on LF for future clones, while preflight requires the canonical row
-after all 11 migrations.
+after all committed migrations.
+
+### Phase 3 — completed PR1 adversarial findings
+
+H1, H4, M7/M8, M10, M12, and L22 are now implemented in this branch. The final slice
+adds append-only post-completion correction/invalidation, hardened recovery/deletion
+attempt windows, exact-version content-release revocation, reviewed-content fail-closed
+gates, export/deletion provenance, and targeted UI reflow hardening. The current
+preflight contract expects 14 committed migrations and 28 exact integrity triggers.
+
+Validated evidence for this phase:
+
+- `pnpm check`
+- `pnpm typecheck`
+- `pnpm test` — 262/262 tests
+- `pnpm test:integration` — 89/89 tests
+- `pnpm build`
+- `pnpm test:e2e` — 15/15 tests
 
 ### Remaining for phase 3 or later
 
-H1, H4, M7/M8, M10, M12, L22.
+The UI arc remains intentionally open for continued product/design iteration after these
+inconsistency fixes. No high- or medium-severity PR1 adversarial remediation item is
+intentionally left unresolved by this branch.

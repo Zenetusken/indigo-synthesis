@@ -52,6 +52,13 @@ export default async function SessionHistoryPage({
             : 'Persisted immutable completion facts'}
         </InlineStatus>
 
+        {!session.contentEligibility.eligible ? (
+          <InlineStatus tone="warning">
+            Content release revoked. This page remains a factual history record; Indigo
+            will not use this release for new or resumed training.
+          </InlineStatus>
+        ) : null}
+
         {feedbackCorrection ? (
           <section className={styles.correction} aria-labelledby="correction-heading">
             <h2 id="correction-heading">Post-completion safety correction</h2>

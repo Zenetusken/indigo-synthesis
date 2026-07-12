@@ -211,6 +211,8 @@ async function currentSessionId(): Promise<string> {
 
 test.beforeEach(async () => {
   await clearApplicationData()
+  await closeDb()
+  await restartE2eApplication()
 })
 
 test('replays real set and completion actions across restarts while substitution stays denied', async ({

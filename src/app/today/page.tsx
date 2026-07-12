@@ -21,6 +21,7 @@ const errorMessages: Readonly<Record<string, string>> = {
   'safety.hold-active': 'An active safety hold blocks workout start.',
   'content.development-forbidden-in-production':
     'This unreviewed development program cannot run in reviewed content mode.',
+  'content.revoked': 'This content release has been revoked.',
   'content.prohibited': 'This content release has been prohibited.',
   'content.expired': 'This content release has expired.',
   'program.revision-invalidated':
@@ -153,8 +154,23 @@ export default async function TodayPage({
 
         {state.kind === 'planned' ? (
           <section className={styles.statePanel}>
-            <h2>Session {state.workout.slotCode} is scheduled.</h2>
-            <p>{state.workout.scheduledDate} · Unreviewed development fixture</p>
+            <h2>
+              {state.contentEligibility.eligible
+                ? `Session ${state.workout.slotCode} is scheduled.`
+                : 'Scheduled workout blocked in this content mode.'}
+            </h2>
+            <p>
+              {state.workout.scheduledDate} ·{' '}
+              {state.contentEligibility.eligible
+                ? 'Unreviewed development fixture'
+                : 'The persisted content release is not eligible for new training entries.'}
+            </p>
+            {!state.contentEligibility.eligible ? (
+              <InlineStatus tone="error" live="polite" role="status">
+                {errorMessages[state.contentEligibility.code] ??
+                  'The persisted content release is not eligible to start.'}
+              </InlineStatus>
+            ) : null}
             <ol className={styles.preview}>
               {state.workout.exercises.map((exercise) => {
                 const set = exercise.sets[0]
@@ -172,13 +188,15 @@ export default async function TodayPage({
                 )
               })}
             </ol>
-            <form action={startWorkoutAction}>
-              <input type="hidden" name="plannedWorkoutId" value={state.workout.id} />
-              <input type="hidden" name="commandId" value={newUuidV7()} />
-              <SubmitButton variant="primary" pendingLabel="Starting…">
-                Start workout
-              </SubmitButton>
-            </form>
+            {state.contentEligibility.eligible ? (
+              <form action={startWorkoutAction}>
+                <input type="hidden" name="plannedWorkoutId" value={state.workout.id} />
+                <input type="hidden" name="commandId" value={newUuidV7()} />
+                <SubmitButton variant="primary" pendingLabel="Starting…">
+                  Start workout
+                </SubmitButton>
+              </form>
+            ) : null}
           </section>
         ) : null}
 

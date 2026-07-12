@@ -2,7 +2,6 @@
 
 import { useActionState, useEffect, useRef, useState } from 'react'
 import { SubmitButton } from '@/components'
-import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import styles from '../history.module.css'
 import {
   type PostCompletionSafetyReportState,
@@ -25,12 +24,19 @@ const errorMessages: Readonly<Record<string, string>> = {
     'The safety report was not recorded. Existing facts remain unchanged.',
 }
 
+function newClientCommandId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 export function PostCompletionSafetyReportForm({ sessionId }: { sessionId: string }) {
   const [state, action] = useActionState(
     reportPostCompletionSafetyIssueAction,
     initialPostCompletionSafetyReportState,
   )
-  const [commandId] = useState(() => newUuidV7())
+  const [commandId] = useState(() => newClientCommandId())
   const [details, setDetails] = useState('')
   const resultRef = useRef<HTMLDivElement>(null)
 
