@@ -2,6 +2,10 @@
 
 Status: accepted direction; interaction details evolve through tested vertical slices
 
+The live engineering slice implements these flows with a visibly labeled, unreviewed
+development fixture. “Reviewed program” below remains the production target, not a
+description of the bundled fixture. See [MVP status](../MVP_STATUS.md).
+
 ## Design brief
 
 **Subject:** a self-hosted strength-training companion built around an authored program  

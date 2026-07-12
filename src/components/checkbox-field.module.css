@@ -1,0 +1,55 @@
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.target {
+  align-items: flex-start;
+  border-block: 1px solid var(--hairline);
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-3);
+  min-height: 3rem;
+  padding: var(--space-3) 0;
+}
+
+.target:has(input:disabled) {
+  color: var(--steel);
+  cursor: not-allowed;
+}
+
+.target input {
+  accent-color: var(--indigo-enamel);
+  flex: 0 0 auto;
+  height: 1.35rem;
+  margin: 0.1rem 0 0;
+  width: 1.35rem;
+}
+
+.copy,
+.label,
+.description {
+  display: block;
+}
+
+.copy {
+  min-width: 0;
+}
+
+.label {
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.description {
+  color: var(--steel);
+  font-size: 0.88rem;
+  margin-top: var(--space-1);
+}
+
+.error {
+  color: var(--danger);
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin: 0;
+}

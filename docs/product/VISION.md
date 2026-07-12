@@ -3,6 +3,10 @@
 Status: provisional product thesis pending Methodology Gate 0  
 Working title: Indigo Synthesis, pending brand and rights review
 
+The live engineering checkpoint is recorded in
+[MVP status and traceability](../MVP_STATUS.md). A working technical journey now exists,
+but its bundled fixture is unreviewed and is not a production methodology release.
+
 ## Mission
 
 Help self-directed strength trainees follow an authored program, record what actually

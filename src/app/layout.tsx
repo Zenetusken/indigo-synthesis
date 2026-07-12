@@ -7,7 +7,10 @@ import type { ReactNode } from 'react'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Indigo Synthesis',
+  title: {
+    default: 'Indigo Synthesis — self-hosted strength training',
+    template: '%s | Indigo Synthesis',
+  },
   description: 'Clean-slate foundation for a self-hosted strength training system.',
 }
 

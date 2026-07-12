@@ -1,9 +1,9 @@
 # Cross-module workflows
 
-This composition layer will coordinate accepted multi-module use cases without owning
-domain entities or tables. It receives public module gateways scoped to one `UnitOfWork`
-transaction. Repositories remain private to modules and never escape the transaction
-callback.
+This is the target composition layer for multi-module use cases. It will receive public
+module gateways scoped to one `UnitOfWork` transaction without owning domain entities or
+tables. No executable workflow or unit-of-work adapter exists here yet.
 
-The first concrete workflows are program instantiation and data portability. No generic
-orchestration framework belongs here.
+The live program/training and data-portability workflows currently coordinate directly
+through Drizzle transactions, as recorded architecture debt. No generic orchestration
+framework belongs here.

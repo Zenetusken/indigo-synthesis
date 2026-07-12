@@ -1,0 +1,1 @@
+ALTER TABLE "workout_session" ADD COLUMN "abandoned_reason" text;

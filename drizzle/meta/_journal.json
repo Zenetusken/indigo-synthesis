@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783802108869,
+      "tag": "0000_clever_bedlam",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783803494269,
+      "tag": "0001_modern_grandmaster",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783808491485,
+      "tag": "0002_aspiring_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783811342669,
+      "tag": "0003_session_feedback_terminal_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783823225722,
+      "tag": "0004_magenta_the_spike",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783823428321,
+      "tag": "0005_explicit_user_creation_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783826637890,
+      "tag": "0006_workout_abandon_reason",
+      "breakpoints": true
+    }
+  ]
+}

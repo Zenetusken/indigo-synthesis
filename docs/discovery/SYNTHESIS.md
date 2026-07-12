@@ -130,20 +130,24 @@ See [source coverage](SOURCE_COVERAGE.md) for the auditable manifest.
 - Native CSS Modules and local fonts for an intentional, self-contained UI
 - One real browser/database journey before breadth or operational scale
 
-## Open decisions that block product logic
+## Open decisions that block production product logic
 
 - Rights to the Indigo name, original program material, assessment questions, and media
-- Whether the coaching-profile concept is independently validated or remains explicitly
-  experimental
+- The coaching-profile/neurotype concept is excluded from the MVP; any later re-entry
+  would require independent validation and a new product decision
 - Canonical 12-week versus 16-week phase model
 - Exact frequency, progression, deload, baseline, and substitution rules
 - Permitted advanced techniques and their safety gates
 - RPE/RIR policy
 - Pain, injury, and contraindication behavior
 - Domain expert and evidence-review authority
-- First deployment's user model: single owner, household, coach/client, or open signup
+- Exact production account model beyond one owner-as-trainee plus controlled local
+  member accounts; public signup is closed
 
 These are captured as the
 [Methodology v1 decision pack](../product/METHODOLOGY_V1_DECISION_PACK.md). The
-foundation may be scaffolded before they are resolved; coaching content, schema, and
-generator implementation may not.
+original discovery gate permitted only a technical foundation while they were open.
+The project owner subsequently authorized a generic schema, pure generator, and visibly
+unreviewed development fixture to prove the engineering slice. That allowance is
+documented in [MVP status and traceability](../MVP_STATUS.md) and does not approve or
+unblock production coaching content.

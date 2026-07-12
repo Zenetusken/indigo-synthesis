@@ -33,8 +33,13 @@
     --indigo-deep: #27357f;
     --plate-yellow: #d59a1f;
     --verified: #26705a;
+    --verified-soft: #e4f2ed;
+    --danger: #9b2c2c;
+    --danger-deep: #762020;
+    --danger-soft: #faeaea;
     --steel: #5b6675;
     --hairline: #c8d0da;
+    --hairline-strong: #929eac;
     --focus: #1b63d9;
     --font-display: "Saira Variable", "Arial Narrow", sans-serif;
     --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
@@ -83,6 +88,12 @@
       transition-duration: 0.01ms;
       animation-duration: 0.01ms;
       animation-iteration-count: 1;
+    }
+  }
+
+  @media (max-width: 52rem) {
+    html {
+      scroll-padding-bottom: calc(9rem + env(safe-area-inset-bottom));
     }
   }
 }

@@ -1,0 +1,54 @@
+.page {
+  align-items: center;
+  display: grid;
+  min-height: 100dvh;
+  padding: clamp(1.5rem, 6vw, 5rem);
+}
+
+.panel {
+  border-block-start: 0.4rem solid var(--danger);
+  display: grid;
+  gap: var(--space-4);
+  margin-inline: auto;
+  max-width: 46rem;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  width: 100%;
+}
+
+.panel h1,
+.panel p {
+  margin: 0;
+}
+
+.panel h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 7vw, 5rem);
+  line-height: 0.95;
+}
+
+.eyebrow {
+  color: var(--danger);
+  font: 600 0.75rem / 1 var(--font-data);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.actions button,
+.panel a {
+  align-items: center;
+  background: var(--indigo-enamel);
+  border: 1px solid var(--indigo-enamel);
+  border-radius: var(--radius-sm);
+  color: white;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
+}

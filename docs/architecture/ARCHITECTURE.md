@@ -1,6 +1,12 @@
 # Architecture
 
-Status: accepted foundation; product schema remains blocked on Methodology Gate 0
+Status: accepted target; engineering slice implemented with documented boundary debt;
+production methodology/content remains blocked on Gate 0
+
+The live implementation checkpoint is summarized in
+[MVP status and traceability](../MVP_STATUS.md). A generic product schema and
+development-only fixture now exist to validate the end-to-end mechanics. Neither is a
+reviewed methodology release.
 
 ## System shape
 
@@ -79,6 +85,20 @@ e1RM, volume, and schedule-aware adherence. It is not a second source of truth.
 
 Coordinates module export/deletion through public application ports. It does not read
 arbitrary tables or become a second owner of personal data.
+
+### Current vertical-slice boundary debt
+
+The module descriptions above are the target boundaries. The current engineering slice
+still performs some cross-module Programs/Training coordination through direct Drizzle
+queries. Data Portability uses one direct repeatable-read projection and ordered
+deletion transaction while module-owned export/deletion gateways remain unimplemented.
+History queries also remain in Training until a real Phase 3 Progress contract exists.
+
+These are explicit convergence tasks, not hidden exceptions. The architecture suite now
+guards domain purity, dependency direction, platform independence, runtime outbound
+clients/remote assets, and an acyclic module graph. Executable schema/table-ownership and
+public-gateway enforcement are still required. See
+[the debt register](../MVP_STATUS.md#known-architecture-debt).
 
 ## Dependency rules
 
@@ -170,10 +190,14 @@ Properties:
 - overrides are explicit audited decisions;
 - golden vectors and property tests prove determinism and bounds.
 
-## Canonical data model
+## Data model
 
-The exact schema waits for Gate 0, but the entity model is fixed enough to prevent legacy
-duplication.
+The lists below distinguish the live engineering schema from the reviewed-content target.
+The current schema implements the identity/profile, program snapshot, execution, and
+portability entities needed for the technical slice. It stores methodology/template IDs,
+versions, review status, hashes, and JSON snapshots on program revisions; those fields
+are provenance references, not a reviewed content catalog. Gate 0 may still narrow or
+extend them before a reviewed release.
 
 ### Identity/profile
 
@@ -181,16 +205,22 @@ duplication.
 - singleton installation state for serialized first-owner bootstrap
 - athlete profile
 - training-day preference
-- equipment and athlete equipment
+- confirmed athlete equipment codes
 - strength baseline with test protocol and date
 
-### Reviewed content
+### Reviewed content target — not implemented
 
 - exercise and equipment mapping
 - exercise substitution
 - source/evidence record
 - methodology release
 - program template and immutable template version
+
+None of those reviewed-content catalog tables exists in the engineering MVP. Exercise
+identity and equipment requirements come from the conspicuously unreviewed development
+fixture, while program revisions snapshot the resulting prescriptions. Source lookup,
+rights enforcement, revocation, substitutions, and reviewed-release activation require
+the future catalog and Gate 0 approval.
 
 ### Program
 
@@ -234,9 +264,10 @@ added until profiling proves a need.
 - Checks bound repetitions, loads, RPE, dates, statuses, and lifecycle transitions.
 - A planned workout belongs to a program revision. A workout-session row is created
   directly as `active`, then follows active ↔ paused → completed or abandoned.
-- The singleton installation row is locked in the first-owner transaction. Creating the
-  owner and closing bootstrap commit atomically, and a unique owner invariant rejects
-  concurrent bootstrap attempts.
+- The singleton installation and host-issued capability rows are locked in the
+  first-owner transaction. Credential creation, capability consumption, and bootstrap
+  closure commit atomically; explicit database creation modes and the unique owner
+  invariant reject generic or concurrent claims.
 - `null` remains unavailable.
 - JSONB is limited to immutable versioned content or snapshots; fields needing routine
   joins, filtering, or constraints remain relational.
@@ -251,10 +282,13 @@ added until profiling proves a need.
   Better Auth runtime migration/schema push is disabled and its CLI is never a production
   migration authority
 - `HttpOnly`, `Secure` in production, `SameSite=Lax` cookies
-- transactionally serialized first-owner bootstrap
-- public signup off by default after bootstrap
+- host-issued, expiring, one-use, transactionally serialized first-owner bootstrap
+- generic public signup disabled before and after bootstrap
+- one advisory-lock namespace covers password sign-in through session creation and owner
+  recovery through password replacement and session revocation
 - server-derived actor identity for every use case
-- optional SMTP; no mandatory email/cloud identity
+- optional SMTP is a future adapter, not an implemented password-reset path; no
+  mandatory email/cloud identity exists
 - out-of-band sole-owner recovery when SMTP is absent: a host-local admin command with
   database access issues an expiring single-use recovery code, revokes existing sessions
   on use, and writes a redacted audit event
@@ -288,7 +322,9 @@ Plain HTTP is a loopback-only development mode. Phone, LAN, and any other non-lo
 access require an externally visible HTTPS origin and `Secure` cookies. A user-managed
 TLS terminator may sit in front of the Node process; it is an ingress prerequisite, not
 an application datastore or authority. Product-supplied proxy configuration and
-certificate automation remain deferred.
+certificate automation remain deferred. The supported `dev` and `start` commands bind
+the Node listener explicitly to `127.0.0.1`; `start` completes the database preflight
+before listening.
 
 Deletion is a deliberate destruction exception to historical immutability. The
 portability workflow deletes or redacts scoped personal records in referential order and

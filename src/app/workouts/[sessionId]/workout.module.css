@@ -1,0 +1,495 @@
+.page {
+  min-height: 100dvh;
+  padding-block-end: 7rem;
+}
+
+.topbar {
+  align-items: center;
+  background: var(--rack-ink);
+  color: var(--paper);
+  display: flex;
+  gap: var(--space-4);
+  justify-content: space-between;
+  min-height: 4rem;
+  padding: var(--space-3) clamp(1rem, 4vw, 3rem);
+}
+
+.topbar a {
+  font-weight: 700;
+  min-height: 3rem;
+  padding-block: 0.75rem;
+}
+
+.topbar span {
+  font: 500 0.8rem / 1.3 var(--font-data);
+}
+
+.content {
+  display: grid;
+  gap: var(--space-8);
+  margin-inline: auto;
+  max-width: 82rem;
+  min-width: 0;
+  padding: clamp(1.5rem, 5vw, 4rem);
+}
+
+.heading h1,
+.heading p {
+  margin: 0;
+}
+
+.heading h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.8rem, 7vw, 6rem);
+  font-stretch: condensed;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+  overflow-wrap: anywhere;
+}
+
+.heading p {
+  color: var(--steel);
+  font-family: var(--font-data);
+  margin-block-start: var(--space-3);
+}
+
+.error,
+.safetyStop {
+  border-inline-start: 0.35rem solid var(--danger);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.error {
+  background: var(--danger-soft);
+}
+
+.safetyStop {
+  background: #fff2f2;
+}
+
+.exerciseList {
+  display: grid;
+  gap: var(--space-8);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.exercise {
+  background: var(--paper);
+  border-block-start: 0.35rem solid var(--rack-ink);
+  min-width: 0;
+}
+
+.exerciseHeader {
+  align-items: end;
+  border-block-end: 1px solid var(--hairline);
+  display: flex;
+  gap: var(--space-6);
+  justify-content: space-between;
+  padding: var(--space-6);
+}
+
+.exerciseHeader h2,
+.exerciseHeader p {
+  margin: 0;
+}
+
+.priorPerformance {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 24rem;
+  text-align: end;
+}
+
+.priorPerformance span,
+.restContext span {
+  color: var(--steel);
+  font: 500 0.72rem / 1.4 var(--font-data);
+  text-transform: uppercase;
+}
+
+.priorPerformance strong {
+  font: 600 0.82rem / 1.4 var(--font-data);
+}
+
+.substitutionUnavailable {
+  background: var(--paper-raised);
+  border-block-end: 1px solid var(--hairline);
+  color: var(--steel);
+  font-size: 0.85rem;
+  margin: 0;
+  padding: var(--space-3) var(--space-6);
+}
+
+.restContext {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--hairline-strong);
+  border-inline-start: 0.35rem solid var(--plate-yellow);
+  display: flex;
+  gap: var(--space-6);
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+}
+
+.restContext div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.restContext strong {
+  font: 700 1.35rem / 1 var(--font-data);
+}
+
+.restContext p {
+  color: var(--steel);
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.exerciseHeader h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  font-stretch: condensed;
+}
+
+.exerciseHeader p {
+  color: var(--steel);
+  font: 500 0.75rem / 1.5 var(--font-data);
+}
+
+.setList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 1.4rem;
+  position: relative;
+}
+
+.setList::before {
+  background: var(--hairline-strong);
+  bottom: 2rem;
+  content: "";
+  left: 2.35rem;
+  position: absolute;
+  top: 2rem;
+  width: 2px;
+}
+
+.setRow {
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 2rem minmax(8rem, 0.6fr) minmax(0, 1fr);
+  min-width: 0;
+  padding: var(--space-5, 1.25rem) var(--space-6) var(--space-5, 1.25rem) 0;
+  position: relative;
+}
+
+.notch {
+  align-items: center;
+  background: var(--paper);
+  border: 2px solid var(--hairline-strong);
+  border-radius: 50%;
+  display: inline-flex;
+  font: 500 0.65rem / 1 var(--font-data);
+  height: 2rem;
+  justify-content: center;
+  position: relative;
+  width: 2rem;
+  z-index: 1;
+}
+
+.visuallyHidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.performed .notch {
+  background: var(--verified);
+  border-color: var(--verified);
+  color: white;
+}
+
+.current .notch {
+  background: var(--plate-yellow);
+  border-color: var(--rack-ink);
+}
+
+.target,
+.actualSummary {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.target span,
+.actualSummary span {
+  color: var(--steel);
+  font-size: 0.75rem;
+}
+
+.target strong,
+.actualSummary strong {
+  font-family: var(--font-data);
+}
+
+.setForm {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(5rem, 1fr));
+}
+
+.setForm label,
+.skipForm label {
+  display: grid;
+  font-size: 0.8rem;
+  font-weight: 700;
+  gap: var(--space-1);
+}
+
+.setForm input,
+.skipForm input,
+.safetyForm input {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.setForm input[type="number"] {
+  font-family: var(--font-data);
+  font-size: 1rem;
+}
+
+.setForm small {
+  color: var(--steel);
+  grid-column: 1 / -1;
+}
+
+.setActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  grid-column: 1 / -1;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
+}
+
+.primaryButton {
+  background: var(--indigo-enamel);
+  border: 1px solid var(--indigo-enamel);
+  color: white;
+}
+
+.secondaryButton {
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+  color: var(--rack-ink);
+}
+
+.dangerButton {
+  background: var(--danger);
+  border: 1px solid var(--danger);
+  color: white;
+}
+
+.skipForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  grid-column: 1 / -1;
+}
+
+.skipForm label {
+  flex: 1 1 15rem;
+}
+
+.dock {
+  align-items: center;
+  background: color-mix(in srgb, var(--paper-raised) 97%, transparent);
+  border-block-start: 1px solid var(--hairline-strong);
+  bottom: 0;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  left: 0;
+  padding: var(--space-3) clamp(1rem, 4vw, 3rem)
+    calc(var(--space-3) + env(safe-area-inset-bottom));
+  position: fixed;
+  right: 0;
+  z-index: 40;
+}
+
+.dockActions,
+.safetyForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.completePanel {
+  background: var(--rack-ink);
+  color: var(--paper);
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.completePanel h2,
+.completePanel p {
+  margin: 0;
+}
+
+.completePanel label {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  min-height: 3rem;
+}
+
+.completePanel input[type="checkbox"] {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+.abandonPanel {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  display: grid;
+  gap: var(--space-4);
+  max-width: 32rem;
+  min-width: 0;
+  padding: var(--space-4);
+}
+
+.abandonPanel form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.abandonPanel label {
+  display: grid;
+  font-size: 0.85rem;
+  font-weight: 700;
+  gap: var(--space-1);
+}
+
+.abandonPanel .checkboxLabel {
+  align-items: center;
+  display: flex;
+  font-weight: 500;
+  gap: var(--space-2);
+  min-height: 3rem;
+}
+
+.abandonPanel input[type="text"] {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.65rem;
+  width: 100%;
+}
+
+.abandonPanel input[type="checkbox"] {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+.abandonActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 48rem) {
+  .topbar {
+    align-items: start;
+    flex-wrap: wrap;
+  }
+
+  .topbar > *,
+  .exerciseHeader > *,
+  .restContext > *,
+  .setRow > *,
+  .setForm,
+  .skipForm,
+  .dock > * {
+    min-width: 0;
+  }
+
+  .content {
+    padding: clamp(1rem, 5vw, 2rem);
+  }
+
+  .exerciseHeader,
+  .restContext {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .priorPerformance,
+  .restContext p {
+    max-width: 100%;
+    text-align: start;
+    width: 100%;
+  }
+
+  .exerciseHeader h2,
+  .priorPerformance,
+  .topbar span {
+    overflow-wrap: anywhere;
+  }
+
+  .setList {
+    padding-inline-start: 0.75rem;
+  }
+
+  .setList::before {
+    left: 1.75rem;
+  }
+
+  .setRow {
+    gap: var(--space-2);
+    grid-template-columns: 2rem 1fr;
+    padding-inline-end: var(--space-3);
+  }
+
+  .setForm,
+  .actualSummary {
+    grid-column: 2;
+  }
+
+  .setForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .setForm label:last-of-type {
+    grid-column: 1 / -1;
+  }
+
+  .dock {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

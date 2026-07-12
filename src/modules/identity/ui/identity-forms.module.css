@@ -1,0 +1,72 @@
+.form {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.form label {
+  display: grid;
+  font-weight: 700;
+  gap: var(--space-2);
+}
+
+.form input {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  font: inherit;
+  min-height: 3rem;
+  padding: 0.75rem 0.875rem;
+  width: 100%;
+}
+
+.form input:focus-visible {
+  border-color: var(--focus);
+  outline: 3px solid color-mix(in srgb, var(--focus) 25%, transparent);
+  outline-offset: 2px;
+}
+
+.form small {
+  color: var(--steel);
+  font-weight: 400;
+}
+
+.form button {
+  background: var(--indigo-enamel);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: white;
+  cursor: pointer;
+  font: 700 1rem / 1 var(--font-body);
+  min-height: 3rem;
+  padding: 0.875rem 1.25rem;
+}
+
+.form button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.form button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.error {
+  background: var(--danger-soft);
+  border-inline-start: 0.3rem solid var(--danger);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+}
+
+.accountAction {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: end;
+}
+
+.accountError {
+  max-width: min(22rem, 72vw);
+  text-align: start;
+}
