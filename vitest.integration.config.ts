@@ -9,6 +9,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.{ts,tsx}', 'test/architecture/**/*.test.ts'],
+    include: ['test/integration/**/*.test.ts'],
+    fileParallelism: false,
+    hookTimeout: 60_000,
+    testTimeout: 30_000,
   },
 })
