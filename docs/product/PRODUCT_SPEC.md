@@ -3,6 +3,10 @@
 Status: provisional until the Methodology v1 decision pack is approved  
 Scope: first coherent self-hosted product release
 
+Implementation status is tracked separately in
+[MVP status and traceability](../MVP_STATUS.md). The working development slice does not
+weaken this specification or make its unreviewed fixture a Release 1 program.
+
 ## Actors
 
 ### Instance owner

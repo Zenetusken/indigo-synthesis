@@ -1,13 +1,30 @@
 # Methodology v1 decision pack
 
 Status: open Gate 0  
-Scope: decisions required before coaching content, product/program schema, or generator
-implementation
+Scope: decisions required before reviewed coaching content or a production release
 
-The technical scaffold may exist while this pack is open. No production program template,
-assessment, product/program schema, numeric adaptation rule, or marketing claim may be
-encoded before it closes. Phase 1 may implement only the independently reviewable Better
-Auth, singleton installation-state, and migration-ledger schema needed to prove the stack.
+### Engineering-MVP implementation note
+
+The project owner authorized a technical vertical slice while this gate remains open.
+The repository therefore contains a generic product/program schema, a pure generator,
+and a clean-room `0.0.1-development` program and adjustment fixture. Every numeric value
+in that fixture is an unreviewed software-test input, the UI labels it as development
+content, and configuration rejects it in production.
+
+This implementation allowance does not approve a program, population, exercise,
+progression, safety rule, claim, or right. No production program template, assessment,
+marketing claim, or `reviewed` content record may be created before this pack closes.
+The development fixture must be replaced through the review process, never relabeled.
+
+Product framing already decided for the engineering MVP:
+
+- neurotype assessment and neurological claims are excluded;
+- the intended first audience is adults already familiar with the listed basic lifts;
+- the owner may also be the trainee and may create controlled local member accounts;
+- public signup is closed; and
+- offline workout synchronization is not a hard requirement.
+
+The exact reviewed program wedge remains undecided.
 
 ## Decision owners
 
@@ -43,9 +60,9 @@ and expiry fields. An archive must name licensed material it cannot include.
 
 ## B. Product framing
 
-Choose one:
+Choose one (the first option is selected for the MVP):
 
-- [ ] Neurotype is excluded from v1.
+- [x] Neurotype is excluded from v1.
 - [ ] Neurotype is retained only as an explicitly experimental preference/coaching
       framework, not a neurological measurement.
 - [ ] An independent validation plan exists and defines the allowed claims.

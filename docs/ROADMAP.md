@@ -3,10 +3,23 @@
 This roadmap is sequenced by proof, not calendar promises. No phase begins because files
 or subsystem tests exist.
 
-The narrow Phase 1 authentication/migration/secure-self-hosting compatibility spike may
-run in parallel with Gate 0 because it does not encode coaching content. Program schema,
-templates, assessment, numeric adaptation, and product claims remain blocked until Gate 0
-closes.
+## Implementation checkpoint
+
+The repository now contains the Phase 1 stack and a working Phase 2 **engineering
+slice**. To validate the product mechanics without pretending to resolve methodology,
+the slice uses a generic product schema and a clean-room `0.0.1-development` fixture.
+That fixture is visibly unreviewed and configuration rejects it in production.
+
+This checkpoint does not close a phase or Gate 0. The complete release gate still needs
+reviewed content and golden examples, an outbound-network-blocked browser run,
+independent WCAG/screen-reader and physical-device review, schema/table-ownership
+enforcement, and independent product/security review. Targeted automated
+accessibility/mobile checks already pass; they are not a conformance claim. Current
+traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
+
+The distinction is deliberate: the technical workflow exists, while every exercise,
+volume, load, rest, progression, population, safety, evidence, and rights decision in a
+production release remains blocked until Gate 0 closes.
 
 ## Gate 0 — Product truth
 
@@ -48,6 +61,11 @@ Gate:
 - no duplicate migration/auth authority;
 - all checks green.
 
+Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
+configuration validation, local assets, and executable module-boundary guards are
+implemented. The release evidence still needs the outbound-network-blocked run and
+schema/table-ownership enforcement.
+
 ## Phase 2 — First vertical slice
 
 Goal: one complete user journey, not a subsystem collection.
@@ -77,6 +95,11 @@ Gate:
 - no mocked application API in the journey;
 - no placeholder or synthetic data in its path;
 - no second feature category.
+
+Checkpoint: the full technical J1–J6 path and negative safety/authorization paths are
+implemented against the development fixture. They do not satisfy this gate while the
+fixture remains unreviewed and the remaining acceptance evidence in
+[MVP_STATUS.md](MVP_STATUS.md#production-release-blockers) is open.
 
 ## Phase 3 — Progress depth and corrections
 

@@ -1,6 +1,7 @@
 # Design system direction
 
-Status: foundation implemented on the restart-orientation page
+Status: implemented across the working engineering slice; formal accessibility review
+remains open
 
 The visual system was developed using the frontend-design workflow: ground the subject,
 brainstorm a compact token/layout/signature plan, critique generic choices, then build.
@@ -112,8 +113,8 @@ The active workout set ledger has a vertical rail with one notch per ordered set
   relying on color.
 - The rail never appears as generic decoration on marketing or settings screens.
 
-The restart-orientation page uses an early rail to represent the real ordered product
-loop. Product implementation will reserve it for sets.
+The active-workout set ledger now uses the rail for real ordered sets. Other product
+pages do not reuse it as generic decoration.
 
 ## Motion
 
@@ -149,6 +150,14 @@ Copy is direct and operational. It explains rather than sells.
 
 ## Current implementation note
 
-The root page is a collaborator-facing orientation surface, not a fake product
-dashboard. Its single job is to communicate the recovered thesis, next proof, core loop,
-and locked scope. It intentionally displays no fabricated workout metrics.
+The visual direction now spans bootstrap/sign-in, setup, Program, Today, the active set
+ledger, session History, Settings, export, subject deletion, and instance reset. The
+active workout uses the calibrated rail for real set order and keeps target, performed,
+rest, save, and safety state explicit.
+
+The UI contains no fabricated progress or readiness metrics. Its program numbers come
+only from the visibly labeled development fixture, which is ineligible for production.
+Targeted Playwright checks now cover mobile reflow, 200% text sizing, keyboard order and
+focus continuation, visible skip-link focus, a changing polite save status, reduced
+motion, control size, and horizontal overflow. Independent WCAG 2.2 AA, manual
+screen-reader, and representative physical-device review remain release work.

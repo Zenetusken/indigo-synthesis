@@ -19,8 +19,9 @@ No other service is authoritative or mandatory.
 
 There are two distinct access modes:
 
-- **Local development:** plain HTTP is supported only through a loopback origin such as
-  `http://localhost:3000`.
+- **Local development:** plain HTTP is supported only through the loopback origin
+  `http://127.0.0.1:3000`. The checked-in development command binds that address
+  explicitly.
 - **Network use:** a phone, LAN client, public hostname, or any non-loopback client must
   use an externally visible HTTPS origin. Production authentication cookies are always
   `Secure`.
@@ -51,21 +52,37 @@ use.
 
 ## Configuration surface
 
-The target required configuration is:
+The current required configuration is:
 
 - database URL;
 - application origin;
-- authentication secret; and
-- optional local data directory.
+- authentication secret.
 
-SMTP, S3-compatible storage, external identity, and other adapters are explicitly
-optional.
+Content mode defaults to `reviewed`. The unreviewed technical fixture is available only
+when an operator explicitly selects `development`.
 
-Startup validates required configuration and schema compatibility, then fails with a
-specific corrective message. It does not limp into plausible fake data.
+A local data directory becomes optional configuration only if media uploads are enabled;
+the current slice has no upload path.
 
-Startup rejects a non-loopback HTTP application origin outside explicit development
-mode.
+SMTP, S3-compatible storage, external identity, and other potential future adapters are
+explicitly non-mandatory; none is implemented in the engineering MVP.
+
+Runtime configuration is validated at process use. The supported production command
+also runs schema/database preflight before listening and fails with a specific corrective
+message. Local development follows the documented explicit `pnpm db:preflight` step; it
+does not silently substitute plausible fake data.
+
+Startup rejects every non-loopback plain-HTTP application origin.
+
+`pnpm db:preflight` verifies PostgreSQL 18, the committed migration ledger, owner
+bootstrap enforcement, current snapshot/revision columns, and the required integrity
+triggers. `pnpm start` runs this preflight before starting the production server. Both
+supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
+runs on the same trusted host and forwards to that loopback listener; the application
+process does not expose a plain-HTTP LAN socket.
+
+Development content is never a production fallback: a production process rejects
+`INDIGO_CONTENT_MODE=development`, and no reviewed program release is bundled yet.
 
 ## Accounts
 
@@ -74,9 +91,10 @@ mode.
   commit atomically; concurrent bootstrap attempts cannot create a second first owner.
 - Public signup is off by default after bootstrap.
 - The owner can create or invite local users according to the approved user model.
-- Password reset works through optional SMTP. If the only owner is locked out, a
-  host-local administrative command with database access may issue an expiring one-use
-  recovery code. Redemption revokes existing sessions and records a redacted audit event.
+- The current slice has no SMTP or browser password-reset adapter. If the only owner is
+  locked out, a host-local administrative command with database access may issue an
+  expiring one-use recovery code. Redemption revokes existing sessions and records a
+  redacted audit event. Member self-service reset and optional SMTP remain future work.
 - Core auth does not expose refresh tokens to browser JavaScript.
 
 ## Data ownership
@@ -128,3 +146,7 @@ without need.
 
 The first release gate includes a test environment where outbound network is denied and
 only the application, PostgreSQL, and optional media directory are available.
+
+This remains an open release proof. The implementation has no mandatory runtime cloud
+adapter, but the complete browser journey has not yet been retained from an
+outbound-network-denied environment. See [MVP status](../MVP_STATUS.md).
