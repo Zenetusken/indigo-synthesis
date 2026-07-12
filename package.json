@@ -28,6 +28,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/db/migrate.ts",
     "db:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/db/preflight.ts",
+    "llm:validate-baseline": "node --import tsx scripts/llm/validate-baseline.ts",
     "validate": "NEXT_TELEMETRY_DISABLED=1 pnpm check && pnpm typecheck && pnpm test && INDIGO_CONTENT_MODE=reviewed pnpm build"
   },
   "dependencies": {

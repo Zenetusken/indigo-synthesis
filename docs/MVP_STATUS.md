@@ -149,12 +149,15 @@ language models.
 - per-model packs under `llm/models/*/settings.json` (first packs: Qwen3.5-9B Q4_K_M and
   Q5_K_M);
 - loopback-only OpenAI-compatible adapter for host-local servers (e.g. llama-server);
+- calibrated **offline** golden baseline (`pnpm llm:validate-baseline`) plus optional live
+  probe when a loopback server is running;
 - operator guide in `llm/README.md`.
 
 **Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations,
 weight download automation, or any methodology authority. History continues to show
 structured reason codes only. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
-**coaching** remains deferred.
+**coaching** remains deferred. No live GGUF is required in CI; live probe is operator
+calibration only.
 
 ## Production-release blockers
 

@@ -109,3 +109,29 @@ OpenAI-compatible endpoint on loopback only.
 - Deterministic methodology never calls the LLM.
 - Validation rejects prose that invents loads or omits reason codes.
 - CI does not download weights or start inference.
+
+## Calibrated baseline
+
+Offline contract baseline (no weights, no server) is the CI-grade calibration gate:
+
+```sh
+pnpm llm:validate-baseline
+```
+
+It loads both model packs, runs the golden FactBundle suite (increase / holds / pain
+block / invalidated), checks accepted templates pass and trap prose fails, and verifies
+fake synthesize + disabled defaults. Baseline version: see
+`LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`.
+
+Optional live probe against a running loopback server (informational; unreachable does
+not fail the offline gate):
+
+```sh
+INDIGO_LLM_LIVE=1 \
+INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080/v1 \
+INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m \
+pnpm llm:validate-baseline
+```
+
+Live results only count as calibrated when cases return `available` after the validation
+gate. Treat that as operator evidence, not a product claim that the model is coaching.

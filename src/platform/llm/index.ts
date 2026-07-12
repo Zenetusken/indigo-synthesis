@@ -6,6 +6,20 @@ export {
   NonLoopbackEndpointError,
 } from './adapters/openai-compatible-loopback'
 export {
+  GOLDEN_BASELINE_CASES,
+  LLM_BASELINE_VERSION,
+} from './baseline/golden-cases'
+export {
+  formatLiveProbeReport,
+  type LiveProbeReport,
+  runLiveProbe,
+} from './baseline/run-live-probe'
+export {
+  formatOfflineBaselineReport,
+  type OfflineBaselineReport,
+  runOfflineBaseline,
+} from './baseline/run-offline-baseline'
+export {
   composeLlmStack,
   getLlmComposition,
   type LlmComposition,
