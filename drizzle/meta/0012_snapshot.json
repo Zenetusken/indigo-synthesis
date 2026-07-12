@@ -132,12 +132,8 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -237,12 +233,8 @@
           "name": "destructive_reauthentication_state_account_id_account_id_fk",
           "tableFrom": "destructive_reauthentication_state",
           "tableTo": "account",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -347,12 +339,8 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -362,9 +350,7 @@
         "session_token_unique": {
           "name": "session_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
+          "columns": ["token"]
         }
       },
       "policies": {},
@@ -428,9 +414,7 @@
         "user_email_unique": {
           "name": "user_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         }
       },
       "policies": {},
@@ -547,12 +531,8 @@
           "name": "installation_state_owner_user_id_user_id_fk",
           "tableFrom": "installation_state",
           "tableTo": "user",
-          "columnsFrom": [
-            "owner_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -562,9 +542,7 @@
         "installation_state_owner_user_id_unique": {
           "name": "installation_state_owner_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "owner_user_id"
-          ]
+          "columns": ["owner_user_id"]
         }
       },
       "policies": {},
@@ -626,12 +604,8 @@
           "name": "adjustment_decision_invalidation_decision_id_adjustment_decision_id_fk",
           "tableFrom": "adjustment_decision_invalidation",
           "tableTo": "adjustment_decision",
-          "columnsFrom": [
-            "decision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["decision_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -639,12 +613,8 @@
           "name": "adjustment_decision_invalidation_correction_id_training_fact_correction_id_fk",
           "tableFrom": "adjustment_decision_invalidation",
           "tableTo": "training_fact_correction",
-          "columnsFrom": [
-            "correction_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["correction_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -749,12 +719,8 @@
           "name": "adjustment_decision_session_id_workout_session_id_fk",
           "tableFrom": "adjustment_decision",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -762,12 +728,8 @@
           "name": "adjustment_decision_applied_revision_id_program_revision_id_fk",
           "tableFrom": "adjustment_decision",
           "tableTo": "program_revision",
-          "columnsFrom": [
-            "applied_revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["applied_revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -806,12 +768,8 @@
           "name": "athlete_equipment_user_id_user_id_fk",
           "tableFrom": "athlete_equipment",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -819,10 +777,7 @@
       "compositePrimaryKeys": {
         "athlete_equipment_user_id_equipment_code_pk": {
           "name": "athlete_equipment_user_id_equipment_code_pk",
-          "columns": [
-            "user_id",
-            "equipment_code"
-          ]
+          "columns": ["user_id", "equipment_code"]
         }
       },
       "uniqueConstraints": {},
@@ -926,12 +881,8 @@
           "name": "athlete_profile_user_id_user_id_fk",
           "tableFrom": "athlete_profile",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1014,12 +965,8 @@
           "name": "athlete_training_day_user_id_user_id_fk",
           "tableFrom": "athlete_training_day",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1027,10 +974,7 @@
       "compositePrimaryKeys": {
         "athlete_training_day_user_id_weekday_pk": {
           "name": "athlete_training_day_user_id_weekday_pk",
-          "columns": [
-            "user_id",
-            "weekday"
-          ]
+          "columns": ["user_id", "weekday"]
         }
       },
       "uniqueConstraints": {},
@@ -1139,12 +1083,8 @@
           "name": "audit_event_actor_user_id_user_id_fk",
           "tableFrom": "audit_event",
           "tableTo": "user",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1152,12 +1092,8 @@
           "name": "audit_event_subject_user_id_user_id_fk",
           "tableFrom": "audit_event",
           "tableTo": "user",
-          "columnsFrom": [
-            "subject_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["subject_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1244,12 +1180,8 @@
           "name": "deletion_plan_user_id_user_id_fk",
           "tableFrom": "deletion_plan",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1397,12 +1329,8 @@
           "name": "exercise_prescription_planned_workout_id_planned_workout_id_fk",
           "tableFrom": "exercise_prescription",
           "tableTo": "planned_workout",
-          "columnsFrom": [
-            "planned_workout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["planned_workout_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1539,12 +1467,8 @@
           "name": "performed_set_correction_performed_set_id_performed_set_id_fk",
           "tableFrom": "performed_set_correction",
           "tableTo": "performed_set",
-          "columnsFrom": [
-            "performed_set_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["performed_set_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1552,16 +1476,8 @@
           "name": "performed_set_correction_root_fk",
           "tableFrom": "performed_set_correction",
           "tableTo": "training_fact_correction",
-          "columnsFrom": [
-            "correction_id",
-            "session_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "id",
-            "session_id",
-            "user_id"
-          ],
+          "columnsFrom": ["correction_id", "session_id", "user_id"],
+          "columnsTo": ["id", "session_id", "user_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1754,12 +1670,8 @@
           "name": "performed_set_session_exercise_id_session_exercise_id_fk",
           "tableFrom": "performed_set",
           "tableTo": "session_exercise",
-          "columnsFrom": [
-            "session_exercise_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_exercise_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1769,9 +1681,7 @@
         "performed_set_command_id_unique": {
           "name": "performed_set_command_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "command_id"
-          ]
+          "columns": ["command_id"]
         }
       },
       "policies": {},
@@ -1931,12 +1841,8 @@
           "name": "planned_workout_revision_id_program_revision_id_fk",
           "tableFrom": "planned_workout",
           "tableTo": "program_revision",
-          "columnsFrom": [
-            "revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2006,12 +1912,8 @@
           "name": "program_revision_invalidation_revision_id_program_revision_id_fk",
           "tableFrom": "program_revision_invalidation",
           "tableTo": "program_revision",
-          "columnsFrom": [
-            "revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2019,12 +1921,8 @@
           "name": "program_revision_invalidation_correction_id_training_fact_correction_id_fk",
           "tableFrom": "program_revision_invalidation",
           "tableTo": "training_fact_correction",
-          "columnsFrom": [
-            "correction_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["correction_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2077,12 +1975,8 @@
           "name": "program_revision_lineage_revision_id_program_revision_id_fk",
           "tableFrom": "program_revision_lineage",
           "tableTo": "program_revision",
-          "columnsFrom": [
-            "revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2090,12 +1984,8 @@
           "name": "program_revision_lineage_parent_revision_id_program_revision_id_fk",
           "tableFrom": "program_revision_lineage",
           "tableTo": "program_revision",
-          "columnsFrom": [
-            "parent_revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["parent_revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -2103,12 +1993,8 @@
           "name": "program_revision_lineage_source_session_id_workout_session_id_fk",
           "tableFrom": "program_revision_lineage",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "source_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2118,9 +2004,7 @@
         "program_revision_lineage_source_session_id_unique": {
           "name": "program_revision_lineage_source_session_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "source_session_id"
-          ]
+          "columns": ["source_session_id"]
         }
       },
       "policies": {},
@@ -2303,12 +2187,8 @@
           "name": "program_revision_program_id_program_id_fk",
           "tableFrom": "program_revision",
           "tableTo": "program",
-          "columnsFrom": [
-            "program_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["program_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2409,12 +2289,8 @@
           "name": "program_user_id_user_id_fk",
           "tableFrom": "program",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2509,12 +2385,8 @@
           "name": "safety_hold_resolution_user_id_user_id_fk",
           "tableFrom": "safety_hold_resolution",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2522,14 +2394,8 @@
           "name": "safety_hold_resolution_hold_user_fk",
           "tableFrom": "safety_hold_resolution",
           "tableTo": "safety_hold",
-          "columnsFrom": [
-            "hold_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "id",
-            "user_id"
-          ],
+          "columnsFrom": ["hold_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2671,12 +2537,8 @@
           "name": "safety_hold_user_id_user_id_fk",
           "tableFrom": "safety_hold",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2684,14 +2546,8 @@
           "name": "safety_hold_source_session_user_fk",
           "tableFrom": "safety_hold",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "source_session_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "id",
-            "user_id"
-          ],
+          "columnsFrom": ["source_session_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -2794,12 +2650,8 @@
           "name": "session_exercise_session_id_workout_session_id_fk",
           "tableFrom": "session_exercise",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2854,12 +2706,8 @@
           "name": "session_feedback_session_id_workout_session_id_fk",
           "tableFrom": "session_feedback",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2933,16 +2781,8 @@
           "name": "session_feedback_correction_root_fk",
           "tableFrom": "session_feedback_correction",
           "tableTo": "training_fact_correction",
-          "columnsFrom": [
-            "correction_id",
-            "session_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "id",
-            "session_id",
-            "user_id"
-          ],
+          "columnsFrom": ["correction_id", "session_id", "user_id"],
+          "columnsTo": ["id", "session_id", "user_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3034,12 +2874,8 @@
           "name": "set_prescription_exercise_prescription_id_exercise_prescription_id_fk",
           "tableFrom": "set_prescription",
           "tableTo": "exercise_prescription",
-          "columnsFrom": [
-            "exercise_prescription_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["exercise_prescription_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3160,12 +2996,8 @@
           "name": "strength_baseline_user_id_user_id_fk",
           "tableFrom": "strength_baseline",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3277,12 +3109,8 @@
           "name": "training_command_receipt_user_id_user_id_fk",
           "tableFrom": "training_command_receipt",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3290,12 +3118,8 @@
           "name": "training_command_receipt_session_id_workout_session_id_fk",
           "tableFrom": "training_command_receipt",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3456,12 +3280,8 @@
           "name": "training_fact_correction_user_id_user_id_fk",
           "tableFrom": "training_fact_correction",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3469,12 +3289,8 @@
           "name": "training_fact_correction_actor_user_id_user_id_fk",
           "tableFrom": "training_fact_correction",
           "tableTo": "user",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -3482,14 +3298,8 @@
           "name": "training_fact_correction_session_user_fk",
           "tableFrom": "training_fact_correction",
           "tableTo": "workout_session",
-          "columnsFrom": [
-            "session_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "id",
-            "user_id"
-          ],
+          "columnsFrom": ["session_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3499,9 +3309,7 @@
         "training_fact_correction_command_id_unique": {
           "name": "training_fact_correction_command_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "command_id"
-          ]
+          "columns": ["command_id"]
         }
       },
       "policies": {},
@@ -3701,12 +3509,8 @@
           "name": "workout_session_user_id_user_id_fk",
           "tableFrom": "workout_session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3714,12 +3518,8 @@
           "name": "workout_session_planned_workout_id_planned_workout_id_fk",
           "tableFrom": "workout_session",
           "tableTo": "planned_workout",
-          "columnsFrom": [
-            "planned_workout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["planned_workout_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -3729,16 +3529,12 @@
         "workout_session_start_command_id_unique": {
           "name": "workout_session_start_command_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "start_command_id"
-          ]
+          "columns": ["start_command_id"]
         },
         "workout_session_completion_command_id_unique": {
           "name": "workout_session_completion_command_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "completion_command_id"
-          ]
+          "columns": ["completion_command_id"]
         }
       },
       "policies": {},

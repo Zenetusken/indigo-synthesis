@@ -300,16 +300,25 @@ async function beginCorrectionTransaction(
   return correctionId
 }
 
+// pg sets Client.processID (the backend PID) after connect, but @types/pg omits it.
+// Read it in a typed way rather than querying the client — it is mid-block here.
+function backendPid(client: Client): number {
+  const pid = (client as unknown as { processID: number | null }).processID
+  if (pid === null) throw new Error('PostgreSQL client has no backend process id')
+  return pid
+}
+
 async function waitUntilBlocked(observer: Client, blockedClient: Client): Promise<void> {
+  const blockedPid = backendPid(blockedClient)
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const result = await observer.query<{ blocked: boolean }>(
       `SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked`,
-      [blockedClient.processID],
+      [blockedPid],
     )
     if (result.rows[0]?.blocked) return
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  throw new Error(`PostgreSQL client ${blockedClient.processID} did not block.`)
+  throw new Error(`PostgreSQL client ${blockedPid} did not block.`)
 }
 
 async function createActivationDescendant(
