@@ -1,23 +1,59 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { authClient } from './auth-client'
+import styles from './identity-forms.module.css'
+
+const interruptedSignOutMessage = 'Sign-out did not complete. Try again.'
 
 export function SignOutButton() {
   const router = useRouter()
+  const errorRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
 
   async function signOut() {
     setPending(true)
-    await authClient.signOut()
-    router.push('/sign-in?signedOut=1')
-    router.refresh()
+    setError(null)
+
+    try {
+      const result = await authClient.signOut()
+      if (result.error || result.data?.success !== true) {
+        setError(interruptedSignOutMessage)
+        return
+      }
+
+      router.push('/sign-in?signedOut=1')
+      router.refresh()
+    } catch {
+      setError(interruptedSignOutMessage)
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
-    <button type="button" onClick={signOut} disabled={pending}>
-      {pending ? 'Signing out…' : 'Sign out'}
-    </button>
+    <div className={styles.accountAction}>
+      {error ? (
+        <div
+          className={`${styles.error} ${styles.accountError}`}
+          ref={errorRef}
+          role="alert"
+          tabIndex={-1}
+        >
+          <strong>Sign-out failed</strong>
+          <span>{error}</span>
+        </div>
+      ) : null}
+
+      <button type="button" onClick={signOut} disabled={pending}>
+        {pending ? 'Signing out…' : 'Sign out'}
+      </button>
+    </div>
   )
 }

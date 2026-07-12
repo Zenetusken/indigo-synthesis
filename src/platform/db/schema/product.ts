@@ -219,6 +219,7 @@ export const plannedWorkouts = pgTable(
       .references(() => programRevisions.id, { onDelete: 'cascade' }),
     scheduledDate: date('scheduled_date', { mode: 'string' }).notNull(),
     ordinal: integer('ordinal').notNull(),
+    programOrdinal: integer('program_ordinal').notNull(),
     slotCode: text('slot_code').notNull(),
     name: text('name').notNull(),
     createdAt: createdAt(),
@@ -232,7 +233,12 @@ export const plannedWorkouts = pgTable(
       table.revisionId,
       table.scheduledDate,
     ),
+    uniqueIndex('planned_workout_revision_program_ordinal_uidx').on(
+      table.revisionId,
+      table.programOrdinal,
+    ),
     check('planned_workout_ordinal_check', sql`${table.ordinal} > 0`),
+    check('planned_workout_program_ordinal_check', sql`${table.programOrdinal} > 0`),
     check('planned_workout_slot_check', sql`${table.slotCode} IN ('A', 'B', 'C')`),
   ],
 )
@@ -313,6 +319,7 @@ export const workoutSessions = pgTable(
     pausedAt: timestamp('paused_at', { withTimezone: true, mode: 'date' }),
     completedAt: timestamp('completed_at', { withTimezone: true, mode: 'date' }),
     abandonedAt: timestamp('abandoned_at', { withTimezone: true, mode: 'date' }),
+    abandonedReason: text('abandoned_reason'),
     optimisticVersion: integer('optimistic_version').default(1).notNull(),
     startCommandId: text('start_command_id').notNull().unique(),
     completionCommandId: text('completion_command_id').unique(),
@@ -466,6 +473,60 @@ export const sessionFeedback = pgTable('session_feedback', {
   details: text('details'),
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }).notNull(),
 })
+
+export const programRevisionLineage = pgTable(
+  'program_revision_lineage',
+  {
+    revisionId: text('revision_id')
+      .primaryKey()
+      .references(() => programRevisions.id, { onDelete: 'cascade' }),
+    parentRevisionId: text('parent_revision_id')
+      .notNull()
+      .references(() => programRevisions.id, { onDelete: 'restrict' }),
+    sourceSessionId: text('source_session_id')
+      .notNull()
+      .unique()
+      .references(() => workoutSessions.id, { onDelete: 'restrict' }),
+    sourceProgramOrdinal: integer('source_program_ordinal').notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    check(
+      'program_revision_lineage_distinct_revision_check',
+      sql`${table.revisionId} <> ${table.parentRevisionId}`,
+    ),
+    check(
+      'program_revision_lineage_source_ordinal_check',
+      sql`${table.sourceProgramOrdinal} > 0`,
+    ),
+  ],
+)
+
+export const trainingCommandReceipts = pgTable(
+  'training_command_receipt',
+  {
+    commandId: text('command_id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    commandType: text('command_type').notNull(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => workoutSessions.id, { onDelete: 'cascade' }),
+    targetId: text('target_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    resultSnapshot: jsonb('result_snapshot').default({}).notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index('training_command_receipt_user_idx').on(table.userId),
+    index('training_command_receipt_session_idx').on(table.sessionId),
+    check(
+      'training_command_receipt_type_check',
+      sql`${table.commandType} IN ('complete-set', 'skip-set', 'complete-workout', 'report-pain')`,
+    ),
+  ],
+)
 
 export const adjustmentDecisions = pgTable(
   'adjustment_decision',

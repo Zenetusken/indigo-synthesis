@@ -1,3 +1,8 @@
+import {
+  isCanonicalLoadGrams,
+  MAX_CANONICAL_LOAD_GRAMS,
+} from '@/modules/exercises/domain/load'
+
 export type DisplayUnits = 'metric' | 'imperial'
 
 const gramsPerDisplayUnit: Readonly<Record<DisplayUnits, number>> = {
@@ -15,7 +20,12 @@ export function displayLoadValue(grams: number, units: DisplayUnits): number {
 
 export function inputLoadToGrams(value: number, units: DisplayUnits): number {
   if (!Number.isFinite(value) || value < 0) return Number.NaN
-  return Math.round(value * gramsPerDisplayUnit[units])
+  const grams = Math.round(value * gramsPerDisplayUnit[units])
+  return isCanonicalLoadGrams(grams) ? grams : Number.NaN
+}
+
+export function maximumDisplayLoadValue(units: DisplayUnits): number {
+  return displayLoadValue(MAX_CANONICAL_LOAD_GRAMS, units)
 }
 
 export function formatLoad(grams: number | null, units: DisplayUnits): string {

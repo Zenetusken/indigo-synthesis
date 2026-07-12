@@ -1,28 +1,29 @@
-import { toNextJsHandler } from 'better-auth/next-js'
-import { getAuth } from '@/modules/identity/infrastructure/auth'
+import {
+  handleAuthDelete,
+  handleAuthGet,
+  handleAuthPatch,
+  handleAuthPost,
+  handleAuthPut,
+} from '@/modules/identity/server/auth-handler'
 
 export const dynamic = 'force-dynamic'
 
-function handlers() {
-  return toNextJsHandler(getAuth())
-}
-
 export function GET(request: Request): Promise<Response> {
-  return handlers().GET(request)
+  return handleAuthGet(request)
 }
 
 export function POST(request: Request): Promise<Response> {
-  return handlers().POST(request)
+  return handleAuthPost(request)
 }
 
 export function PATCH(request: Request): Promise<Response> {
-  return handlers().PATCH(request)
+  return handleAuthPatch(request)
 }
 
 export function PUT(request: Request): Promise<Response> {
-  return handlers().PUT(request)
+  return handleAuthPut(request)
 }
 
 export function DELETE(request: Request): Promise<Response> {
-  return handlers().DELETE(request)
+  return handleAuthDelete(request)
 }

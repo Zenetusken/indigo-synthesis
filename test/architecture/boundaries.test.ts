@@ -1,10 +1,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  analyzeImportGraph,
+  findModuleCycles,
+  isApplicationBoundaryViolation,
+  readTypeScriptSources,
+} from './import-graph'
 
 const sourceRoot = resolve(process.cwd(), 'src')
-const sourceExtensions = /\.(?:ts|tsx)$/
-const importPattern = /(?:from\s+|import\s*)['"]([^'"]+)['"]/g
 
 function filesMatching(directory: string, extensions: RegExp): string[] {
   if (!existsSync(directory)) return []
@@ -20,14 +24,9 @@ function projectPath(path: string): string {
   return relative(process.cwd(), path).split(sep).join('/')
 }
 
-function importsIn(path: string): string[] {
-  return [...readFileSync(path, 'utf8').matchAll(importPattern)].map(
-    (match) => match[1] ?? '',
-  )
-}
-
 describe('architecture boundaries', () => {
-  const files = filesMatching(sourceRoot, sourceExtensions)
+  const sourceFiles = readTypeScriptSources(sourceRoot)
+  const importGraph = analyzeImportGraph(sourceFiles, { sourceRoot })
 
   it('binds supported runtime commands to loopback and preflights production', () => {
     const manifest = JSON.parse(
@@ -57,53 +56,83 @@ describe('architecture boundaries', () => {
       'node:http',
       'node:https',
     ]
-    const violations = files
-      .filter((path) => projectPath(path).includes('/domain/'))
-      .flatMap((path) =>
-        importsIn(path)
-          .filter((specifier) =>
-            forbiddenDependencies.some(
-              (dependency) =>
-                specifier === dependency || specifier.startsWith(`${dependency}/`),
-            ),
+    const violations = importGraph.edges
+      .filter(
+        ({ from }) =>
+          projectPath(from).includes('/domain/') && !/\.test\.tsx?$/.test(from),
+      )
+      .filter(({ specifier, to }) => {
+        if (
+          forbiddenDependencies.some(
+            (dependency) =>
+              specifier === dependency || specifier.startsWith(`${dependency}/`),
           )
-          .map((specifier) => `${projectPath(path)} -> ${specifier}`),
+        ) {
+          return true
+        }
+        if (!to) return false
+        const target = projectPath(to)
+        return (
+          target.startsWith('src/app/') ||
+          target.startsWith('src/components/') ||
+          target.startsWith('src/platform/') ||
+          target.includes('/application/') ||
+          target.includes('/infrastructure/') ||
+          target.includes('/server/')
+        )
+      })
+      .map(
+        ({ from, specifier, to }) =>
+          `${projectPath(from)} -> ${to ? projectPath(to) : specifier}`,
       )
 
     expect(violations).toEqual([])
   })
 
   it('prevents lower layers from depending on the Next.js application shell', () => {
-    const violations = files
-      .filter((path) => !projectPath(path).startsWith('src/app/'))
-      .flatMap((path) =>
-        importsIn(path)
-          .filter(
-            (specifier) =>
-              specifier === '@/app' ||
-              specifier.startsWith('@/app/') ||
-              specifier === '@/components' ||
-              specifier.startsWith('@/components/'),
-          )
-          .map((specifier) => `${projectPath(path)} -> ${specifier}`),
-      )
+    const violations = importGraph.edges
+      .filter(({ from }) => {
+        const source = projectPath(from)
+        return !source.startsWith('src/app/') && !source.startsWith('src/components/')
+      })
+      .filter(({ to }) => {
+        if (!to) return false
+        const target = projectPath(to)
+        return target.startsWith('src/app/') || target.startsWith('src/components/')
+      })
+      .map(({ from, to }) => `${projectPath(from)} -> ${projectPath(to as string)}`)
 
     expect(violations).toEqual([])
   })
 
   it('keeps platform infrastructure independent of product modules', () => {
-    const violations = files
-      .filter((path) => projectPath(path).startsWith('src/platform/'))
-      .flatMap((path) =>
-        importsIn(path)
-          .filter(
-            (specifier) =>
-              specifier === '@/modules' || specifier.startsWith('@/modules/'),
-          )
-          .map((specifier) => `${projectPath(path)} -> ${specifier}`),
-      )
+    const violations = importGraph.edges
+      .filter(({ from }) => projectPath(from).startsWith('src/platform/'))
+      .filter(({ to }) => to && projectPath(to).startsWith('src/modules/'))
+      .map(({ from, to }) => `${projectPath(from)} -> ${projectPath(to as string)}`)
 
     expect(violations).toEqual([])
+  })
+
+  it('keeps the application shell behind public module boundaries', () => {
+    const violations = importGraph.edges
+      .filter((edge) => isApplicationBoundaryViolation(edge, sourceRoot))
+      .map(({ from, to }) => `${projectPath(from)} -> ${projectPath(to as string)}`)
+
+    expect(violations).toEqual([])
+  })
+
+  it('resolves every source import and rejects computed module loading', () => {
+    expect(
+      importGraph.unresolvedInternalImports.map(
+        ({ from, specifier }) => `${projectPath(from)} -> ${specifier}`,
+      ),
+    ).toEqual([])
+    expect(
+      importGraph.computedImports.map(
+        ({ from, kind }) => `${projectPath(from)} -> ${kind}`,
+      ),
+    ).toEqual([])
   })
 
   it('does not introduce an application-initiated outbound HTTP dependency', () => {
@@ -139,43 +168,6 @@ describe('architecture boundaries', () => {
   })
 
   it('keeps the module dependency graph acyclic', () => {
-    const graph = new Map<string, Set<string>>()
-
-    for (const path of files.filter((candidate) =>
-      projectPath(candidate).startsWith('src/modules/'),
-    )) {
-      const [, owner] = projectPath(path).match(/^src\/modules\/([^/]+)\//) ?? []
-      if (!owner) continue
-      const dependencies = graph.get(owner) ?? new Set<string>()
-
-      for (const specifier of importsIn(path)) {
-        const [, dependency] = specifier.match(/^@\/modules\/([^/]+)/) ?? []
-        if (dependency && dependency !== owner) dependencies.add(dependency)
-      }
-      graph.set(owner, dependencies)
-    }
-
-    const visiting = new Set<string>()
-    const visited = new Set<string>()
-    const cycles: string[] = []
-
-    function visit(moduleName: string, path: string[]): void {
-      if (visiting.has(moduleName)) {
-        cycles.push([...path, moduleName].join(' -> '))
-        return
-      }
-      if (visited.has(moduleName)) return
-
-      visiting.add(moduleName)
-      for (const dependency of graph.get(moduleName) ?? []) {
-        visit(dependency, [...path, moduleName])
-      }
-      visiting.delete(moduleName)
-      visited.add(moduleName)
-    }
-
-    for (const moduleName of graph.keys()) visit(moduleName, [])
-
-    expect(cycles).toEqual([])
+    expect(findModuleCycles(importGraph.edges, sourceRoot)).toEqual([])
   })
 })

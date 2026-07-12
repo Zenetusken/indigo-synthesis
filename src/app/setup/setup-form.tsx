@@ -1,7 +1,11 @@
 'use client'
 
 import { useActionState, useEffect, useState } from 'react'
-import { type DisplayUnits, loadUnitLabel } from '@/modules/athletes/domain/units'
+import {
+  type DisplayUnits,
+  loadUnitLabel,
+  maximumDisplayLoadValue,
+} from '@/modules/athletes/domain/units'
 import { type SetupActionState, saveSetupAction } from './actions'
 import styles from './setup.module.css'
 
@@ -179,8 +183,8 @@ export function SetupForm() {
                 type="number"
                 inputMode="decimal"
                 min={0}
-                max={1_000}
-                step={0.5}
+                max={maximumDisplayLoadValue(units)}
+                step="any"
                 defaultValue={20}
                 required
               />

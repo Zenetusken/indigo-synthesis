@@ -1,9 +1,12 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
-import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import {
+  createDisposableIntegrationDatabase,
+  type DisposableIntegrationDatabase,
+} from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
 
 const execFile = promisify(execFileCallback)
@@ -12,6 +15,7 @@ type RestartWorkerResult = {
   readonly pid: number
   readonly userId: string
   readonly sessionId: string
+  readonly setCommandId: string
   readonly session: {
     readonly status: string
     readonly optimisticVersion: number
@@ -28,16 +32,7 @@ type RestartWorkerResult = {
   readonly today: { readonly kind: string; readonly sessionId?: string }
 }
 
-let sourceDatabaseUrl: string
-let disposableDatabaseName: string
-let administrationClient: Client
-
-function quotedIdentifier(identifier: string): string {
-  if (!/^[a-z0-9_]+$/.test(identifier)) {
-    throw new Error(`Unsafe PostgreSQL identifier: ${identifier}`)
-  }
-  return `"${identifier}"`
-}
+let integrationDatabase: DisposableIntegrationDatabase | undefined
 
 async function runWorker(arguments_: readonly string[]): Promise<RestartWorkerResult> {
   const { stdout } = await execFile(
@@ -49,22 +44,12 @@ async function runWorker(arguments_: readonly string[]): Promise<RestartWorkerRe
 }
 
 beforeAll(async () => {
-  const configuredDatabaseUrl = process.env.DATABASE_URL
-  if (!configuredDatabaseUrl) {
-    throw new Error('DATABASE_URL is required for restart recovery integration tests.')
-  }
-
-  sourceDatabaseUrl = configuredDatabaseUrl
-  disposableDatabaseName = `indigo_restart_${process.pid}_${Date.now()}`
-  administrationClient = new Client({ connectionString: sourceDatabaseUrl })
-  await administrationClient.connect()
-  await administrationClient.query(
-    `CREATE DATABASE ${quotedIdentifier(disposableDatabaseName)}`,
-  )
-
-  const disposableUrl = new URL(sourceDatabaseUrl)
-  disposableUrl.pathname = `/${disposableDatabaseName}`
-  process.env.DATABASE_URL = disposableUrl.toString()
+  integrationDatabase = createDisposableIntegrationDatabase({
+    administrationUrl: process.env.INTEGRATION_ADMIN_DATABASE_URL,
+    suite: 'restart_recovery',
+  })
+  await integrationDatabase.create()
+  integrationDatabase.activateDatabaseUrl()
   resetServerConfigForTests()
   await closeDb()
   await migrateDatabase()
@@ -73,26 +58,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDb()
-  if (sourceDatabaseUrl) {
-    process.env.DATABASE_URL = sourceDatabaseUrl
-    resetServerConfigForTests()
-  }
-
-  if (administrationClient) {
-    try {
-      await administrationClient.query(
-        `SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-         WHERE datname = $1 AND pid <> pg_backend_pid()`,
-        [disposableDatabaseName],
-      )
-      await administrationClient.query(
-        `DROP DATABASE IF EXISTS ${quotedIdentifier(disposableDatabaseName)}`,
-      )
-    } finally {
-      await administrationClient.end()
-    }
-  }
+  integrationDatabase?.restoreDatabaseUrl()
+  resetServerConfigForTests()
+  await integrationDatabase?.cleanup()
 })
 
 describe('active workout process restart recovery', () => {
@@ -102,11 +70,13 @@ describe('active workout process restart recovery', () => {
       'read',
       beforeRestart.userId,
       beforeRestart.sessionId,
+      beforeRestart.setCommandId,
     ])
 
     expect(afterRestart.pid).not.toBe(beforeRestart.pid)
     expect(afterRestart.userId).toBe(beforeRestart.userId)
     expect(afterRestart.sessionId).toBe(beforeRestart.sessionId)
+    expect(afterRestart.setCommandId).toBe(beforeRestart.setCommandId)
     expect(afterRestart.session).toEqual(beforeRestart.session)
     expect(afterRestart.today).toEqual(beforeRestart.today)
     expect(afterRestart.today).toEqual({

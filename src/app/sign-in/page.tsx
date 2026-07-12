@@ -11,7 +11,12 @@ export const metadata: Metadata = { title: 'Sign in' }
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ created?: string; deleted?: string; signedOut?: string }>
+  searchParams: Promise<{
+    claimed?: string
+    created?: string
+    deleted?: string
+    signedOut?: string
+  }>
 }) {
   const installation = await getInstallationStatus()
   if (installation.kind === 'open') redirect('/bootstrap')
@@ -32,6 +37,12 @@ export default async function SignInPage({
         {query.created === '1' ? (
           <p className={styles.notice} role="status">
             Owner account created. Sign in to continue.
+          </p>
+        ) : null}
+
+        {query.claimed === '1' ? (
+          <p className={styles.notice} role="status">
+            The instance is initialized. Sign in with the owner credentials you chose.
           </p>
         ) : null}
 

@@ -4,6 +4,7 @@ import { nextCookies } from 'better-auth/next-js'
 import { getServerConfig } from '@/platform/config/server'
 import { getDb } from '@/platform/db/client'
 import { account, session, user, verification } from '@/platform/db/schema'
+import { authClientAddressHeaders, authTrustedProxyCidrs } from './client-address'
 
 function createAuth() {
   const config = getServerConfig()
@@ -20,12 +21,16 @@ function createAuth() {
     }),
     emailAndPassword: {
       enabled: true,
-      disableSignUp: false,
+      disableSignUp: true,
       autoSignIn: false,
       minPasswordLength: 12,
       maxPasswordLength: 128,
     },
     advanced: {
+      ipAddress: {
+        ipAddressHeaders: [...authClientAddressHeaders],
+        trustedProxies: [...authTrustedProxyCidrs],
+      },
       useSecureCookies: config.secureCookies,
       defaultCookieAttributes: {
         httpOnly: true,

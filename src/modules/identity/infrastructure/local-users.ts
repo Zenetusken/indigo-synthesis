@@ -7,6 +7,7 @@ import {
 import type {
   CreateLocalUserInput,
   LocalUser,
+  LocalUserReader,
 } from '@/modules/identity/application/local-users'
 import {
   createLocalUser,
@@ -110,16 +111,16 @@ export async function createLocalUserAsOwner(
   return createLocalUser(actor, input, postgresLocalUserCreator)
 }
 
-export async function listLocalUsersAsOwner(actor: AuthenticatedActor) {
-  if (actor.role !== 'owner') throw new OwnerAuthorizationError()
-
-  return getDb()
-    .select({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      createdAt: user.createdAt,
-    })
-    .from(user)
-    .orderBy(asc(user.createdAt))
+export const postgresLocalUserReader: LocalUserReader = {
+  list() {
+    return getDb()
+      .select({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        createdAt: user.createdAt,
+      })
+      .from(user)
+      .orderBy(asc(user.createdAt))
+  },
 }

@@ -1,5 +1,8 @@
+import { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
 import type { DevelopmentExerciseId } from './development-fixture'
 import { UNREVIEWED_DEVELOPMENT_ADJUSTMENT_POLICY } from './development-fixture'
+
+export { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
 
 export type DevelopmentAdjustmentSetFact =
   | {
@@ -51,8 +54,6 @@ export class InvalidAdjustmentInputError extends Error {
     this.name = 'InvalidAdjustmentInputError'
   }
 }
-
-export const MAX_CANONICAL_LOAD_GRAMS = 1_000_000
 
 const developmentNotice =
   'UNREVIEWED DEVELOPMENT FIXTURE — the RPE threshold, increment, percentage bound, and decision logic are not human-reviewed coaching guidance.'

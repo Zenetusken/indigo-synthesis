@@ -1,4 +1,3 @@
-import { lstat, open, readFile, unlink } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import {
   issueOwnerRecovery,
@@ -6,12 +5,19 @@ import {
   redeemOwnerRecovery,
 } from '@/modules/identity/recovery/owner-recovery'
 import { closeDb } from '@/platform/db/client'
+import {
+  createOwnerSecretFile,
+  openOwnerSecretFile,
+} from '@/platform/security/owner-secret-file'
+
+const recoveryCodeFileLimitBytes = 256
+const passwordFileLimitBytes = 1_024
 
 const usage = `Usage:
   pnpm owner:recover issue --owner-email EMAIL --code-file ABSOLUTE_PATH --ttl-minutes 15
   pnpm owner:recover redeem --owner-email EMAIL --code-file ABSOLUTE_PATH --password-file ABSOLUTE_PATH
 
-Secrets are accepted only through owner-readable files, never command arguments.`
+Secrets are accepted only through owner-owned files in protected directories, never command arguments.`
 
 type ParsedCommand =
   | {
@@ -97,62 +103,74 @@ function parseCommand(arguments_: readonly string[]): ParsedCommand {
   }
 }
 
-function stripOneTerminalLineBreak(value: string): string {
-  if (value.endsWith('\r\n')) return value.slice(0, -2)
-  if (value.endsWith('\n')) return value.slice(0, -1)
-  return value
-}
-
-async function readOwnerOnlySecret(path: string, label: string): Promise<string> {
-  const metadata = await lstat(path)
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
-    throw new Error(`${label} must be a regular file, not a link.`)
-  }
-  if ((metadata.mode & 0o077) !== 0) {
-    throw new Error(`${label} must not be readable or writable by group or other users.`)
-  }
-
-  const value = stripOneTerminalLineBreak(await readFile(path, 'utf8'))
-  if (!value || value.includes('\n') || value.includes('\r')) {
-    throw new Error(`${label} must contain exactly one non-empty line.`)
-  }
-  return value
-}
-
 async function issue(command: Extract<ParsedCommand, { kind: 'issue' }>): Promise<void> {
-  const codeFile = await open(command.codeFile, 'wx', 0o600)
+  const codeFile = await createOwnerSecretFile({
+    path: command.codeFile,
+    label: 'Recovery code file',
+    maxBytes: recoveryCodeFileLimitBytes,
+  })
   try {
     const issued = await issueOwnerRecovery({
       ownerEmail: command.ownerEmail,
       ttlMinutes: command.ttlMinutes,
     })
-    await codeFile.writeFile(`${issued.code}\n`, 'utf8')
-    await codeFile.sync()
+    await codeFile.writeSecret(issued.code)
     console.log(
       `Recovery code written to ${command.codeFile}; it expires at ${issued.expiresAt.toISOString()}.`,
     )
   } catch (error) {
-    await codeFile.close()
-    await unlink(command.codeFile).catch(() => undefined)
+    try {
+      await codeFile.discard()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Owner recovery issuance failed and its reserved output path changed before cleanup.',
+      )
+    }
     throw error
+  } finally {
+    await codeFile.close()
   }
-  await codeFile.close()
 }
 
 async function redeem(
   command: Extract<ParsedCommand, { kind: 'redeem' }>,
 ): Promise<void> {
-  const code = await readOwnerOnlySecret(command.codeFile, 'Recovery code file')
-  const newPassword = await readOwnerOnlySecret(command.passwordFile, 'Password file')
-  const redeemed = await redeemOwnerRecovery({
-    ownerEmail: command.ownerEmail,
-    code,
-    newPassword,
+  const codeFile = await openOwnerSecretFile({
+    path: command.codeFile,
+    label: 'Recovery code file',
+    maxBytes: recoveryCodeFileLimitBytes,
   })
-  await unlink(command.codeFile)
-  console.log(
-    `Owner credential recovered; ${redeemed.revokedSessionCount} existing owner session(s) revoked.`,
-  )
+  let passwordFile: Awaited<ReturnType<typeof openOwnerSecretFile>> | undefined
+  try {
+    passwordFile = await openOwnerSecretFile({
+      path: command.passwordFile,
+      label: 'Password file',
+      maxBytes: passwordFileLimitBytes,
+    })
+    const [code, newPassword] = await Promise.all([
+      codeFile.readSecret(),
+      passwordFile.readSecret(),
+    ])
+    const redeemed = await redeemOwnerRecovery({
+      ownerEmail: command.ownerEmail,
+      code,
+      newPassword,
+    })
+
+    try {
+      await codeFile.consume()
+    } catch (error) {
+      console.warn(
+        `Owner credential recovered, but the recovery code path was not removed safely: ${error instanceof Error ? error.message : 'unknown cleanup error'}. The database code is already invalid; inspect the path manually.`,
+      )
+    }
+    console.log(
+      `Owner credential recovered; ${redeemed.revokedSessionCount} existing owner session(s) revoked.`,
+    )
+  } finally {
+    await Promise.all([codeFile.close(), passwordFile?.close()])
+  }
 }
 
 async function main(): Promise<void> {

@@ -3,7 +3,8 @@ import { Pool } from 'pg'
 import { getServerConfig } from '@/platform/config/server'
 import * as schema from './schema'
 
-type Database = NodePgDatabase<typeof schema>
+export type Database = NodePgDatabase<typeof schema>
+export type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0]
 
 const globalDatabase = globalThis as typeof globalThis & {
   indigoPool?: Pool

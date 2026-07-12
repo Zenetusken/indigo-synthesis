@@ -12,6 +12,7 @@ import {
   verification,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
+import { withCredentialLifecycleLock } from '../infrastructure/credential-lifecycle-lock'
 
 const recoveryIdentifierPrefix = 'indigo:owner-recovery:'
 const recoveryValueVersion = 'owner-recovery-v1'
@@ -191,65 +192,79 @@ export async function redeemOwnerRecovery(input: {
   const now = input.now ?? new Date()
   const passwordHash = await hashPassword(input.newPassword)
 
-  const outcome = await getDb().transaction(
-    async (transaction) => {
-      const owner = await lockAndResolveOwner(transaction, ownerEmail)
-      const identifier = recoveryIdentifier(owner.id)
-      const [pending] = await transaction
-        .select()
-        .from(verification)
-        .where(eq(verification.identifier, identifier))
-        .for('update')
-        .limit(1)
+  const [installation] = await getDb()
+    .select({ ownerUserId: installationState.ownerUserId })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+    .limit(1)
+  if (!installation?.ownerUserId) {
+    throw new OwnerRecoveryError(
+      'owner-recovery.instance-open',
+      'This instance has no installed owner. Use first-owner bootstrap instead.',
+    )
+  }
 
-      if (!pending) return { status: 'invalid' as const }
-      if (pending.expiresAt <= now) {
+  const outcome = await withCredentialLifecycleLock(installation.ownerUserId, () =>
+    getDb().transaction(
+      async (transaction) => {
+        const owner = await lockAndResolveOwner(transaction, ownerEmail)
+        const identifier = recoveryIdentifier(owner.id)
+        const [pending] = await transaction
+          .select()
+          .from(verification)
+          .where(eq(verification.identifier, identifier))
+          .for('update')
+          .limit(1)
+
+        if (!pending) return { status: 'invalid' as const }
+        if (pending.expiresAt <= now) {
+          await transaction.delete(verification).where(eq(verification.id, pending.id))
+          return { status: 'invalid' as const }
+        }
+        if (!codeMatchesStoredValue(input.code, pending.value)) {
+          return { status: 'invalid' as const }
+        }
+
+        const [credential] = await transaction
+          .update(account)
+          .set({ password: passwordHash, updatedAt: now })
+          .where(and(eq(account.userId, owner.id), eq(account.providerId, 'credential')))
+          .returning({ id: account.id })
+
+        if (!credential) {
+          throw new OwnerRecoveryError(
+            'owner-recovery.credential-missing',
+            'The installed owner has no password credential to recover.',
+          )
+        }
+
         await transaction.delete(verification).where(eq(verification.id, pending.id))
-        return { status: 'invalid' as const }
-      }
-      if (!codeMatchesStoredValue(input.code, pending.value)) {
-        return { status: 'invalid' as const }
-      }
+        const revokedSessions = await transaction
+          .delete(session)
+          .where(eq(session.userId, owner.id))
+          .returning({ id: session.id })
+        await transaction.insert(auditEvents).values({
+          id: newUuidV7(),
+          actorUserId: null,
+          subjectUserId: owner.id,
+          eventType: 'owner-recovery-redeemed',
+          entityType: 'owner-recovery',
+          entityId: pending.id,
+          metadata: {
+            channel: 'host-local-cli',
+            sessionsRevoked: revokedSessions.length,
+          },
+          createdAt: now,
+        })
 
-      const [credential] = await transaction
-        .update(account)
-        .set({ password: passwordHash, updatedAt: now })
-        .where(and(eq(account.userId, owner.id), eq(account.providerId, 'credential')))
-        .returning({ id: account.id })
-
-      if (!credential) {
-        throw new OwnerRecoveryError(
-          'owner-recovery.credential-missing',
-          'The installed owner has no password credential to recover.',
-        )
-      }
-
-      await transaction.delete(verification).where(eq(verification.id, pending.id))
-      const revokedSessions = await transaction
-        .delete(session)
-        .where(eq(session.userId, owner.id))
-        .returning({ id: session.id })
-      await transaction.insert(auditEvents).values({
-        id: newUuidV7(),
-        actorUserId: null,
-        subjectUserId: owner.id,
-        eventType: 'owner-recovery-redeemed',
-        entityType: 'owner-recovery',
-        entityId: pending.id,
-        metadata: {
-          channel: 'host-local-cli',
-          sessionsRevoked: revokedSessions.length,
-        },
-        createdAt: now,
-      })
-
-      return {
-        status: 'redeemed' as const,
-        ownerUserId: owner.id,
-        revokedSessionCount: revokedSessions.length,
-      }
-    },
-    { isolationLevel: 'serializable' },
+        return {
+          status: 'redeemed' as const,
+          ownerUserId: owner.id,
+          revokedSessionCount: revokedSessions.length,
+        }
+      },
+      { isolationLevel: 'serializable' },
+    ),
   )
 
   if (outcome.status === 'invalid') {

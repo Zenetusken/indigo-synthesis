@@ -9,6 +9,10 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.{ts,tsx}', 'test/architecture/**/*.test.ts'],
+    include: [
+      'src/**/*.test.{ts,tsx}',
+      'test/architecture/**/*.test.ts',
+      'test/e2e/support/**/*.test.ts',
+    ],
   },
 })

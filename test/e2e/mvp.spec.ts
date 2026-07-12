@@ -1,5 +1,20 @@
 import { expect, type Page, test } from '@playwright/test'
 import { Client } from 'pg'
+import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
+import {
+  type ExecutablePrescriptionProjection,
+  executablePrescriptionHash,
+} from '@/modules/programs/domain/executable-prescription'
+import { resetServerConfigForTests } from '@/platform/config/server'
+import { closeDb } from '@/platform/db/client'
+
+// Server-side modules read DATABASE_URL and BETTER_AUTH_SECRET; the E2E harness
+// exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET. Point
+// the test process at the same database and secret before any server-side import
+// resolves its configuration.
+process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
+process.env.BETTER_AUTH_SECRET = process.env.E2E_BETTER_AUTH_SECRET
+resetServerConfigForTests()
 
 const owner = {
   name: 'E2E Owner',
@@ -31,8 +46,14 @@ async function clearApplicationData(): Promise<void> {
 }
 
 async function bootstrapAndSignIn(page: Page): Promise<void> {
+  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  await closeDb()
+
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Claim this instance.' })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Initialize this instance.' }),
+  ).toBeVisible()
+  await page.getByLabel('Host-issued bootstrap code').fill(issued.code)
   await page.getByLabel('Name').fill(owner.name)
   await page.getByLabel('Local sign-in email').fill(owner.email)
   await page.locator('input[name="password"]').fill(owner.password)
@@ -130,6 +151,24 @@ test.beforeEach(async () => {
   await clearApplicationData()
 })
 
+test('rejects bootstrap with an invalid or missing code', async ({ page }) => {
+  await page.goto('/')
+  await expect(
+    page.getByRole('heading', { name: 'Initialize this instance.' }),
+  ).toBeVisible()
+
+  await page.getByLabel('Name').fill(owner.name)
+  await page.getByLabel('Local sign-in email').fill(owner.email)
+  await page.locator('input[name="password"]').fill(owner.password)
+  await page.getByLabel('Confirm password').fill(owner.password)
+  await page.getByRole('button', { name: 'Create owner account' }).click()
+
+  await expect(page.locator('form [role="alert"]')).toContainText(
+    'Owner account not created',
+  )
+  await expect(page).toHaveURL(/\/bootstrap/)
+})
+
 test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await bootstrapAndSignIn(page)
   await completeSetup(page)
@@ -215,7 +254,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     programs: { revisions: unknown[] }[]
     sessions: unknown[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.1.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.2.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)
@@ -321,6 +360,35 @@ test('an ineligible advanced prescription is denied before session creation', as
 
   const client = await databaseClient()
   try {
+    const revision = await client.query<{
+      id: string
+      output_snapshot: ExecutablePrescriptionProjection
+    }>("SELECT id, output_snapshot FROM program_revision WHERE status = 'draft'")
+    const draftRevision = revision.rows[0]
+    if (!draftRevision) throw new Error('Expected a draft revision before activation.')
+    const advancedSnapshot: ExecutablePrescriptionProjection = {
+      ...draftRevision.output_snapshot,
+      workouts: draftRevision.output_snapshot.workouts.map((workout) => ({
+        ...workout,
+        exercises:
+          workout.scheduledDate === todayIso()
+            ? workout.exercises.map((exercise) => ({
+                ...exercise,
+                safetyTier: 'advanced',
+              }))
+            : workout.exercises,
+      })),
+    }
+    await client.query(
+      `UPDATE program_revision
+       SET output_snapshot = $1::jsonb, output_hash = $2
+       WHERE id = $3`,
+      [
+        JSON.stringify(advancedSnapshot),
+        executablePrescriptionHash(advancedSnapshot),
+        draftRevision.id,
+      ],
+    )
     await client.query(
       `UPDATE exercise_prescription
        SET safety_tier = 'advanced'
@@ -481,6 +549,100 @@ test('imperial display round-trips canonical grams through workout history', asy
   }
 })
 
+test('a set submission with an invalid value preserves entries and shows a focused alert', async ({
+  page,
+}) => {
+  await bootstrapAndSignIn(page)
+  await completeSetup(page)
+  await generateAndActivate(page)
+  await page.getByRole('button', { name: 'Start workout' }).click()
+  await expect(page).toHaveURL(/\/workouts\//)
+
+  const repsInput = page.getByLabel('Actual reps').first()
+  const button = page.getByRole('button', { name: 'Complete set' }).first()
+
+  // Bypass HTML5 max validation to reach server-side schema validation.
+  await page.evaluate(() => {
+    const input = document.querySelector(
+      'input[name="actualRepetitions"]',
+    ) as HTMLInputElement | null
+    if (input) {
+      input.removeAttribute('max')
+      input.value = '999'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  })
+  await expect(repsInput).toHaveValue('999')
+  await button.click()
+
+  const alert = page.getByRole('alert').filter({ hasText: 'Command not applied' }).first()
+  await expect(alert).toBeVisible()
+  await expect(alert).toBeFocused()
+  await expect(alert).toContainText('Check the entered values')
+
+  // Correct the value and complete the set successfully.
+  const remainingBefore = await page.getByRole('button', { name: 'Complete set' }).count()
+  await repsInput.fill(String(5))
+  await button.click()
+  await expect(page.getByRole('button', { name: 'Complete set' })).toHaveCount(
+    remainingBefore - 1,
+  )
+})
+
+test('abandoning a workout requires a reason and acknowledgement and persists the reason', async ({
+  page,
+}) => {
+  await bootstrapAndSignIn(page)
+  await completeSetup(page)
+  await generateAndActivate(page)
+  await page.getByRole('button', { name: 'Start workout' }).click()
+  await expect(page).toHaveURL(/\/workouts\//)
+
+  await page.getByRole('button', { name: 'Abandon workout' }).click()
+  await expect(page.getByLabel('Factual reason for abandoning (required)')).toBeVisible()
+
+  // Cancel hides the panel without changing state.
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByLabel('Factual reason for abandoning (required)')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Abandon workout' })).toBeVisible()
+
+  // Reopen and attempt confirmation without a reason.
+  await page.getByRole('button', { name: 'Abandon workout' }).click()
+  await page.getByRole('button', { name: 'Confirm abandon' }).click()
+  const alert = page.getByRole('alert').filter({ hasText: 'Abandon not confirmed' })
+  await expect(alert).toBeVisible()
+  await expect(alert).toBeFocused()
+  await expect(alert).toContainText('Enter a factual reason')
+
+  // Fill the reason but omit the acknowledgement.
+  await page
+    .getByLabel('Factual reason for abandoning (required)')
+    .fill('Gym closed early')
+  await page.getByRole('button', { name: 'Confirm abandon' }).click()
+  await expect(alert).toBeVisible()
+  await expect(alert).toBeFocused()
+  await expect(alert).toContainText('does not assess or clear symptoms')
+
+  // Confirm with both required fields.
+  await page
+    .getByLabel('I understand that this product does not assess or clear symptoms.')
+    .check()
+  await page.getByRole('button', { name: 'Confirm abandon' }).click()
+  await expect(page).toHaveURL(/\/today$/)
+
+  const client = await databaseClient()
+  try {
+    const result = await client.query<{
+      status: string
+      abandoned_reason: string | null
+    }>('SELECT status, abandoned_reason FROM workout_session LIMIT 1')
+    expect(result.rows[0]?.status).toBe('abandoned')
+    expect(result.rows[0]?.abandoned_reason).toBe('Gym closed early')
+  } finally {
+    await client.end()
+  }
+})
+
 test('the core workout reflows and remains keyboard-operable on mobile', async ({
   page,
 }) => {
@@ -499,11 +661,15 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   await page.emulateMedia({ reducedMotion: 'reduce' })
 
   const titles = new Set<string>()
+  const mobileBootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  await closeDb()
+
   await page.goto('/')
   await expect(page).toHaveTitle('Claim this instance | Indigo Synthesis')
   titles.add(await page.title())
   await expectNoHorizontalOverflow(page)
 
+  await page.getByLabel('Host-issued bootstrap code').fill(mobileBootstrap.code)
   await page.getByLabel('Name').fill(owner.name)
   await page.getByLabel('Local sign-in email').fill(owner.email)
   await page.locator('input[name="password"]').fill(owner.password)

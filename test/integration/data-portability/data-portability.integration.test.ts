@@ -1,5 +1,4 @@
 import { count, eq, sql } from 'drizzle-orm'
-import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
@@ -11,12 +10,20 @@ import {
 } from '@/modules/data-portability/application/deletion'
 import { createDataExport } from '@/modules/data-portability/application/export'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
+import {
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/modules/identity/bootstrap/owner-bootstrap'
 import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
+import {
+  createDisposableIntegrationDatabase,
+  type DisposableIntegrationDatabase,
+} from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
 import {
   adjustmentDecisions,
@@ -36,6 +43,7 @@ import {
   sessionFeedback,
   setPrescriptions,
   strengthBaselines,
+  trainingCommandReceipts,
   user,
   verification,
   workoutSessions,
@@ -55,19 +63,10 @@ const abandonedSessionId = newUuidV7()
 const activeSessionId = newUuidV7()
 const completedSessionId = newUuidV7()
 
-let sourceDatabaseUrl: string
-let disposableDatabaseName: string
-let administrationClient: Client
+let integrationDatabase: DisposableIntegrationDatabase | undefined
 let actor: AuthenticatedActor
 let otherUser: { readonly id: string; readonly email: string }
 let bootstrapToken: string
-
-function quotedIdentifier(identifier: string): string {
-  if (!/^[a-z0-9_]+$/.test(identifier)) {
-    throw new Error(`Unsafe PostgreSQL identifier: ${identifier}`)
-  }
-  return `"${identifier}"`
-}
 
 async function authRequest(path: string, body: Record<string, unknown>) {
   const origin = getServerConfig().appOrigin
@@ -182,6 +181,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
         revisionId: firstRevisionId,
         scheduledDate: '2026-07-09',
         ordinal: 1,
+        programOrdinal: 1,
         slotCode: 'A',
         name: 'Superseded prescription session',
       },
@@ -190,6 +190,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
         revisionId: secondRevisionId,
         scheduledDate: '2026-07-11',
         ordinal: 1,
+        programOrdinal: 1,
         slotCode: 'A',
         name: 'Active prescription session',
       },
@@ -198,6 +199,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
         revisionId: secondRevisionId,
         scheduledDate: '2026-07-12',
         ordinal: 2,
+        programOrdinal: 2,
         slotCode: 'B',
         name: 'Completed prescription session',
       },
@@ -363,6 +365,16 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           .where(eq(workoutSessions.id, fixture.sessionId))
       }
     }
+    await transaction.insert(trainingCommandReceipts).values({
+      commandId: 'complete-completed',
+      userId,
+      commandType: 'complete-workout',
+      sessionId: completedSessionId,
+      targetId: completedSessionId,
+      requestHash: 'canonical-completion-request-hash',
+      resultSnapshot: { status: 'succeeded' },
+      createdAt: new Date('2026-07-10T12:30:00.000Z'),
+    })
     await transaction.insert(auditEvents).values({
       id: newUuidV7(),
       actorUserId: userId,
@@ -383,39 +395,25 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  const configuredDatabaseUrl = process.env.DATABASE_URL
-  if (!configuredDatabaseUrl) {
-    throw new Error('DATABASE_URL is required for portability integration tests.')
-  }
-
-  sourceDatabaseUrl = configuredDatabaseUrl
-  disposableDatabaseName = `indigo_portability_${process.pid}_${Date.now()}`
-  administrationClient = new Client({ connectionString: sourceDatabaseUrl })
-  await administrationClient.connect()
-  await administrationClient.query(
-    `CREATE DATABASE ${quotedIdentifier(disposableDatabaseName)}`,
-  )
-
-  const disposableUrl = new URL(sourceDatabaseUrl)
-  disposableUrl.pathname = `/${disposableDatabaseName}`
-  process.env.DATABASE_URL = disposableUrl.toString()
+  integrationDatabase = createDisposableIntegrationDatabase({
+    administrationUrl: process.env.INTEGRATION_ADMIN_DATABASE_URL,
+    suite: 'data_portability',
+  })
+  await integrationDatabase.create()
+  integrationDatabase.activateDatabaseUrl()
   resetServerConfigForTests()
   resetAuthForTests()
   await closeDb()
   await migrateDatabase()
 
-  const bootstrap = await authRequest('/sign-up/email', {
+  const bootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const createdOwner = await createOwnerWithBootstrapCode({
     name: 'Portability Owner',
     email: 'portability-owner@example.test',
     password: ownerPassword,
+    code: bootstrap.code,
   })
-  const body = (await bootstrap.json()) as {
-    user?: { id: string; name: string; email: string }
-  }
-  if (!bootstrap.ok || !body.user) {
-    throw new Error('Could not bootstrap portability owner.')
-  }
-  actor = { ...body.user, userId: body.user.id, role: 'owner' }
+  actor = { ...createdOwner, userId: createdOwner.id, role: 'owner' }
   const signIn = await authRequest('/sign-in/email', {
     email: actor.email,
     password: ownerPassword,
@@ -436,26 +434,9 @@ beforeAll(async () => {
 afterAll(async () => {
   resetAuthForTests()
   await closeDb()
-  if (sourceDatabaseUrl) {
-    process.env.DATABASE_URL = sourceDatabaseUrl
-    resetServerConfigForTests()
-  }
-
-  if (administrationClient) {
-    try {
-      await administrationClient.query(
-        `SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-         WHERE datname = $1 AND pid <> pg_backend_pid()`,
-        [disposableDatabaseName],
-      )
-      await administrationClient.query(
-        `DROP DATABASE IF EXISTS ${quotedIdentifier(disposableDatabaseName)}`,
-      )
-    } finally {
-      await administrationClient.end()
-    }
-  }
+  integrationDatabase?.restoreDatabaseUrl()
+  resetServerConfigForTests()
+  await integrationDatabase?.cleanup()
 })
 
 describe('subject export and exact instance reset', () => {
@@ -489,6 +470,13 @@ describe('subject export and exact instance reset', () => {
       ruleVersion: 'development-adjustment-v1',
       reasonCode: 'all-sets-within-rpe-bound',
     })
+    expect(completed?.commandReceipts).toEqual([
+      expect.objectContaining({
+        commandId: 'complete-completed',
+        commandType: 'complete-workout',
+        requestHash: 'canonical-completion-request-hash',
+      }),
+    ])
     expect(archive.profile.safetyHolds).toHaveLength(1)
     expect(Object.keys(archive.manifest.hashes).sort()).toEqual(
       ['auditEvents', 'identity', 'profile', 'programs', 'provenance', 'sessions'].sort(),
@@ -628,7 +616,7 @@ describe('subject export and exact instance reset', () => {
 
   it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(22)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(24)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
@@ -647,9 +635,11 @@ describe('subject export and exact instance reset', () => {
       workoutSessions: 3,
       sessionExercises: 3,
       performedSets: 3,
+      programRevisionLineage: 0,
+      trainingCommandReceipts: 1,
       sessionFeedback: 1,
       adjustmentDecisions: 1,
-      auditEvents: 2,
+      auditEvents: 4,
       deletionPlans: 1,
     })
 

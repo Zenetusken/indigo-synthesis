@@ -1,3 +1,4 @@
+import { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
 import { type CanonicalValue, canonicalSha256 } from './canonical'
 import type {
   ContentHash,
@@ -253,10 +254,14 @@ function normalizeStartingLoads(
         `Starting load supplied more than once for ${value.exerciseId}.`,
       )
     }
-    if (!Number.isSafeInteger(value.loadGrams) || value.loadGrams < 0) {
+    if (
+      !Number.isSafeInteger(value.loadGrams) ||
+      value.loadGrams < 0 ||
+      value.loadGrams > MAX_CANONICAL_LOAD_GRAMS
+    ) {
       throw new InvalidProgramInputError(
         'input.invalid-starting-load',
-        'Starting loads must be non-negative integer grams.',
+        `Starting loads must be integer grams between 0 and ${MAX_CANONICAL_LOAD_GRAMS}.`,
       )
     }
 

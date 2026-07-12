@@ -34,10 +34,10 @@ export default async function BootstrapPage({
         ) : null}
 
         <header className={styles.heading}>
-          <h1 id="bootstrap-heading">Claim this instance.</h1>
+          <h1 id="bootstrap-heading">Initialize this instance.</h1>
           <p>
-            This account becomes the local instance owner. Public signup closes after
-            creation.
+            Issue a one-use code from the host, then create the local owner. Public signup
+            is never exposed.
           </p>
         </header>
 

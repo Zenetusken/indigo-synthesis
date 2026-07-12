@@ -1,5 +1,10 @@
 import { eq } from 'drizzle-orm'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
+import {
+  EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  type ExecutablePrescriptionProjection,
+  executablePrescriptionHash,
+} from '@/modules/programs/domain/executable-prescription'
 import { getDb } from '@/platform/db/client'
 import {
   athleteEquipment,
@@ -67,27 +72,75 @@ export async function seedCoherentProgram(
     userId,
     schedule: [TEST_TODAY, TEST_NEXT_DAY],
   }
-  const outputSnapshot = {
-    fixture: 'training-integration',
+  const normalizedInputHash = canonicalSha256(normalizedInput)
+  const outputSnapshot: ExecutablePrescriptionProjection = {
+    hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+    engineVersion: 'training-integration-v1',
+    methodology: {
+      id: 'development.methodology-fixture',
+      version: '0.0.1-development',
+      reviewStatus: 'development',
+    },
+    template: {
+      id: 'development.full-body-three-day',
+      version: '0.0.1-development',
+      reviewStatus: 'development',
+    },
+    normalizedInputHash,
     workouts: [
       {
+        scheduledDate: TEST_TODAY,
         ordinal: 1,
-        date: TEST_TODAY,
-        exerciseCode: 'development.back-squat',
-        targetLoadGrams: TEST_TARGET_LOAD_GRAMS,
-        targetRepetitions: TEST_TARGET_REPETITIONS,
+        programOrdinal: 1,
+        slotCode: 'A',
+        name: 'Current development fixture',
+        exercises: [
+          {
+            exerciseCode: 'development.back-squat',
+            exerciseName: 'Back squat — development fixture',
+            ordinal: 1,
+            safetyTier: 'standard',
+            rationaleCode: 'development.integration-baseline',
+            sets: [
+              {
+                ordinal: 1,
+                setKind: 'working',
+                targetLoadGrams: TEST_TARGET_LOAD_GRAMS,
+                targetRepetitions: TEST_TARGET_REPETITIONS,
+                restSeconds: 120,
+              },
+            ],
+          },
+        ],
       },
       {
+        scheduledDate: TEST_NEXT_DAY,
         ordinal: 2,
-        date: TEST_NEXT_DAY,
-        exerciseCode: 'development.back-squat',
-        targetLoadGrams: TEST_TARGET_LOAD_GRAMS,
-        targetRepetitions: TEST_TARGET_REPETITIONS,
+        programOrdinal: 2,
+        slotCode: 'B',
+        name: 'Next development fixture',
+        exercises: [
+          {
+            exerciseCode: 'development.back-squat',
+            exerciseName: 'Back squat — development fixture',
+            ordinal: 1,
+            safetyTier: 'standard',
+            rationaleCode: 'development.integration-baseline',
+            sets: [
+              {
+                ordinal: 1,
+                setKind: 'working',
+                targetLoadGrams: TEST_TARGET_LOAD_GRAMS,
+                targetRepetitions: TEST_TARGET_REPETITIONS,
+                restSeconds: 120,
+              },
+            ],
+          },
+        ],
       },
     ],
   }
-  const normalizedInputHash = canonicalSha256(normalizedInput)
-  const outputHash = canonicalSha256({ normalizedInputHash, outputSnapshot })
+  const outputHash = executablePrescriptionHash(outputSnapshot)
 
   await getDb().transaction(async (transaction) => {
     await transaction.insert(athleteProfiles).values({
@@ -155,6 +208,7 @@ export async function seedCoherentProgram(
         revisionId,
         scheduledDate: TEST_TODAY,
         ordinal: 1,
+        programOrdinal: 1,
         slotCode: 'A',
         name: 'Current development fixture',
       },
@@ -163,6 +217,7 @@ export async function seedCoherentProgram(
         revisionId,
         scheduledDate: TEST_NEXT_DAY,
         ordinal: 2,
+        programOrdinal: 2,
         slotCode: 'B',
         name: 'Next development fixture',
       },

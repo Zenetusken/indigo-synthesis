@@ -46,7 +46,7 @@ Deliver:
 
 - Next.js 16 + TypeScript 6 build;
 - PostgreSQL 18 connection and one committed migration authority;
-- Better Auth first-owner bootstrap and session;
+- host-capability first-owner bootstrap and Better Auth session;
 - loopback-development versus HTTPS-network trust-boundary validation;
 - module dependency test;
 - configuration validation;

@@ -2,6 +2,7 @@ import { and, asc, eq, isNull } from 'drizzle-orm'
 import { z } from 'zod'
 import { formatIsoDateInTimezone } from '@/modules/athletes/domain/time'
 import type { DisplayUnits } from '@/modules/athletes/domain/units'
+import { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
 import { getDb } from '@/platform/db/client'
 import {
   athleteEquipment,
@@ -54,7 +55,7 @@ export const athleteSetupSchema = z
     equipment: z.array(z.enum(equipmentCodes)).min(1),
     startingLoads: z.record(
       z.enum(exerciseCodes),
-      z.number().int().min(0).max(1_000_000),
+      z.number().int().min(0).max(MAX_CANONICAL_LOAD_GRAMS),
     ),
   })
   .superRefine((input, context) => {

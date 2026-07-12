@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
 import { DEVELOPMENT_EXERCISE_IDS } from './development-fixture'
 import {
   evaluateContentActivation,
@@ -144,6 +145,27 @@ describe('development program generation', () => {
         'development',
       ),
     ).toThrow(/Missing explicit starting loads/)
+  })
+
+  it('enforces the shared canonical integer-gram bounds at generator input', () => {
+    const input = validInput()
+    const withFirstLoad = (loadGrams: number): ProgramGenerationInput => ({
+      ...input,
+      startingLoads: input.startingLoads.map((entry, index) =>
+        index === 0 ? { ...entry, loadGrams } : entry,
+      ),
+    })
+
+    expect(() =>
+      generateDevelopmentProgram(
+        withFirstLoad(MAX_CANONICAL_LOAD_GRAMS + 1),
+        'development',
+      ),
+    ).toThrow(InvalidProgramInputError)
+    expect(
+      generateDevelopmentProgram(withFirstLoad(MAX_CANONICAL_LOAD_GRAMS), 'development')
+        .status,
+    ).toBe('created')
   })
 })
 

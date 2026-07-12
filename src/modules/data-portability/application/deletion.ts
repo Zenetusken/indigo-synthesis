@@ -20,6 +20,7 @@ import {
   installationState,
   performedSets,
   plannedWorkouts,
+  programRevisionLineage,
   programRevisions,
   programs,
   safetyHolds,
@@ -28,6 +29,7 @@ import {
   sessionFeedback,
   setPrescriptions,
   strengthBaselines,
+  trainingCommandReceipts,
   user,
   verification,
   workoutSessions,
@@ -48,12 +50,14 @@ export type InstanceResetCounts = {
   readonly safetyHolds: number
   readonly programs: number
   readonly programRevisions: number
+  readonly programRevisionLineage: number
   readonly plannedWorkouts: number
   readonly exercisePrescriptions: number
   readonly setPrescriptions: number
   readonly workoutSessions: number
   readonly sessionExercises: number
   readonly performedSets: number
+  readonly trainingCommandReceipts: number
   readonly sessionFeedback: number
   readonly adjustmentDecisions: number
   readonly auditEvents: number
@@ -79,12 +83,14 @@ export type SubjectDeletionCounts = {
   readonly safetyHolds: number
   readonly programs: number
   readonly programRevisions: number
+  readonly programRevisionLineage: number
   readonly plannedWorkouts: number
   readonly exercisePrescriptions: number
   readonly setPrescriptions: number
   readonly workoutSessions: number
   readonly sessionExercises: number
   readonly performedSets: number
+  readonly trainingCommandReceipts: number
   readonly sessionFeedback: number
   readonly adjustmentDecisions: number
   readonly auditEventsDeleted: number
@@ -128,12 +134,14 @@ async function countInstanceRows(database: Executable): Promise<InstanceResetCou
       (SELECT count(*)::int FROM safety_hold) AS "safetyHolds",
       (SELECT count(*)::int FROM program) AS programs,
       (SELECT count(*)::int FROM program_revision) AS "programRevisions",
+      (SELECT count(*)::int FROM program_revision_lineage) AS "programRevisionLineage",
       (SELECT count(*)::int FROM planned_workout) AS "plannedWorkouts",
       (SELECT count(*)::int FROM exercise_prescription) AS "exercisePrescriptions",
       (SELECT count(*)::int FROM set_prescription) AS "setPrescriptions",
       (SELECT count(*)::int FROM workout_session) AS "workoutSessions",
       (SELECT count(*)::int FROM session_exercise) AS "sessionExercises",
       (SELECT count(*)::int FROM performed_set) AS "performedSets",
+      (SELECT count(*)::int FROM training_command_receipt) AS "trainingCommandReceipts",
       (SELECT count(*)::int FROM session_feedback) AS "sessionFeedback",
       (SELECT count(*)::int FROM adjustment_decision) AS "adjustmentDecisions",
       (SELECT count(*)::int FROM audit_event) AS "auditEvents",
@@ -167,6 +175,9 @@ async function countSubjectRows(
       (SELECT count(*)::int FROM program WHERE user_id = ${userId}) AS programs,
       (SELECT count(*)::int FROM program_revision pr
         JOIN program p ON p.id = pr.program_id WHERE p.user_id = ${userId}) AS "programRevisions",
+      (SELECT count(*)::int FROM program_revision_lineage prl
+        JOIN program_revision pr ON pr.id = prl.revision_id
+        JOIN program p ON p.id = pr.program_id WHERE p.user_id = ${userId}) AS "programRevisionLineage",
       (SELECT count(*)::int FROM planned_workout pw
         JOIN program_revision pr ON pr.id = pw.revision_id
         JOIN program p ON p.id = pr.program_id WHERE p.user_id = ${userId}) AS "plannedWorkouts",
@@ -185,6 +196,8 @@ async function countSubjectRows(
       (SELECT count(*)::int FROM performed_set ps
         JOIN session_exercise se ON se.id = ps.session_exercise_id
         JOIN workout_session ws ON ws.id = se.session_id WHERE ws.user_id = ${userId}) AS "performedSets",
+      (SELECT count(*)::int FROM training_command_receipt
+        WHERE user_id = ${userId}) AS "trainingCommandReceipts",
       (SELECT count(*)::int FROM session_feedback sf
         JOIN workout_session ws ON ws.id = sf.session_id WHERE ws.user_id = ${userId}) AS "sessionFeedback",
       (SELECT count(*)::int FROM adjustment_decision ad
@@ -471,6 +484,18 @@ export async function executeSubjectDeletion(input: {
       } as unknown as CanonicalValue)
 
       await transaction
+        .delete(trainingCommandReceipts)
+        .where(eq(trainingCommandReceipts.userId, input.actor.userId))
+      await transaction.execute(sql`
+        DELETE FROM program_revision_lineage
+        WHERE revision_id IN (
+          SELECT pr.id
+          FROM program_revision pr
+          JOIN program p ON p.id = pr.program_id
+          WHERE p.user_id = ${input.actor.userId}
+        )
+      `)
+      await transaction
         .delete(workoutSessions)
         .where(eq(workoutSessions.userId, input.actor.userId))
       await transaction.delete(programs).where(eq(programs.userId, input.actor.userId))
@@ -609,6 +634,8 @@ export async function executeInstanceReset(input: {
         .where(eq(installationState.singleton, 1))
 
       // Product modules first, in referential order. Identity is deliberately last.
+      await transaction.delete(trainingCommandReceipts)
+      await transaction.delete(programRevisionLineage)
       await transaction.delete(workoutSessions)
       await transaction.delete(programs)
       await transaction.delete(adjustmentDecisions)

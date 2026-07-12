@@ -1,3 +1,5 @@
+import { MAX_CANONICAL_LOAD_GRAMS } from '@/modules/exercises/domain/load'
+
 export type PersistedSetForActivation = {
   readonly ordinal: number
   readonly setKind: string
@@ -18,10 +20,20 @@ export type PersistedExerciseForActivation = {
 export type PersistedWorkoutForActivation = {
   readonly scheduledDate: string
   readonly ordinal: number
+  readonly programOrdinal: number
   readonly slotCode: string
   readonly name: string
   readonly exercises: readonly PersistedExerciseForActivation[]
 }
+
+export type PrescriptionSequenceContext =
+  | { readonly kind: 'initial' }
+  | {
+      readonly kind: 'remaining'
+      readonly sourceProgramOrdinal: number
+      readonly sourceScheduledDate: string
+      readonly usedProgramOrdinals: readonly number[]
+    }
 
 export type PrescriptionActivationResult =
   | { readonly eligible: true }
@@ -47,12 +59,19 @@ function hasContiguousOrdinals(rows: readonly { readonly ordinal: number }[]): b
   return rows.every((row, index) => row.ordinal === index + 1)
 }
 
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value
+}
+
 export function validatePersistedPrescriptionForActivation(input: {
   readonly workouts: readonly PersistedWorkoutForActivation[]
   readonly availableEquipment: readonly string[]
   readonly requiredEquipmentByExercise: Readonly<
     Record<string, readonly string[] | undefined>
   >
+  readonly sequence?: PrescriptionSequenceContext
 }): PrescriptionActivationResult {
   if (input.workouts.length === 0 || !hasContiguousOrdinals(input.workouts)) {
     return invalid(
@@ -61,11 +80,35 @@ export function validatePersistedPrescriptionForActivation(input: {
     )
   }
 
+  const sequence = input.sequence ?? { kind: 'initial' }
+  const sourceProgramOrdinal =
+    sequence.kind === 'remaining' ? sequence.sourceProgramOrdinal : 0
+  const usedProgramOrdinals = new Set(
+    sequence.kind === 'remaining' ? sequence.usedProgramOrdinals : [],
+  )
+  let previousScheduledDate =
+    sequence.kind === 'remaining' ? sequence.sourceScheduledDate : null
+
+  if (
+    !Number.isInteger(sourceProgramOrdinal) ||
+    sourceProgramOrdinal < 0 ||
+    (sequence.kind === 'remaining' && !isValidIsoDate(sequence.sourceScheduledDate))
+  ) {
+    return invalid(
+      'program.prescription-invalid',
+      'The remaining-schedule lineage context is invalid.',
+    )
+  }
+
   const availableEquipment = new Set(input.availableEquipment)
 
-  for (const workout of input.workouts) {
+  for (const [workoutIndex, workout] of input.workouts.entries()) {
     if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(workout.scheduledDate) ||
+      !isValidIsoDate(workout.scheduledDate) ||
+      workout.scheduledDate <= (previousScheduledDate ?? '') ||
+      !Number.isInteger(workout.programOrdinal) ||
+      workout.programOrdinal !== sourceProgramOrdinal + workoutIndex + 1 ||
+      usedProgramOrdinals.has(workout.programOrdinal) ||
       !workout.name.trim() ||
       !['A', 'B', 'C'].includes(workout.slotCode) ||
       workout.exercises.length === 0 ||
@@ -76,6 +119,7 @@ export function validatePersistedPrescriptionForActivation(input: {
         'Every workout needs a date, name, supported slot, and ordered exercises.',
       )
     }
+    previousScheduledDate = workout.scheduledDate
 
     const exerciseCodes = new Set<string>()
     for (const exercise of workout.exercises) {
@@ -129,7 +173,7 @@ export function validatePersistedPrescriptionForActivation(input: {
           !['warmup', 'working'].includes(set.setKind) ||
           !Number.isInteger(set.targetLoadGrams) ||
           set.targetLoadGrams < 0 ||
-          set.targetLoadGrams > 1_000_000 ||
+          set.targetLoadGrams > MAX_CANONICAL_LOAD_GRAMS ||
           !Number.isInteger(set.targetRepetitions) ||
           set.targetRepetitions < 1 ||
           set.targetRepetitions > 100 ||

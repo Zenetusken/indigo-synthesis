@@ -79,14 +79,16 @@ review independence remains an external release requirement.
 
 ### Identity and access
 
-- **FR-001** A fresh instance supports first-owner bootstrap exactly once.
+- **FR-001** A fresh instance supports first-owner bootstrap exactly once and only with
+  an expiring, one-use capability issued from the host.
 - **FR-001A** Bootstrap is serialized by a singleton installation record and database
   transaction; two concurrent requests cannot create two first owners.
 - **FR-002** Authentication uses opaque, revocable, PostgreSQL-backed sessions in secure
   cookies.
 - **FR-003** Every application use case derives actor identity from the server session.
 - **FR-004** Cross-user reads and mutations are denied and tested.
-- **FR-005** Public signup is configurable and off by default after bootstrap.
+- **FR-005** Generic public signup is disabled; an authenticated owner controls creation
+  of any additional local users.
 - **FR-006** Sole-owner recovery requires local host/administrative access, an expiring
   one-use recovery code, session revocation, and a non-secret audit record. It is never a
   public browser-only reset path.

@@ -37,7 +37,8 @@ record. No software test can substitute for that approval.
 - The intended population is adults already familiar with the listed basic lifting
   movements; trainee attestation is not a medical or coaching clearance.
 - The first owner may also be the trainee and can create controlled local member
-  accounts. Public signup closes after the one-time bootstrap.
+  accounts. A host-issued capability gates the one-time bootstrap; generic public signup
+  is disabled throughout the installation lifecycle.
 - Only a clean-room, visibly unreviewed development fixture is bundled. No legacy
   branded or third-party program content is inherited.
 
@@ -45,7 +46,7 @@ record. No software test can substitute for that approval.
 
 | Journey | Live implementation | Current proof | Release qualification |
 | --- | --- | --- | --- |
-| J1 — Bootstrap and sign in | Singleton installation state, database-enforced one-time owner creation, Better Auth credential/session tables, owner-created local users, and host-local one-use owner recovery | `identity.integration.test.ts`, `owner-recovery.integration.test.ts`, and the browser journey | Recovery is intentionally administrative rather than a public reset flow |
+| J1 — Bootstrap and sign in | Host-issued one-use bootstrap capability, explicit database creation modes, atomic owner credential/installation claim, Better Auth sessions with credential-lifecycle serialization, owner-created local users, and host-local one-use recovery | `identity.integration.test.ts`, `owner-recovery.integration.test.ts`, and the browser journey | Bootstrap issuance and recovery are intentionally host-administrative rather than public reset flows |
 | J2 — Set up a trainee | Units, IANA timezone, goal, experience, three training days, session duration, equipment, starting loads, age/technique attestations, and limitation context | Browser journey plus unit conversion tests | Initial setup is immutable in the current UI; a reviewed profile-change/revision workflow is still future work |
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
 | J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop; abandon; exact PostgreSQL resume | Main browser journey, safety browser cases, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable |

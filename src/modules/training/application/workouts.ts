@@ -10,8 +10,21 @@ import {
   DEVELOPMENT_EXERCISE_IDS,
   type DevelopmentExerciseId,
 } from '@/modules/methodology/domain/development-fixture'
-import { getProgramOverview } from '@/modules/programs/application/programs'
+import {
+  activatePersistedProgramRevision,
+  getProgramOverview,
+} from '@/modules/programs/application/programs'
 import { evaluatePersistedContentEligibility } from '@/modules/programs/domain/content-eligibility'
+import {
+  EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  type ExecutablePrescriptionProjection,
+  executablePrescriptionHash,
+} from '@/modules/programs/domain/executable-prescription'
+import {
+  commandReceiptMatches,
+  type TrainingCommandRequest,
+  trainingCommandRequestHash,
+} from '@/modules/training/domain/command-receipt'
 import {
   abandonWorkoutCommandSchema,
   completeSetCommandSchema,
@@ -22,7 +35,7 @@ import {
   startWorkoutCommandSchema,
 } from '@/modules/training/domain/commands'
 import { getServerConfig } from '@/platform/config/server'
-import { getDb } from '@/platform/db/client'
+import { type DatabaseTransaction, getDb } from '@/platform/db/client'
 import {
   adjustmentDecisions,
   athleteProfiles,
@@ -30,12 +43,14 @@ import {
   exercisePrescriptions,
   performedSets,
   plannedWorkouts,
+  programRevisionLineage,
   programRevisions,
   programs,
   safetyHolds,
   sessionExercises,
   sessionFeedback,
   setPrescriptions,
+  trainingCommandReceipts,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -59,6 +74,50 @@ function parseWorkoutCommand<T>(schema: ZodType<T>, input: unknown): T {
     `Invalid workout command: ${parsed.error.issues
       .map((issue) => `${issue.path.join('.') || 'command'}: ${issue.message}`)
       .join('; ')}`,
+  )
+}
+
+async function commandWasReplayed(
+  transaction: DatabaseTransaction,
+  commandId: string,
+  request: TrainingCommandRequest,
+): Promise<boolean> {
+  const [receipt] = await transaction
+    .select()
+    .from(trainingCommandReceipts)
+    .where(eq(trainingCommandReceipts.commandId, commandId))
+    .limit(1)
+  if (!receipt) return false
+  if (commandReceiptMatches(receipt, request)) return true
+  throw new WorkoutCommandError(
+    'command.idempotency-conflict',
+    'This command identifier was already used for a different request.',
+  )
+}
+
+async function claimCommandReceipt(
+  transaction: DatabaseTransaction,
+  commandId: string,
+  request: TrainingCommandRequest,
+): Promise<boolean> {
+  const [inserted] = await transaction
+    .insert(trainingCommandReceipts)
+    .values({
+      commandId,
+      userId: request.userId,
+      commandType: request.commandType,
+      sessionId: request.sessionId,
+      targetId: request.targetId,
+      requestHash: trainingCommandRequestHash(request),
+      resultSnapshot: { status: 'succeeded' },
+    })
+    .onConflictDoNothing({ target: trainingCommandReceipts.commandId })
+    .returning({ commandId: trainingCommandReceipts.commandId })
+  if (inserted) return true
+  if (await commandWasReplayed(transaction, commandId, request)) return false
+  throw new WorkoutCommandError(
+    'command.idempotency-conflict',
+    'This command identifier was already used for a different request.',
   )
 }
 
@@ -603,7 +662,19 @@ export async function completeSet(rawInput: {
       .for('update')
       .limit(1)
     if (!set) throw new WorkoutCommandError('set.not-found', 'Set not found.')
-    if (set.commandId === input.commandId && set.status === 'performed') return
+    const receiptRequest = {
+      commandType: 'complete-set',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetId: input.setId,
+      payload: {
+        actualLoadGrams: input.actualLoadGrams,
+        actualRepetitions: input.actualRepetitions,
+        rpe: input.rpe,
+        note: input.note,
+      },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: set.methodologyReviewStatus,
@@ -635,6 +706,8 @@ export async function completeSet(rawInput: {
       .limit(1)
     if (hold)
       throw new WorkoutCommandError('safety.hold-active', 'Set recording is blocked.')
+
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
     const now = new Date()
     await transaction
@@ -686,6 +759,7 @@ export async function skipSet(rawInput: {
         id: performedSets.id,
         status: performedSets.status,
         commandId: performedSets.commandId,
+        sessionStatus: workoutSessions.status,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
       })
@@ -705,14 +779,19 @@ export async function skipSet(rawInput: {
           eq(performedSets.id, input.setId),
           eq(workoutSessions.id, input.sessionId),
           eq(workoutSessions.userId, input.userId),
-          eq(workoutSessions.status, 'active'),
         ),
       )
       .for('update')
       .limit(1)
-    if (!set)
-      throw new WorkoutCommandError('set.not-found', 'Set not found or session inactive.')
-    if (set.commandId === input.commandId && set.status === 'skipped') return
+    if (!set) throw new WorkoutCommandError('set.not-found', 'Set not found.')
+    const receiptRequest = {
+      commandType: 'skip-set',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetId: input.setId,
+      payload: { reason: input.reason },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
     const eligibility = evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: set.methodologyReviewStatus,
@@ -724,8 +803,13 @@ export async function skipSet(rawInput: {
         'This persisted session content is not eligible for set changes.',
       )
     }
+    if (set.sessionStatus !== 'active') {
+      throw new WorkoutCommandError('session.not-active', 'Resume the session first.')
+    }
     if (set.status !== 'pending')
       throw new WorkoutCommandError('set.already-resolved', 'Set is already resolved.')
+
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
     const now = new Date()
     await transaction
@@ -834,39 +918,56 @@ export async function setSessionPaused(
   })
 }
 
-export async function reportPain(
-  userId: string,
-  rawSessionId: string,
-  rawDetails: string,
-): Promise<void> {
-  const { sessionId, details } = parseWorkoutCommand(reportPainCommandSchema, {
-    sessionId: rawSessionId,
-    details: rawDetails,
-  })
+export async function reportPain(rawInput: {
+  readonly userId: string
+  readonly sessionId: string
+  readonly commandId: string
+  readonly details: string
+}): Promise<void> {
+  const input = {
+    userId: rawInput.userId,
+    ...parseWorkoutCommand(reportPainCommandSchema, rawInput),
+  }
 
   await getDb().transaction(async (transaction) => {
     await transaction.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
     )
-    const now = new Date()
     const [session] = await transaction
       .select({ id: workoutSessions.id, status: workoutSessions.status })
       .from(workoutSessions)
       .where(
         and(
-          eq(workoutSessions.id, sessionId),
-          eq(workoutSessions.userId, userId),
-          inArray(workoutSessions.status, ['active', 'paused', 'completed']),
+          eq(workoutSessions.id, input.sessionId),
+          eq(workoutSessions.userId, input.userId),
         ),
       )
       .for('update')
       .limit(1)
-    if (!session)
+    if (!session) throw new WorkoutCommandError('session.not-found', 'Session not found.')
+    const receiptRequest = {
+      commandType: 'report-pain',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetId: input.sessionId,
+      payload: { details: input.details },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (!['active', 'paused', 'completed'].includes(session.status))
       throw new WorkoutCommandError(
         'session.not-reportable',
         'This session cannot accept a safety report.',
       )
 
+    const [existingHold] = await transaction
+      .select({ id: safetyHolds.id })
+      .from(safetyHolds)
+      .where(and(eq(safetyHolds.userId, input.userId), isNull(safetyHolds.clearedAt)))
+      .for('update')
+      .limit(1)
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
+
+    const now = new Date()
     if (session.status === 'active') {
       await transaction
         .update(workoutSessions)
@@ -876,7 +977,7 @@ export async function reportPain(
           optimisticVersion: sql`${workoutSessions.optimisticVersion} + 1`,
           updatedAt: now,
         })
-        .where(eq(workoutSessions.id, sessionId))
+        .where(eq(workoutSessions.id, input.sessionId))
     }
 
     if (session.status === 'completed') {
@@ -892,36 +993,30 @@ export async function reportPain(
     await transaction
       .insert(sessionFeedback)
       .values({
-        sessionId,
+        sessionId: input.sessionId,
         painReported: true,
-        details: details.trim() || null,
+        details: input.details || null,
         answeredAt: now,
       })
       .onConflictDoUpdate({
         target: sessionFeedback.sessionId,
-        set: { painReported: true, details: details.trim() || null, answeredAt: now },
+        set: { painReported: true, details: input.details || null, answeredAt: now },
       })
-    const [existingHold] = await transaction
-      .select({ id: safetyHolds.id })
-      .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
-      .for('update')
-      .limit(1)
     if (!existingHold) {
       await transaction.insert(safetyHolds).values({
         id: newUuidV7(),
-        userId,
+        userId: input.userId,
         reasonCode: 'session-pain-reported',
-        details: details.trim() || null,
+        details: input.details || null,
       })
     }
     await transaction.insert(auditEvents).values({
       id: newUuidV7(),
-      actorUserId: userId,
-      subjectUserId: userId,
+      actorUserId: input.userId,
+      subjectUserId: input.userId,
       eventType: 'session-safety-stop',
       entityType: 'workout-session',
-      entityId: sessionId,
+      entityId: input.sessionId,
       metadata: {
         action:
           session.status === 'completed' ? 'post-completion-hold' : 'paused-and-held',
@@ -942,13 +1037,6 @@ export async function completeWorkout(rawInput: {
     ...parseWorkoutCommand(completeWorkoutCommandSchema, rawInput),
   }
 
-  if (!input.noPainAttested) {
-    throw new WorkoutCommandError(
-      'session.feedback-required',
-      'Confirm the end-of-session safety question.',
-    )
-  }
-
   await getDb().transaction(async (transaction) => {
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
@@ -965,8 +1053,20 @@ export async function completeWorkout(rawInput: {
       .for('update')
       .limit(1)
     if (!session) throw new WorkoutCommandError('session.not-found', 'Session not found.')
-    if (session.status === 'completed' && session.completionCommandId === input.commandId)
-      return
+    const receiptRequest = {
+      commandType: 'complete-workout',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetId: input.sessionId,
+      payload: { noPainAttested: input.noPainAttested },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (!input.noPainAttested) {
+      throw new WorkoutCommandError(
+        'session.feedback-required',
+        'Confirm the end-of-session safety question.',
+      )
+    }
     if (!['active', 'paused'].includes(session.status)) {
       throw new WorkoutCommandError(
         'session.not-completable',
@@ -1050,6 +1150,8 @@ export async function completeWorkout(rawInput: {
         'An active safety hold blocks workout completion.',
       )
     }
+
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
     const now = new Date()
     if (feedback) {
@@ -1135,7 +1237,8 @@ export async function completeWorkout(rawInput: {
     const [programContext] = await transaction
       .select({
         programId: programs.id,
-        sourceWorkoutOrdinal: plannedWorkouts.ordinal,
+        sourceProgramOrdinal: plannedWorkouts.programOrdinal,
+        sourceScheduledDate: plannedWorkouts.scheduledDate,
         sourceRevisionId: programRevisions.id,
         sourceRevisionNumber: programRevisions.revisionNumber,
         sourceRevisionStatus: programRevisions.status,
@@ -1175,10 +1278,10 @@ export async function completeWorkout(rawInput: {
         .where(
           and(
             eq(plannedWorkouts.revisionId, programContext.sourceRevisionId),
-            gt(plannedWorkouts.ordinal, programContext.sourceWorkoutOrdinal),
+            gt(plannedWorkouts.programOrdinal, programContext.sourceProgramOrdinal),
           ),
         )
-        .orderBy(asc(plannedWorkouts.ordinal))
+        .orderBy(asc(plannedWorkouts.programOrdinal))
 
       if (futureWorkouts.length > 0) {
         const futureWorkoutIds = futureWorkouts.map((workout) => workout.id)
@@ -1211,7 +1314,8 @@ export async function completeWorkout(rawInput: {
           kind: 'development-future-adjustment',
           baseInputHash: programContext.baseInputHash,
           baseOutputHash: programContext.baseOutputHash,
-          sourceWorkoutOrdinal: programContext.sourceWorkoutOrdinal,
+          sourceProgramOrdinal: programContext.sourceProgramOrdinal,
+          sourceScheduledDate: programContext.sourceScheduledDate,
           decisions: decisions.map((decision) => ({
             exerciseCode: decision.exerciseCode,
             kind: decision.kind,
@@ -1221,13 +1325,26 @@ export async function completeWorkout(rawInput: {
             policyVersion: decision.policyVersion,
           })),
         } satisfies CanonicalValue
-        const outputSnapshot = {
-          hashMaterialVersion: 'development-adjustment-v1',
-          kind: 'development-future-prescription',
-          plannedWorkouts: futureWorkouts.map((workout) => ({
-            ordinal: workout.ordinal,
-            localDate: workout.scheduledDate,
-            sessionKey: workout.slotCode,
+        const normalizedInputHash = canonicalSha256(normalizedInput)
+        const outputSnapshot: ExecutablePrescriptionProjection = {
+          hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+          engineVersion: programContext.engineVersion,
+          methodology: {
+            id: programContext.methodologyId,
+            version: programContext.methodologyVersion,
+            reviewStatus: programContext.methodologyReviewStatus,
+          },
+          template: {
+            id: programContext.templateId,
+            version: programContext.templateVersion,
+            reviewStatus: programContext.templateReviewStatus,
+          },
+          normalizedInputHash,
+          workouts: futureWorkouts.map((workout, workoutIndex) => ({
+            ordinal: workoutIndex + 1,
+            programOrdinal: workout.programOrdinal,
+            scheduledDate: workout.scheduledDate,
+            slotCode: workout.slotCode,
             name: workout.name,
             exercises: futureExercises
               .filter((exercise) => exercise.plannedWorkoutId === workout.id)
@@ -1254,32 +1371,10 @@ export async function completeWorkout(rawInput: {
                   })),
               })),
           })),
-        } satisfies CanonicalValue
-        const normalizedInputHash = canonicalSha256(normalizedInput)
-        const outputHash = canonicalSha256({
-          hashMaterialVersion: 'development-adjustment-v1',
-          engineVersion: programContext.engineVersion,
-          methodology: {
-            id: programContext.methodologyId,
-            version: programContext.methodologyVersion,
-            reviewStatus: programContext.methodologyReviewStatus,
-          },
-          template: {
-            id: programContext.templateId,
-            version: programContext.templateVersion,
-            reviewStatus: programContext.templateReviewStatus,
-          },
-          normalizedInputHash,
-          output: outputSnapshot,
-          warnings: programContext.warnings as CanonicalValue,
-          manualReviewRequired: programContext.manualReviewRequired,
-        })
+        }
+        const outputHash = executablePrescriptionHash(outputSnapshot)
         const revisionId = newUuidV7()
 
-        await transaction
-          .update(programRevisions)
-          .set({ status: 'superseded' })
-          .where(eq(programRevisions.id, programContext.sourceRevisionId))
         await transaction.insert(programRevisions).values({
           id: revisionId,
           programId: programContext.programId,
@@ -1299,25 +1394,26 @@ export async function completeWorkout(rawInput: {
           warnings: programContext.warnings,
           manualReviewRequired: programContext.manualReviewRequired,
         })
-        await transaction
-          .update(adjustmentDecisions)
-          .set({ appliedRevisionId: revisionId })
-          .where(eq(adjustmentDecisions.sessionId, input.sessionId))
+        await transaction.insert(programRevisionLineage).values({
+          revisionId,
+          parentRevisionId: programContext.sourceRevisionId,
+          sourceSessionId: input.sessionId,
+          sourceProgramOrdinal: programContext.sourceProgramOrdinal,
+        })
 
-        for (const workout of futureWorkouts) {
+        for (const workout of outputSnapshot.workouts) {
           const plannedWorkoutId = newUuidV7()
           await transaction.insert(plannedWorkouts).values({
             id: plannedWorkoutId,
             revisionId,
             scheduledDate: workout.scheduledDate,
             ordinal: workout.ordinal,
+            programOrdinal: workout.programOrdinal,
             slotCode: workout.slotCode,
             name: workout.name,
           })
 
-          for (const exercise of futureExercises.filter(
-            (entry) => entry.plannedWorkoutId === workout.id,
-          )) {
+          for (const exercise of workout.exercises) {
             const exercisePrescriptionId = newUuidV7()
             await transaction.insert(exercisePrescriptions).values({
               id: exercisePrescriptionId,
@@ -1326,48 +1422,32 @@ export async function completeWorkout(rawInput: {
               exerciseName: exercise.exerciseName,
               ordinal: exercise.ordinal,
               safetyTier: exercise.safetyTier,
-              rationaleCode: adjustedRationale(
-                exercise.exerciseCode,
-                exercise.rationaleCode,
-              ),
+              rationaleCode: exercise.rationaleCode,
             })
             await transaction.insert(setPrescriptions).values(
-              futureSets
-                .filter((set) => set.exercisePrescriptionId === exercise.id)
-                .map((set) => ({
-                  id: newUuidV7(),
-                  exercisePrescriptionId,
-                  ordinal: set.ordinal,
-                  setKind: set.setKind,
-                  targetLoadGrams: adjustedLoad(
-                    exercise.exerciseCode,
-                    set.targetLoadGrams,
-                  ),
-                  targetRepetitions: set.targetRepetitions,
-                  restSeconds: set.restSeconds,
-                })),
+              exercise.sets.map((set) => ({
+                id: newUuidV7(),
+                exercisePrescriptionId,
+                ordinal: set.ordinal,
+                setKind: set.setKind,
+                targetLoadGrams: set.targetLoadGrams,
+                targetRepetitions: set.targetRepetitions,
+                restSeconds: set.restSeconds,
+              })),
             )
           }
         }
 
-        await transaction
-          .update(programRevisions)
-          .set({ status: 'active', activatedAt: now })
-          .where(eq(programRevisions.id, revisionId))
-
-        await transaction.insert(auditEvents).values({
-          id: newUuidV7(),
-          actorUserId: input.userId,
-          subjectUserId: input.userId,
-          eventType: 'program-adjustment-revision-activated',
-          entityType: 'program-revision',
-          entityId: revisionId,
-          metadata: {
-            sourceRevisionId: programContext.sourceRevisionId,
-            sourceSessionId: input.sessionId,
-            decisionCount: decisions.length,
-          },
+        await activatePersistedProgramRevision(transaction, {
+          kind: 'remaining',
+          userId: input.userId,
+          revisionId,
+          sourceSessionId: input.sessionId,
         })
+        await transaction
+          .update(adjustmentDecisions)
+          .set({ appliedRevisionId: revisionId })
+          .where(eq(adjustmentDecisions.sessionId, input.sessionId))
       }
     }
 
@@ -1400,9 +1480,11 @@ export async function completeWorkout(rawInput: {
 export async function abandonWorkout(
   userId: string,
   rawSessionId: string,
+  rawReason: string,
 ): Promise<void> {
-  const { sessionId } = parseWorkoutCommand(abandonWorkoutCommandSchema, {
+  const { sessionId, reason } = parseWorkoutCommand(abandonWorkoutCommandSchema, {
     sessionId: rawSessionId,
+    reason: rawReason,
   })
 
   await getDb().transaction(async (transaction) => {
@@ -1415,6 +1497,7 @@ export async function abandonWorkout(
       .set({
         status: 'abandoned',
         abandonedAt: now,
+        abandonedReason: reason,
         pausedAt: null,
         optimisticVersion: sql`${workoutSessions.optimisticVersion} + 1`,
         updatedAt: now,
@@ -1432,6 +1515,16 @@ export async function abandonWorkout(
         'session.not-abandonable',
         'Session is not active or paused.',
       )
+
+    await transaction.insert(auditEvents).values({
+      id: newUuidV7(),
+      actorUserId: userId,
+      subjectUserId: userId,
+      eventType: 'workout-abandoned',
+      entityType: 'workout-session',
+      entityId: sessionId,
+      metadata: { reason },
+    })
   })
 }
 

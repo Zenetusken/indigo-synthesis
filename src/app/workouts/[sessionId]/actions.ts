@@ -15,9 +15,9 @@ import {
   WorkoutCommandError,
 } from '@/modules/training/application/workouts'
 
-function workoutError(sessionId: string, code: string): never {
-  redirect(`/workouts/${sessionId}?error=${encodeURIComponent(code)}` as never)
-}
+export type WorkoutActionResult =
+  | { success: true }
+  | { success: false; code: string; values?: Record<string, string> }
 
 function finiteNumber(formData: FormData, name: string): number {
   const rawValue = formData.get(name)
@@ -30,7 +30,18 @@ function finiteNumber(formData: FormData, name: string): number {
   return value
 }
 
-export async function completeSetAction(formData: FormData): Promise<void> {
+function captureFormValues(formData: FormData, names: string[]): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const name of names) {
+    const value = formData.get(name)
+    if (typeof value === 'string') values[name] = value
+  }
+  return values
+}
+
+export async function completeSetAction(
+  formData: FormData,
+): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
 
@@ -52,16 +63,23 @@ export async function completeSetAction(formData: FormData): Promise<void> {
       note: String(formData.get('note') ?? '').trim() || null,
     })
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'set.save-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'set.save-failed',
+      values: captureFormValues(formData, [
+        'actualLoad',
+        'actualRepetitions',
+        'rpe',
+        'note',
+      ]),
+    }
   }
 
   revalidatePath(`/workouts/${sessionId}`)
+  return { success: true }
 }
 
-export async function skipSetAction(formData: FormData): Promise<void> {
+export async function skipSetAction(formData: FormData): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
   try {
@@ -73,57 +91,70 @@ export async function skipSetAction(formData: FormData): Promise<void> {
       reason: String(formData.get('reason') ?? ''),
     })
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'set.skip-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'set.skip-failed',
+      values: captureFormValues(formData, ['reason']),
+    }
   }
   revalidatePath(`/workouts/${sessionId}`)
+  return { success: true }
 }
 
-export async function pauseAction(formData: FormData): Promise<void> {
+export async function pauseAction(formData: FormData): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
   try {
     await setSessionPaused(actor.userId, sessionId, true)
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'session.pause-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'session.pause-failed',
+    }
   }
   revalidatePath(`/workouts/${sessionId}`)
+  return { success: true }
 }
 
-export async function resumeAction(formData: FormData): Promise<void> {
+export async function resumeAction(formData: FormData): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
   try {
     await setSessionPaused(actor.userId, sessionId, false)
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'session.resume-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'session.resume-failed',
+    }
   }
   revalidatePath(`/workouts/${sessionId}`)
+  return { success: true }
 }
 
-export async function reportPainAction(formData: FormData): Promise<void> {
+export async function reportPainAction(formData: FormData): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
   try {
-    await reportPain(actor.userId, sessionId, String(formData.get('details') ?? ''))
-  } catch (error) {
-    workoutError(
+    await reportPain({
+      userId: actor.userId,
       sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'safety.report-failed',
-    )
+      commandId: String(formData.get('commandId') ?? ''),
+      details: String(formData.get('details') ?? ''),
+    })
+  } catch (error) {
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'safety.report-failed',
+      values: captureFormValues(formData, ['details']),
+    }
   }
   revalidatePath(`/workouts/${sessionId}`)
+  return { success: true }
 }
 
-export async function completeWorkoutAction(formData: FormData): Promise<void> {
+export async function completeWorkoutAction(
+  formData: FormData,
+): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
   try {
@@ -134,24 +165,29 @@ export async function completeWorkoutAction(formData: FormData): Promise<void> {
       noPainAttested: formData.get('noPainAttested') === 'on',
     })
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'session.complete-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'session.complete-failed',
+      values: captureFormValues(formData, ['noPainAttested']),
+    }
   }
-  redirect(`/history/${sessionId}` as never)
+  redirect(`/history/${sessionId}`)
 }
 
-export async function abandonWorkoutAction(formData: FormData): Promise<void> {
+export async function abandonWorkoutAction(
+  formData: FormData,
+): Promise<WorkoutActionResult> {
   const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const reason = String(formData.get('reason') ?? '')
   try {
-    await abandonWorkout(actor.userId, sessionId)
+    await abandonWorkout(actor.userId, sessionId, reason)
   } catch (error) {
-    workoutError(
-      sessionId,
-      error instanceof WorkoutCommandError ? error.code : 'session.abandon-failed',
-    )
+    return {
+      success: false,
+      code: error instanceof WorkoutCommandError ? error.code : 'session.abandon-failed',
+      values: { reason },
+    }
   }
   redirect('/today')
 }

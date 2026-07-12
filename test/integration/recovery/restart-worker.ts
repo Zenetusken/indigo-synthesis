@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import {
   completeSet,
   getTodayState,
@@ -49,11 +49,16 @@ async function writeActiveSession() {
   const plannedWorkoutId = newUuidV7()
   const exerciseId = newUuidV7()
 
-  await db.insert(user).values({
-    id: userId,
-    name: 'Restart Test Owner',
-    email: 'restart-owner@example.test',
-    emailVerified: false,
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT set_config('indigo.user_creation_mode', 'bootstrap-owner', true)`,
+    )
+    await transaction.insert(user).values({
+      id: userId,
+      name: 'Restart Test Owner',
+      email: 'restart-owner@example.test',
+      emailVerified: false,
+    })
   })
   await db.insert(athleteProfiles).values({
     userId,
@@ -93,6 +98,7 @@ async function writeActiveSession() {
     revisionId,
     scheduledDate: '2026-07-11',
     ordinal: 1,
+    programOrdinal: 1,
     slotCode: 'A',
     name: 'Restart recovery session',
   })
@@ -140,11 +146,12 @@ async function writeActiveSession() {
   const firstSet = started?.exercises[0]?.sets[0]
   if (!firstSet) throw new Error('Restart fixture did not create its first set.')
 
+  const setCommandId = newUuidV7()
   await completeSet({
     userId,
     sessionId,
     setId: firstSet.id,
-    commandId: newUuidV7(),
+    commandId: setCommandId,
     actualLoadGrams: 62_500,
     actualRepetitions: 5,
     rpe: 8,
@@ -159,12 +166,30 @@ async function writeActiveSession() {
     pid: process.pid,
     userId,
     sessionId,
+    setCommandId,
     session: normalizeSession(session),
     today,
   }
 }
 
-async function readActiveSession(userId: string, sessionId: string) {
+async function readActiveSession(
+  userId: string,
+  sessionId: string,
+  setCommandId: string,
+) {
+  const beforeReplay = await getWorkoutSession(userId, sessionId)
+  const firstSet = beforeReplay?.exercises[0]?.sets[0]
+  if (!firstSet) throw new Error('Persisted restart fixture set was not recovered.')
+  await completeSet({
+    userId,
+    sessionId,
+    setId: firstSet.id,
+    commandId: setCommandId,
+    actualLoadGrams: 62_500,
+    actualRepetitions: 5,
+    rpe: 8,
+    note: 'Persist this exact set across the process boundary.',
+  })
   const session = await getWorkoutSession(userId, sessionId)
   if (!session) throw new Error('Persisted restart fixture session was not recovered.')
   const today = await getTodayState(userId, 'UTC', new Date('2026-07-11T12:00:00Z'))
@@ -172,20 +197,23 @@ async function readActiveSession(userId: string, sessionId: string) {
     pid: process.pid,
     userId,
     sessionId,
+    setCommandId,
     session: normalizeSession(session),
     today,
   }
 }
 
-const [phase, userId, sessionId] = process.argv.slice(2)
+const [phase, userId, sessionId, setCommandId] = process.argv.slice(2)
 
 try {
   if (phase === 'write') {
     console.log(JSON.stringify(await writeActiveSession()))
-  } else if (phase === 'read' && userId && sessionId) {
-    console.log(JSON.stringify(await readActiveSession(userId, sessionId)))
+  } else if (phase === 'read' && userId && sessionId && setCommandId) {
+    console.log(JSON.stringify(await readActiveSession(userId, sessionId, setCommandId)))
   } else {
-    throw new Error('Expected restart worker phase write or read USER_ID SESSION_ID.')
+    throw new Error(
+      'Expected restart worker phase write or read USER_ID SESSION_ID COMMAND_ID.',
+    )
   }
 } finally {
   await closeDb()

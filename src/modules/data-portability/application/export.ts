@@ -13,6 +13,7 @@ import {
   exercisePrescriptions,
   performedSets,
   plannedWorkouts,
+  programRevisionLineage,
   programRevisions,
   programs,
   safetyHolds,
@@ -20,11 +21,12 @@ import {
   sessionFeedback,
   setPrescriptions,
   strengthBaselines,
+  trainingCommandReceipts,
   user,
   workoutSessions,
 } from '@/platform/db/schema'
 
-export const exportSchemaVersion = '1.1.0-development'
+export const exportSchemaVersion = '1.2.0-development'
 
 function canonical(value: unknown): CanonicalValue {
   return JSON.parse(JSON.stringify(value)) as CanonicalValue
@@ -113,6 +115,14 @@ export async function createDataExport(actor: {
                 asc(programRevisions.revisionNumber),
               )
       const revisionIds = revisions.map((revision) => revision.id)
+      const revisionLineage =
+        revisionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(programRevisionLineage)
+              .where(inArray(programRevisionLineage.revisionId, revisionIds))
+              .orderBy(asc(programRevisionLineage.createdAt))
       const workouts =
         revisionIds.length === 0
           ? []
@@ -177,6 +187,17 @@ export async function createDataExport(actor: {
               .from(sessionFeedback)
               .where(inArray(sessionFeedback.sessionId, sessionIds))
               .orderBy(asc(sessionFeedback.sessionId))
+      const commandReceipts =
+        sessionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(trainingCommandReceipts)
+              .where(inArray(trainingCommandReceipts.sessionId, sessionIds))
+              .orderBy(
+                asc(trainingCommandReceipts.createdAt),
+                asc(trainingCommandReceipts.commandId),
+              )
       const adjustmentRows =
         sessionIds.length === 0
           ? []
@@ -222,6 +243,8 @@ export async function createDataExport(actor: {
             .filter((revision) => revision.programId === program.id)
             .map((revision) => ({
               ...revision,
+              lineage:
+                revisionLineage.find((entry) => entry.revisionId === revision.id) ?? null,
               plannedWorkouts: workouts
                 .filter((workout) => workout.revisionId === revision.id)
                 .map((workout) => ({
@@ -293,6 +316,9 @@ export async function createDataExport(actor: {
             adjustments: adjustmentRows.filter(
               (adjustment) => adjustment.sessionId === session.id,
             ),
+            commandReceipts: commandReceipts.filter(
+              (receipt) => receipt.sessionId === session.id,
+            ),
           }
         }),
         auditEvents: auditRows.map(({ actorUserId, ...event }) => ({
@@ -313,6 +339,8 @@ export async function createDataExport(actor: {
             'loadProvenance and repetitionsProvenance distinguish copied targets from trainee edits; explicitlyConfirmed and confirmedAt record attestation.',
           adjustment:
             'Each adjustment records the source session, rule version, reason code, prior load, proposed load, and applied revision when one was created.',
+          commandReceipt:
+            'Every idempotent training mutation records an append-only command identifier, canonical request hash, target, and result snapshot.',
           auditActor:
             'actorClass is self, local-administrator, or system. Other local account identifiers are intentionally not disclosed.',
         },

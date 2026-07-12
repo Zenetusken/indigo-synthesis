@@ -3,16 +3,24 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { and, count, eq } from 'drizzle-orm'
-import { Client } from 'pg'
+import { and, count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/modules/identity/bootstrap/owner-bootstrap'
 import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import {
   issueOwnerRecovery,
   redeemOwnerRecovery,
 } from '@/modules/identity/recovery/owner-recovery'
+import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
+import {
+  createDisposableIntegrationDatabase,
+  type DisposableIntegrationDatabase,
+} from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
 import { auditEvents, session, user, verification } from '@/platform/db/schema'
 
@@ -21,34 +29,55 @@ const owner = {
   name: 'Recovery Owner',
   email: 'recovery-owner@example.test',
   originalPassword: 'original-owner-password',
+  racedPassword: 'race-recovered-owner-password',
   recoveredPassword: 'recovered-owner-password',
 } as const
 
-let sourceDatabaseUrl: string
-let disposableDatabaseName: string
-let administrationClient: Client
+let integrationDatabase: DisposableIntegrationDatabase | undefined
 let ownerUserId: string
 let secretsDirectory: string
 
-function quotedIdentifier(identifier: string): string {
-  if (!/^[a-z0-9_]+$/.test(identifier)) {
-    throw new Error(`Unsafe PostgreSQL identifier: ${identifier}`)
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}
+
+async function waitForBlockedCredentialLock(): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    const result = await getDb().execute<{ waiting: number }>(sql`
+      SELECT (
+        count(*) FILTER (WHERE wait_event = 'advisory')
+      )::integer AS waiting
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = 'indigo-credential-lifecycle'
+    `)
+    if (Number(result.rows[0]?.waiting ?? 0) >= 1) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  return `"${identifier}"`
+  throw new Error('Recovery did not block on the sign-in credential lock.')
 }
 
 async function authRequest(
   path: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
+  return handleAuthPost(createAuthRequest(path, body))
+}
+
+function createAuthRequest(path: string, body: Record<string, unknown>): Request {
   const origin = getServerConfig().appOrigin
-  return getAuth().handler(
-    new Request(`${origin}/api/auth${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin },
-      body: JSON.stringify(body),
-    }),
-  )
+  return new Request(`${origin}/api/auth${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin },
+    body: JSON.stringify(body),
+  })
 }
 
 async function runRecoveryCli(arguments_: readonly string[]) {
@@ -63,35 +92,25 @@ async function runRecoveryCli(arguments_: readonly string[]) {
 }
 
 beforeAll(async () => {
-  const configuredDatabaseUrl = process.env.DATABASE_URL
-  if (!configuredDatabaseUrl) {
-    throw new Error('DATABASE_URL is required for owner recovery integration tests.')
-  }
-
-  sourceDatabaseUrl = configuredDatabaseUrl
-  disposableDatabaseName = `indigo_recovery_${process.pid}_${Date.now()}`
-  administrationClient = new Client({ connectionString: sourceDatabaseUrl })
-  await administrationClient.connect()
-  await administrationClient.query(
-    `CREATE DATABASE ${quotedIdentifier(disposableDatabaseName)}`,
-  )
-
-  const disposableUrl = new URL(sourceDatabaseUrl)
-  disposableUrl.pathname = `/${disposableDatabaseName}`
-  process.env.DATABASE_URL = disposableUrl.toString()
+  integrationDatabase = createDisposableIntegrationDatabase({
+    administrationUrl: process.env.INTEGRATION_ADMIN_DATABASE_URL,
+    suite: 'owner_recovery',
+  })
+  await integrationDatabase.create()
+  integrationDatabase.activateDatabaseUrl()
   resetServerConfigForTests()
   resetAuthForTests()
   await closeDb()
   await migrateDatabase()
 
-  const bootstrap = await authRequest('/sign-up/email', {
+  const bootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const createdOwner = await createOwnerWithBootstrapCode({
     name: owner.name,
     email: owner.email,
     password: owner.originalPassword,
+    code: bootstrap.code,
   })
-  const body = (await bootstrap.json()) as { user?: { id: string } }
-  if (!bootstrap.ok || !body.user) throw new Error('Could not bootstrap recovery owner.')
-  ownerUserId = body.user.id
+  ownerUserId = createdOwner.id
 
   secretsDirectory = await mkdtemp(join(tmpdir(), 'indigo-owner-recovery-'))
   await chmod(secretsDirectory, 0o700)
@@ -100,26 +119,9 @@ beforeAll(async () => {
 afterAll(async () => {
   resetAuthForTests()
   await closeDb()
-  if (sourceDatabaseUrl) {
-    process.env.DATABASE_URL = sourceDatabaseUrl
-    resetServerConfigForTests()
-  }
-
-  if (administrationClient) {
-    try {
-      await administrationClient.query(
-        `SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-         WHERE datname = $1 AND pid <> pg_backend_pid()`,
-        [disposableDatabaseName],
-      )
-      await administrationClient.query(
-        `DROP DATABASE IF EXISTS ${quotedIdentifier(disposableDatabaseName)}`,
-      )
-    } finally {
-      await administrationClient.end()
-    }
-  }
+  integrationDatabase?.restoreDatabaseUrl()
+  resetServerConfigForTests()
+  await integrationDatabase?.cleanup()
   if (secretsDirectory) await rm(secretsDirectory, { recursive: true, force: true })
 })
 
@@ -151,6 +153,78 @@ describe('host-local owner recovery', () => {
       password: owner.originalPassword,
     })
     expect(stillAuthenticates.status).toBe(200)
+  })
+
+  it('serializes old-password sign-in through recovery and revokes its new session', async () => {
+    const issued = await issueOwnerRecovery({
+      ownerEmail: owner.email,
+      ttlMinutes: 15,
+    })
+    const [sessionsBeforeSignIn] = await getDb()
+      .select({ value: count() })
+      .from(session)
+      .where(eq(session.userId, ownerUserId))
+    const signInHandled = deferred<Response>()
+    const releaseSignInLock = deferred<void>()
+    const signInPromise = handleAuthRequest(
+      createAuthRequest('/sign-in/email', {
+        email: owner.email,
+        password: owner.originalPassword,
+      }),
+      async (request) => {
+        try {
+          const response = await getAuth().handler(request)
+          signInHandled.resolve(response)
+          await releaseSignInLock.promise
+          return response
+        } catch (error) {
+          signInHandled.reject(error)
+          throw error
+        }
+      },
+    )
+
+    const signInResponse = await signInHandled.promise
+    expect(signInResponse.status).toBe(200)
+    const [sessionDuringSignIn] = await getDb()
+      .select({ value: count() })
+      .from(session)
+      .where(eq(session.userId, ownerUserId))
+    expect(sessionDuringSignIn?.value).toBeGreaterThan(sessionsBeforeSignIn?.value ?? 0)
+
+    const recoveryPromise = redeemOwnerRecovery({
+      ownerEmail: owner.email,
+      code: issued.code,
+      newPassword: owner.racedPassword,
+    })
+    try {
+      await waitForBlockedCredentialLock()
+    } finally {
+      releaseSignInLock.resolve(undefined)
+    }
+
+    await expect(signInPromise).resolves.toBe(signInResponse)
+    const recovery = await recoveryPromise
+    expect(recovery).toMatchObject({
+      ownerUserId,
+    })
+    expect(recovery.revokedSessionCount).toBeGreaterThan(0)
+    const [sessionsAfterRecovery] = await getDb()
+      .select({ value: count() })
+      .from(session)
+      .where(eq(session.userId, ownerUserId))
+    expect(sessionsAfterRecovery?.value).toBe(0)
+
+    const oldCredential = await authRequest('/sign-in/email', {
+      email: owner.email,
+      password: owner.originalPassword,
+    })
+    const recoveredCredential = await authRequest('/sign-in/email', {
+      email: owner.email,
+      password: owner.racedPassword,
+    })
+    expect(oldCredential.ok).toBe(false)
+    expect(recoveredCredential.status).toBe(200)
   })
 
   it('issues through owner-only storage and redeems once without printing secrets', async () => {
@@ -220,15 +294,20 @@ describe('host-local owner recovery', () => {
     expect(sessionsAfter?.value).toBe(0)
     expect(pendingAfter?.value).toBe(0)
 
-    const oldCredential = await authRequest('/sign-in/email', {
+    const originalCredential = await authRequest('/sign-in/email', {
       email: owner.email,
       password: owner.originalPassword,
+    })
+    const racedCredential = await authRequest('/sign-in/email', {
+      email: owner.email,
+      password: owner.racedPassword,
     })
     const newCredential = await authRequest('/sign-in/email', {
       email: owner.email,
       password: owner.recoveredPassword,
     })
-    expect(oldCredential.ok).toBe(false)
+    expect(originalCredential.ok).toBe(false)
+    expect(racedCredential.ok).toBe(false)
     expect(newCredential.status).toBe(200)
 
     await expect(
@@ -259,6 +338,7 @@ describe('host-local owner recovery', () => {
     const serializedAudit = JSON.stringify(recoveryAudits)
     expect(serializedAudit).not.toContain(code)
     expect(serializedAudit).not.toContain(owner.originalPassword)
+    expect(serializedAudit).not.toContain(owner.racedPassword)
     expect(serializedAudit).not.toContain(owner.recoveredPassword)
 
     const [ownerStillPresent] = await getDb()

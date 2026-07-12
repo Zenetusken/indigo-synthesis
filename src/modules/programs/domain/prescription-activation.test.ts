@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { validatePersistedPrescriptionForActivation } from './prescription-activation'
+import {
+  type PersistedWorkoutForActivation,
+  validatePersistedPrescriptionForActivation,
+} from './prescription-activation'
 
-const validWorkout = {
+const validWorkout: PersistedWorkoutForActivation = {
   scheduledDate: '2026-07-11',
   ordinal: 1,
+  programOrdinal: 1,
   slotCode: 'A',
   name: 'Development session A',
   exercises: [
@@ -31,13 +35,22 @@ const requiredEquipment = {
 } as const
 
 function validate(
-  workouts: readonly (typeof validWorkout)[],
+  workouts: readonly PersistedWorkoutForActivation[],
   availableEquipment = ['barbell', 'rack', 'plates'],
+  sequence:
+    | { readonly kind: 'initial' }
+    | {
+        readonly kind: 'remaining'
+        readonly sourceProgramOrdinal: number
+        readonly sourceScheduledDate: string
+        readonly usedProgramOrdinals: readonly number[]
+      } = { kind: 'initial' },
 ) {
   return validatePersistedPrescriptionForActivation({
     workouts,
     availableEquipment,
     requiredEquipmentByExercise: requiredEquipment,
+    sequence,
   })
 }
 
@@ -105,6 +118,50 @@ describe('persisted prescription activation', () => {
       code: 'program.prescription-invalid',
     })
     expect(validate([outOfBounds])).toMatchObject({
+      eligible: false,
+      code: 'program.prescription-invalid',
+    })
+  })
+
+  it('accepts a locally renumbered remaining schedule while preserving absolute lineage', () => {
+    const remaining = {
+      ...validWorkout,
+      scheduledDate: '2026-07-13',
+      ordinal: 1,
+      programOrdinal: 2,
+    }
+
+    expect(
+      validate([remaining], ['barbell', 'rack', 'plates'], {
+        kind: 'remaining',
+        sourceProgramOrdinal: 1,
+        sourceScheduledDate: '2026-07-11',
+        usedProgramOrdinals: [1],
+      }),
+    ).toEqual({ eligible: true })
+  })
+
+  it.each([
+    ['stale date', { ...validWorkout, ordinal: 1, programOrdinal: 2 }, [1]],
+    [
+      'used absolute ordinal',
+      { ...validWorkout, scheduledDate: '2026-07-13', ordinal: 1, programOrdinal: 2 },
+      [1, 2],
+    ],
+    [
+      'gapped absolute ordinal',
+      { ...validWorkout, scheduledDate: '2026-07-13', ordinal: 1, programOrdinal: 3 },
+      [1],
+    ],
+  ] as const)('rejects a %s in a derived remaining schedule', (_label, workout, used) => {
+    expect(
+      validate([workout], ['barbell', 'rack', 'plates'], {
+        kind: 'remaining',
+        sourceProgramOrdinal: 1,
+        sourceScheduledDate: '2026-07-11',
+        usedProgramOrdinals: used,
+      }),
+    ).toMatchObject({
       eligible: false,
       code: 'program.prescription-invalid',
     })

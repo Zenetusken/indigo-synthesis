@@ -17,8 +17,16 @@ export type LocalUser = {
   readonly email: string
 }
 
+export type LocalUserSummary = LocalUser & {
+  readonly createdAt: Date
+}
+
 export interface LocalUserCreator {
   create(ownerUserId: string, input: ValidatedLocalUserInput): Promise<LocalUser>
+}
+
+export interface LocalUserReader {
+  list(): Promise<readonly LocalUserSummary[]>
 }
 
 export class LocalUserInputError extends Error {
@@ -51,4 +59,12 @@ export async function createLocalUser(
   }
 
   return creator.create(actor.userId, parsed.data)
+}
+
+export async function listLocalUsers(
+  actor: AuthenticatedActor,
+  reader: LocalUserReader,
+): Promise<readonly LocalUserSummary[]> {
+  assertOwner(actor)
+  return reader.list()
 }

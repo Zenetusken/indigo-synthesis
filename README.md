@@ -74,7 +74,7 @@ NEXT_TELEMETRY_DISABLED=1
 Then install, migrate, verify, and run:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm db:migrate
 pnpm db:preflight
 pnpm dev
@@ -107,15 +107,41 @@ INDIGO_CONTENT_MODE=reviewed pnpm build
 `pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The
 database-backed suites are intentionally separate because they require PostgreSQL.
 
+Before the first browser run, install the pinned Playwright Chromium build and create the
+ignored local E2E configuration from the checked-in template:
+
+```sh
+pnpm exec playwright install chromium
+cp .env.e2e.example .env.e2e.local
+```
+
+Review `.env.e2e.local` before running the suite. Give it a distinct test-only secret and
+keep its target on the same explicit loopback PostgreSQL host, port, and username as
+`DATABASE_URL`. Playwright browser installation may require operating-system packages;
+those host prerequisites are intentionally outside the application runtime.
+
 The Playwright suite includes targeted 390×844 mobile reflow, 200% text sizing,
 keyboard/focus continuation, reduced-motion, status-announcement, control-size, distinct
 page-title, and non-loopback browser-request checks. Those automated checks are useful
 evidence, not a full WCAG audit or manual screen-reader certification.
 
-Integration tests use `DATABASE_URL` as their administrative connection and create then
-drop uniquely named disposable databases on the same server. The configured role must
-therefore be allowed to create and drop databases. The browser suite also needs a
-separate disposable database and secret, normally in `.env.e2e.local`:
+Integration tests force `NODE_ENV=test` and the conspicuously labeled development content
+fixture regardless of the production-safe content-mode default in `.env.local`. They
+require a separate administration connection and never fall back to `DATABASE_URL`:
+
+```dotenv
+INTEGRATION_ADMIN_DATABASE_URL=postgresql://indigo:change-me@127.0.0.1:5432/postgres
+```
+
+That URL must be PostgreSQL on the literal loopback host `127.0.0.1` or `[::1]`, name an
+explicit user, and contain no query parameters. The role must be allowed to create and
+drop databases. Each suite derives a 96-bit random target named
+`indigo_<suite>_<24 lowercase hex characters>_integration`; cleanup can terminate and
+drop only after that process receives a successful `CREATE DATABASE` result. A collision
+or failed create is never cleaned up destructively.
+
+The browser suite also needs the separate disposable database and secret copied into
+`.env.e2e.local`:
 
 ```dotenv
 E2E_DATABASE_URL=postgresql://indigo:change-me@127.0.0.1:5432/indigo_synthesis_e2e
@@ -132,11 +158,29 @@ PostgreSQL role must be allowed to create and drop it. These constraints make th
 a conspicuously local, project-test-only operation; do not point either value at a shared
 or production server.
 
+## Owner bootstrap
+
+A fresh installation cannot be claimed through generic signup. First issue a short-lived,
+one-use capability from the host into a protected directory owned by the invoking user:
+
+```sh
+pnpm owner:bootstrap issue \
+  --code-file /absolute/private/path/owner-bootstrap-code \
+  --ttl-minutes 15
+```
+
+Open `/bootstrap` and enter that code with the initial owner details. The code is stored in
+PostgreSQL only as an authenticated digest, expires after 5–60 whole minutes, and is
+consumed in the same transaction that creates the credential and closes installation
+bootstrap. Delete the host file after a successful claim; replay cannot create another
+owner.
+
 ## Owner recovery
 
 Owner recovery is deliberately host-local and two-step. Secret values are accepted only
-through absolute-path, owner-readable files; they are never command arguments or browser
-inputs.
+through absolute-path files owned by the invoking POSIX effective user; they are never
+command arguments or browser inputs. The resolved parent directory must have the same
+owner and must not be writable by group or other users.
 
 ```sh
 pnpm owner:recover issue \
@@ -151,11 +195,12 @@ pnpm owner:recover redeem \
 ```
 
 The issue command creates the code file exclusively with mode `0600`, so that path must
-not already exist. The password file must already exist as a regular file
-readable/writable only by its owner and contain exactly one line with 12–128 characters.
-The TTL must be 5–60 whole minutes. Redemption consumes and removes the code file,
-changes the credential, revokes existing owner sessions, and records a redacted audit
-event.
+not already exist. The password file must already exist as a regular, owner-only file
+with mode `0400` or `0600` and contain exactly one line with 12–128 characters. Symbolic
+links, oversized files, extra lines, and NUL bytes are refused. The TTL must be 5–60 whole
+minutes. Redemption reads through the validated open descriptors, changes the credential,
+revokes existing owner sessions, records a redacted audit event, and removes the code only
+if its path still names the opened inode.
 
 ## Repository map
 

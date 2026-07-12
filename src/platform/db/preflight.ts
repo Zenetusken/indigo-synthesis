@@ -13,7 +13,7 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 4
+const expectedMigrationCount = 7
 const requiredIntegrityTriggers = [
   {
     name: 'workout_session_owner_guard',
@@ -75,6 +75,16 @@ const requiredIntegrityTriggers = [
     table: 'session_feedback',
     function: 'indigo_guard_terminal_session_feedback',
   },
+  {
+    name: 'program_revision_lineage_immutability_guard',
+    table: 'program_revision_lineage',
+    function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'training_command_receipt_immutability_guard',
+    table: 'training_command_receipt',
+    function: 'indigo_guard_append_only_training_fact',
+  },
 ] as const
 
 export async function inspectDatabase(): Promise<DatabasePreflight> {
@@ -104,6 +114,9 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND relation.relname = 'user'
           AND namespace.nspname = 'public'
           AND trigger_function.proname = 'enforce_indigo_user_creation_policy'
+          AND pg_get_functiondef(trigger_function.oid) LIKE '%bootstrap-owner%'
+          AND pg_get_functiondef(trigger_function.oid) LIKE '%owner-admin%'
+          AND pg_get_functiondef(trigger_function.oid) LIKE '%explicit authorized mode%'
           AND NOT trigger.tgisinternal
           AND trigger.tgenabled = 'O'
       ) AS present
@@ -117,10 +130,41 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND count(*) FILTER (
             WHERE table_name = 'adjustment_decision'
               AND column_name = 'applied_revision_id'
-          ) = 1 AS present
+          ) = 1
+          AND count(*) FILTER (
+            WHERE table_name = 'planned_workout'
+              AND column_name = 'program_ordinal'
+          ) = 1
+          AND count(*) FILTER (
+            WHERE table_name = 'program_revision_lineage'
+              AND column_name IN (
+                'revision_id',
+                'parent_revision_id',
+                'source_session_id',
+                'source_program_ordinal'
+              )
+          ) = 4
+          AND count(*) FILTER (
+            WHERE table_name = 'training_command_receipt'
+              AND column_name IN (
+                'command_id',
+                'user_id',
+                'command_type',
+                'session_id',
+                'target_id',
+                'request_hash',
+                'result_snapshot'
+              )
+          ) = 7 AS present
         FROM information_schema.columns
         WHERE table_schema = 'public'
-          AND table_name IN ('workout_session', 'adjustment_decision')
+          AND table_name IN (
+            'workout_session',
+            'adjustment_decision',
+            'planned_workout',
+            'program_revision_lineage',
+            'training_command_receipt'
+          )
       `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
@@ -180,7 +224,9 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
       `expected ${expectedMigrationCount} applied migrations, found ${result.appliedMigrationCount}`,
     )
   }
-  if (!result.bootstrapTriggerPresent) failures.push('owner bootstrap trigger is absent')
+  if (!result.bootstrapTriggerPresent) {
+    failures.push('explicit-mode owner bootstrap trigger is absent')
+  }
   if (!result.workoutSnapshotColumnsPresent) {
     failures.push('latest workout snapshot and revision-lineage columns are absent')
   }

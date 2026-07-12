@@ -29,6 +29,8 @@ const errorMessages: Readonly<Record<string, string>> = {
   'program.revision-not-draft': 'Only a draft program revision can be activated.',
   'program.prescription-invalid':
     'The saved prescription is incomplete or outside activation bounds.',
+  'program.prescription-integrity-failed':
+    'The saved prescription does not match its immutable reproducibility record.',
   'program.exercise-unverified':
     'The saved prescription includes an exercise without an installed activation contract.',
   'safety.advanced-ineligible':

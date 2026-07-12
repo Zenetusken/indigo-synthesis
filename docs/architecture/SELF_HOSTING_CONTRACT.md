@@ -32,6 +32,14 @@ It holds no product data and is not another application authority. The repositor
 not yet provide reverse-proxy configuration or certificate automation, but TLS itself is
 not deferred or optional for non-loopback use.
 
+The supported proxy runs on the same host and reaches the application through loopback.
+Authentication reads client addresses only from `X-Forwarded-For`, strips trusted
+loopback proxy hops from right to left, and rejects malformed chains. The ingress must
+overwrite any client-supplied forwarding header or append its verified peer address
+safely; it must never preserve an arbitrary client header as the sole trusted value.
+Production HTTPS authentication fails closed when no trustworthy client address can be
+resolved, avoiding a spoofable or globally shared rate-limit bucket.
+
 ## No mandatory outbound network
 
 After installation, the complete core journey works with outbound network access blocked.
@@ -86,10 +94,14 @@ Development content is never a production fallback: a production process rejects
 
 ## Accounts
 
-- A fresh installation has a one-time first-owner bootstrap.
-- A singleton installation row is locked while owner creation and bootstrap closure
-  commit atomically; concurrent bootstrap attempts cannot create a second first owner.
-- Public signup is off by default after bootstrap.
+- A fresh installation accepts first-owner creation only with a host-issued, expiring,
+  one-use capability; generic signup is disabled even before the first owner exists.
+- A singleton installation row and capability row are locked while credential creation,
+  capability consumption, and bootstrap closure commit atomically; concurrent attempts
+  cannot create a second first owner.
+- Database user insertion requires an explicit transaction-local `bootstrap-owner` or
+  `owner-admin` creation mode. Missing and unknown modes fail closed.
+- Public signup remains off after bootstrap.
 - The owner can create or invite local users according to the approved user model.
 - The current slice has no SMTP or browser password-reset adapter. If the only owner is
   locked out, a host-local administrative command with database access may issue an

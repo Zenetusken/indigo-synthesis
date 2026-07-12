@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
+import type { CanonicalValue } from '@/modules/methodology/domain/canonical'
 import { DEVELOPMENT_EXERCISE_EQUIPMENT } from '@/modules/methodology/domain/development-fixture'
 import {
   type DevelopmentProgramGenerationResult,
@@ -7,14 +8,21 @@ import {
   type Weekday,
 } from '@/modules/methodology/domain/program'
 import { evaluatePersistedContentEligibility } from '@/modules/programs/domain/content-eligibility'
+import {
+  EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+  type ExecutablePrescriptionProjection,
+  executablePrescriptionHash,
+  verifyExecutablePrescriptionIntegrity,
+} from '@/modules/programs/domain/executable-prescription'
 import { validatePersistedPrescriptionForActivation } from '@/modules/programs/domain/prescription-activation'
 import { getServerConfig } from '@/platform/config/server'
-import { getDb } from '@/platform/db/client'
+import { type DatabaseTransaction, getDb } from '@/platform/db/client'
 import {
   athleteEquipment,
   auditEvents,
   exercisePrescriptions,
   plannedWorkouts,
+  programRevisionLineage,
   programRevisions,
   programs,
   safetyHolds,
@@ -55,6 +63,7 @@ export type ProgramWorkoutView = {
   readonly id: string
   readonly scheduledDate: string
   readonly ordinal: number
+  readonly programOrdinal: number
   readonly slotCode: string
   readonly name: string
   readonly exercises: readonly ProgramExerciseView[]
@@ -82,6 +91,47 @@ export type ProgramOverview = {
 
 function toIsoWeekday(day: number): Weekday {
   return (day === 0 ? 7 : day) as Weekday
+}
+
+function developmentExecutablePrescription(
+  result: Extract<DevelopmentProgramGenerationResult, { readonly status: 'created' }>,
+): ExecutablePrescriptionProjection {
+  return {
+    hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+    engineVersion: result.prescription.engineVersion,
+    methodology: {
+      id: result.prescription.methodologyRelease.id,
+      version: result.prescription.methodologyRelease.version,
+      reviewStatus: 'development',
+    },
+    template: {
+      id: result.prescription.template.id,
+      version: result.prescription.template.version,
+      reviewStatus: 'development',
+    },
+    normalizedInputHash: result.prescription.normalizedInputHash.value,
+    workouts: result.prescription.output.plannedWorkouts.map((workout, index) => ({
+      scheduledDate: workout.localDate,
+      ordinal: index + 1,
+      programOrdinal: index + 1,
+      slotCode: workout.sessionKey,
+      name: `Session ${workout.sessionKey} — development fixture`,
+      exercises: workout.exercises.map((exercise) => ({
+        exerciseCode: exercise.exerciseId,
+        exerciseName: exercise.name,
+        ordinal: exercise.ordinal,
+        safetyTier: 'standard',
+        rationaleCode: 'development.fixture-instantiation',
+        sets: exercise.sets.map((set) => ({
+          ordinal: set.ordinal,
+          setKind: 'working',
+          targetLoadGrams: set.targetLoadGrams,
+          targetRepetitions: set.targetRepetitions,
+          restSeconds: set.restSeconds,
+        })),
+      })),
+    })),
+  }
 }
 
 export async function generateDraftProgram(
@@ -130,6 +180,8 @@ export async function generateDraftProgram(
   if (result.status === 'blocked') {
     return result
   }
+  const executablePrescription = developmentExecutablePrescription(result)
+  const persistedOutputHash = executablePrescriptionHash(executablePrescription)
 
   await getDb().transaction(async (transaction) => {
     await transaction.execute(
@@ -180,22 +232,23 @@ export async function generateDraftProgram(
       templateVersion: result.prescription.template.version,
       templateReviewStatus: 'development',
       normalizedInputHash: result.prescription.normalizedInputHash.value,
-      outputHash: result.prescription.outputHash.value,
+      outputHash: persistedOutputHash,
       normalizedInput: result.normalizedInput,
-      outputSnapshot: result.prescription.output,
+      outputSnapshot: executablePrescription,
       warnings: result.prescription.warnings,
       manualReviewRequired: result.prescription.manualReview.required,
     })
 
-    for (const workout of result.prescription.output.plannedWorkouts) {
+    for (const workout of executablePrescription.workouts) {
       const plannedWorkoutId = newUuidV7()
       await transaction.insert(plannedWorkouts).values({
         id: plannedWorkoutId,
         revisionId,
-        scheduledDate: workout.localDate,
-        ordinal: result.prescription.output.plannedWorkouts.indexOf(workout) + 1,
-        slotCode: workout.sessionKey,
-        name: `Session ${workout.sessionKey} — development fixture`,
+        scheduledDate: workout.scheduledDate,
+        ordinal: workout.ordinal,
+        programOrdinal: workout.programOrdinal,
+        slotCode: workout.slotCode,
+        name: workout.name,
       })
 
       for (const exercise of workout.exercises) {
@@ -203,18 +256,18 @@ export async function generateDraftProgram(
         await transaction.insert(exercisePrescriptions).values({
           id: exercisePrescriptionId,
           plannedWorkoutId,
-          exerciseCode: exercise.exerciseId,
-          exerciseName: exercise.name,
+          exerciseCode: exercise.exerciseCode,
+          exerciseName: exercise.exerciseName,
           ordinal: exercise.ordinal,
-          safetyTier: 'standard',
-          rationaleCode: 'development.fixture-instantiation',
+          safetyTier: exercise.safetyTier,
+          rationaleCode: exercise.rationaleCode,
         })
         await transaction.insert(setPrescriptions).values(
           exercise.sets.map((set) => ({
             id: newUuidV7(),
             exercisePrescriptionId,
             ordinal: set.ordinal,
-            setKind: 'working',
+            setKind: set.setKind,
             targetLoadGrams: set.targetLoadGrams,
             targetRepetitions: set.targetRepetitions,
             restSeconds: set.restSeconds,
@@ -233,7 +286,7 @@ export async function generateDraftProgram(
       metadata: {
         contentMode: 'development',
         inputHash: result.prescription.normalizedInputHash.value,
-        outputHash: result.prescription.outputHash.value,
+        outputHash: persistedOutputHash,
       },
     })
   })
@@ -241,192 +294,375 @@ export async function generateDraftProgram(
   return result
 }
 
-export async function activateProgram(userId: string, revisionId: string): Promise<void> {
+type PersistedProgramActivationRequest =
+  | {
+      readonly kind: 'initial'
+      readonly userId: string
+      readonly revisionId: string
+    }
+  | {
+      readonly kind: 'remaining'
+      readonly userId: string
+      readonly revisionId: string
+      readonly sourceSessionId: string
+    }
+
+export async function activatePersistedProgramRevision(
+  transaction: DatabaseTransaction,
+  request: PersistedProgramActivationRequest,
+): Promise<void> {
+  const { userId, revisionId } = request
   const config = getServerConfig()
-
-  await getDb().transaction(async (transaction) => {
-    await transaction.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
-    )
-    const [owned] = await transaction
-      .select({
-        programId: programs.id,
-        revisionStatus: programRevisions.status,
-        methodologyId: programRevisions.methodologyId,
-        templateId: programRevisions.templateId,
-        templateReviewStatus: programRevisions.templateReviewStatus,
-        methodologyReviewStatus: programRevisions.methodologyReviewStatus,
-      })
-      .from(programRevisions)
-      .innerJoin(programs, eq(programs.id, programRevisions.programId))
-      .where(and(eq(programRevisions.id, revisionId), eq(programs.userId, userId)))
-      .for('update')
-      .limit(1)
-
-    if (!owned) {
-      throw new ProgramUnavailableError(
-        'program.not-found',
-        'Program revision not found.',
-      )
-    }
-    if (owned.revisionStatus !== 'draft') {
-      throw new ProgramUnavailableError(
-        'program.revision-not-draft',
-        'Only a draft revision can be activated.',
-      )
-    }
-
-    const eligibility = evaluatePersistedContentEligibility({
-      contentMode: config.contentMode,
-      methodologyStatus: owned.methodologyReviewStatus,
-      templateStatus: owned.templateReviewStatus,
+  const [owned] = await transaction
+    .select({
+      programId: programs.id,
+      revisionStatus: programRevisions.status,
+      engineVersion: programRevisions.engineVersion,
+      methodologyId: programRevisions.methodologyId,
+      methodologyVersion: programRevisions.methodologyVersion,
+      templateId: programRevisions.templateId,
+      templateVersion: programRevisions.templateVersion,
+      templateReviewStatus: programRevisions.templateReviewStatus,
+      methodologyReviewStatus: programRevisions.methodologyReviewStatus,
+      normalizedInputHash: programRevisions.normalizedInputHash,
+      normalizedInput: programRevisions.normalizedInput,
+      outputHash: programRevisions.outputHash,
+      outputSnapshot: programRevisions.outputSnapshot,
     })
-    if (!eligibility.eligible) {
-      throw new ProgramUnavailableError(
-        eligibility.code,
-        'The persisted content release is not eligible for activation.',
-      )
-    }
+    .from(programRevisions)
+    .innerJoin(programs, eq(programs.id, programRevisions.programId))
+    .where(and(eq(programRevisions.id, revisionId), eq(programs.userId, userId)))
+    .for('update')
+    .limit(1)
 
-    const workoutRows = await transaction
-      .select()
-      .from(plannedWorkouts)
-      .where(eq(plannedWorkouts.revisionId, revisionId))
-      .orderBy(asc(plannedWorkouts.ordinal))
-      .for('update')
-    const workoutIds = workoutRows.map((workout) => workout.id)
-    const exerciseRows =
-      workoutIds.length > 0
-        ? await transaction
-            .select()
-            .from(exercisePrescriptions)
-            .where(inArray(exercisePrescriptions.plannedWorkoutId, workoutIds))
-            .orderBy(asc(exercisePrescriptions.ordinal))
-            .for('update')
-        : []
-    const exerciseIds = exerciseRows.map((exercise) => exercise.id)
-    const prescriptionSets =
-      exerciseIds.length > 0
-        ? await transaction
-            .select()
-            .from(setPrescriptions)
-            .where(inArray(setPrescriptions.exercisePrescriptionId, exerciseIds))
-            .orderBy(asc(setPrescriptions.ordinal))
-            .for('update')
-        : []
-    const equipment = await transaction
-      .select({ code: athleteEquipment.equipmentCode })
-      .from(athleteEquipment)
-      .where(eq(athleteEquipment.userId, userId))
-    const prescriptionEligibility = validatePersistedPrescriptionForActivation({
-      workouts: workoutRows.map((workout) => ({
-        scheduledDate: workout.scheduledDate,
-        ordinal: workout.ordinal,
-        slotCode: workout.slotCode,
-        name: workout.name,
-        exercises: exerciseRows
-          .filter((exercise) => exercise.plannedWorkoutId === workout.id)
-          .map((exercise) => ({
-            exerciseCode: exercise.exerciseCode,
-            exerciseName: exercise.exerciseName,
-            ordinal: exercise.ordinal,
-            safetyTier: exercise.safetyTier,
-            rationaleCode: exercise.rationaleCode,
-            sets: prescriptionSets
-              .filter((set) => set.exercisePrescriptionId === exercise.id)
-              .map((set) => ({
-                ordinal: set.ordinal,
-                setKind: set.setKind,
-                targetLoadGrams: set.targetLoadGrams,
-                targetRepetitions: set.targetRepetitions,
-                restSeconds: set.restSeconds,
-              })),
+  if (!owned) {
+    throw new ProgramUnavailableError('program.not-found', 'Program revision not found.')
+  }
+  if (owned.revisionStatus !== 'draft') {
+    throw new ProgramUnavailableError(
+      'program.revision-not-draft',
+      'Only a draft revision can be activated.',
+    )
+  }
+
+  const [remainingSource] =
+    request.kind === 'remaining'
+      ? await transaction
+          .select({
+            parentRevisionId: programRevisionLineage.parentRevisionId,
+            sourceSessionId: programRevisionLineage.sourceSessionId,
+            sourceProgramOrdinal: programRevisionLineage.sourceProgramOrdinal,
+            sourceScheduledDate: workoutSessions.scheduledDate,
+            sourceSessionStatus: workoutSessions.status,
+            parentStatus: programRevisions.status,
+            parentProgramId: programRevisions.programId,
+          })
+          .from(programRevisionLineage)
+          .innerJoin(
+            workoutSessions,
+            eq(workoutSessions.id, programRevisionLineage.sourceSessionId),
+          )
+          .innerJoin(
+            plannedWorkouts,
+            eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
+          )
+          .innerJoin(
+            programRevisions,
+            eq(programRevisions.id, programRevisionLineage.parentRevisionId),
+          )
+          .where(
+            and(
+              eq(programRevisionLineage.revisionId, revisionId),
+              eq(programRevisionLineage.sourceSessionId, request.sourceSessionId),
+              eq(workoutSessions.userId, userId),
+              eq(plannedWorkouts.revisionId, programRevisionLineage.parentRevisionId),
+              eq(
+                plannedWorkouts.programOrdinal,
+                programRevisionLineage.sourceProgramOrdinal,
+              ),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      : []
+  if (
+    request.kind === 'remaining' &&
+    (!remainingSource ||
+      remainingSource.parentProgramId !== owned.programId ||
+      remainingSource.parentStatus !== 'active' ||
+      !['active', 'paused'].includes(remainingSource.sourceSessionStatus))
+  ) {
+    throw new ProgramUnavailableError(
+      'program.remaining-schedule-stale',
+      'The source revision or workout is no longer eligible for adjustment.',
+    )
+  }
+
+  const eligibility = evaluatePersistedContentEligibility({
+    contentMode: config.contentMode,
+    methodologyStatus: owned.methodologyReviewStatus,
+    templateStatus: owned.templateReviewStatus,
+  })
+  if (!eligibility.eligible) {
+    throw new ProgramUnavailableError(
+      eligibility.code,
+      'The persisted content release is not eligible for activation.',
+    )
+  }
+
+  const workoutRows = await transaction
+    .select()
+    .from(plannedWorkouts)
+    .where(eq(plannedWorkouts.revisionId, revisionId))
+    .orderBy(asc(plannedWorkouts.ordinal))
+    .for('update')
+  const workoutIds = workoutRows.map((workout) => workout.id)
+  const exerciseRows =
+    workoutIds.length > 0
+      ? await transaction
+          .select()
+          .from(exercisePrescriptions)
+          .where(inArray(exercisePrescriptions.plannedWorkoutId, workoutIds))
+          .orderBy(asc(exercisePrescriptions.ordinal))
+          .for('update')
+      : []
+  const exerciseIds = exerciseRows.map((exercise) => exercise.id)
+  const prescriptionSets =
+    exerciseIds.length > 0
+      ? await transaction
+          .select()
+          .from(setPrescriptions)
+          .where(inArray(setPrescriptions.exercisePrescriptionId, exerciseIds))
+          .orderBy(asc(setPrescriptions.ordinal))
+          .for('update')
+      : []
+  const equipment = await transaction
+    .select({ code: athleteEquipment.equipmentCode })
+    .from(athleteEquipment)
+    .where(eq(athleteEquipment.userId, userId))
+  const persistedWorkouts = workoutRows.map((workout) => ({
+    scheduledDate: workout.scheduledDate,
+    ordinal: workout.ordinal,
+    programOrdinal: workout.programOrdinal,
+    slotCode: workout.slotCode,
+    name: workout.name,
+    exercises: exerciseRows
+      .filter((exercise) => exercise.plannedWorkoutId === workout.id)
+      .map((exercise) => ({
+        exerciseCode: exercise.exerciseCode,
+        exerciseName: exercise.exerciseName,
+        ordinal: exercise.ordinal,
+        safetyTier: exercise.safetyTier,
+        rationaleCode: exercise.rationaleCode,
+        sets: prescriptionSets
+          .filter((set) => set.exercisePrescriptionId === exercise.id)
+          .map((set) => ({
+            ordinal: set.ordinal,
+            setKind: set.setKind,
+            targetLoadGrams: set.targetLoadGrams,
+            targetRepetitions: set.targetRepetitions,
+            restSeconds: set.restSeconds,
           })),
       })),
-      availableEquipment: equipment.map((item) => item.code),
-      requiredEquipmentByExercise:
-        owned.methodologyId === 'development.methodology-fixture' &&
-        owned.templateId === 'development.full-body-three-day'
-          ? (DEVELOPMENT_EXERCISE_EQUIPMENT as Readonly<
-              Record<string, readonly string[]>
-            >)
-          : {},
-    })
-    if (!prescriptionEligibility.eligible) {
-      throw new ProgramUnavailableError(
-        prescriptionEligibility.code,
-        prescriptionEligibility.message,
-      )
-    }
+  }))
+  const persistedProjection: ExecutablePrescriptionProjection = {
+    hashMaterialVersion: EXECUTABLE_PRESCRIPTION_HASH_MATERIAL_VERSION,
+    engineVersion: owned.engineVersion,
+    methodology: {
+      id: owned.methodologyId,
+      version: owned.methodologyVersion,
+      reviewStatus: owned.methodologyReviewStatus,
+    },
+    template: {
+      id: owned.templateId,
+      version: owned.templateVersion,
+      reviewStatus: owned.templateReviewStatus,
+    },
+    normalizedInputHash: owned.normalizedInputHash,
+    workouts: persistedWorkouts,
+  }
+  const integrity = verifyExecutablePrescriptionIntegrity({
+    normalizedInput: owned.normalizedInput as CanonicalValue,
+    storedNormalizedInputHash: owned.normalizedInputHash,
+    storedOutputSnapshot: owned.outputSnapshot as CanonicalValue,
+    storedOutputHash: owned.outputHash,
+    persistedProjection,
+  })
+  if (!integrity.valid) {
+    throw new ProgramUnavailableError(
+      'program.prescription-integrity-failed',
+      'The saved executable prescription does not match its immutable hashes.',
+    )
+  }
+  const usedProgramOrdinals =
+    request.kind === 'remaining'
+      ? await transaction
+          .select({ programOrdinal: plannedWorkouts.programOrdinal })
+          .from(workoutSessions)
+          .innerJoin(
+            plannedWorkouts,
+            eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
+          )
+          .innerJoin(
+            programRevisions,
+            eq(programRevisions.id, plannedWorkouts.revisionId),
+          )
+          .where(
+            and(
+              eq(workoutSessions.userId, userId),
+              eq(programRevisions.programId, owned.programId),
+            ),
+          )
+      : []
+  const prescriptionEligibility = validatePersistedPrescriptionForActivation({
+    workouts: persistedWorkouts,
+    availableEquipment: equipment.map((item) => item.code),
+    requiredEquipmentByExercise:
+      owned.methodologyId === 'development.methodology-fixture' &&
+      owned.templateId === 'development.full-body-three-day'
+        ? (DEVELOPMENT_EXERCISE_EQUIPMENT as Readonly<Record<string, readonly string[]>>)
+        : {},
+    sequence:
+      request.kind === 'remaining' && remainingSource
+        ? {
+            kind: 'remaining',
+            sourceProgramOrdinal: remainingSource.sourceProgramOrdinal,
+            sourceScheduledDate: remainingSource.sourceScheduledDate,
+            usedProgramOrdinals: usedProgramOrdinals.map(
+              (workout) => workout.programOrdinal,
+            ),
+          }
+        : { kind: 'initial' },
+  })
+  if (!prescriptionEligibility.eligible) {
+    throw new ProgramUnavailableError(
+      prescriptionEligibility.code,
+      prescriptionEligibility.message,
+    )
+  }
 
-    const [hold] = await transaction
-      .select({ id: safetyHolds.id })
-      .from(safetyHolds)
-      .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
-      .limit(1)
-    if (hold) {
-      throw new ProgramUnavailableError(
-        'safety.hold-active',
-        'An active safety hold blocks program activation.',
-      )
-    }
-    const [activeSession] = await transaction
-      .select({ id: workoutSessions.id })
-      .from(workoutSessions)
+  const [hold] = await transaction
+    .select({ id: safetyHolds.id })
+    .from(safetyHolds)
+    .where(and(eq(safetyHolds.userId, userId), isNull(safetyHolds.clearedAt)))
+    .limit(1)
+  if (hold) {
+    throw new ProgramUnavailableError(
+      'safety.hold-active',
+      'An active safety hold blocks program activation.',
+    )
+  }
+  const [activeSession] = await transaction
+    .select({ id: workoutSessions.id })
+    .from(workoutSessions)
+    .where(
+      and(
+        eq(workoutSessions.userId, userId),
+        inArray(workoutSessions.status, ['active', 'paused']),
+      ),
+    )
+    .limit(1)
+  if (
+    activeSession &&
+    (request.kind !== 'remaining' || activeSession.id !== request.sourceSessionId)
+  ) {
+    throw new ProgramUnavailableError(
+      'program.active-session',
+      'Finish or abandon the active workout before changing programs.',
+    )
+  }
+
+  const now = new Date()
+  if (request.kind === 'remaining' && remainingSource) {
+    const [superseded] = await transaction
+      .update(programRevisions)
+      .set({ status: 'superseded' })
       .where(
         and(
-          eq(workoutSessions.userId, userId),
-          inArray(workoutSessions.status, ['active', 'paused']),
+          eq(programRevisions.id, remainingSource.parentRevisionId),
+          eq(programRevisions.status, 'active'),
         ),
       )
-      .limit(1)
-    if (activeSession) {
+      .returning({ id: programRevisions.id })
+    if (!superseded) {
       throw new ProgramUnavailableError(
-        'program.active-session',
-        'Finish or abandon the active workout before changing programs.',
+        'program.remaining-schedule-stale',
+        'The source program changed before the adjustment could activate.',
       )
     }
-
-    const now = new Date()
-    const activePrograms = await transaction
-      .select({ id: programs.id })
-      .from(programs)
-      .where(and(eq(programs.userId, userId), eq(programs.status, 'active')))
-      .for('update')
-    if (activePrograms.length > 0) {
-      await transaction
-        .update(programRevisions)
-        .set({ status: 'superseded' })
-        .where(
-          and(
-            inArray(
-              programRevisions.programId,
-              activePrograms.map((program) => program.id),
-            ),
-            eq(programRevisions.status, 'active'),
-          ),
-        )
-    }
-    await transaction
-      .update(programs)
-      .set({ status: 'retired', updatedAt: now })
-      .where(and(eq(programs.userId, userId), eq(programs.status, 'active')))
-    await transaction
-      .update(programs)
-      .set({ status: 'active', updatedAt: now })
-      .where(eq(programs.id, owned.programId))
     await transaction
       .update(programRevisions)
       .set({ status: 'active', activatedAt: now })
-      .where(eq(programRevisions.id, revisionId))
+      .where(
+        and(eq(programRevisions.id, revisionId), eq(programRevisions.status, 'draft')),
+      )
     await transaction.insert(auditEvents).values({
       id: newUuidV7(),
       actorUserId: userId,
       subjectUserId: userId,
-      eventType: 'program-activated',
+      eventType: 'program-adjustment-revision-activated',
       entityType: 'program-revision',
       entityId: revisionId,
-      metadata: { contentMode: config.contentMode },
+      metadata: {
+        sourceRevisionId: remainingSource.parentRevisionId,
+        sourceSessionId: remainingSource.sourceSessionId,
+        sourceProgramOrdinal: remainingSource.sourceProgramOrdinal,
+      },
+    })
+    return
+  }
+
+  const activePrograms = await transaction
+    .select({ id: programs.id })
+    .from(programs)
+    .where(and(eq(programs.userId, userId), eq(programs.status, 'active')))
+    .for('update')
+  if (activePrograms.length > 0) {
+    await transaction
+      .update(programRevisions)
+      .set({ status: 'superseded' })
+      .where(
+        and(
+          inArray(
+            programRevisions.programId,
+            activePrograms.map((program) => program.id),
+          ),
+          eq(programRevisions.status, 'active'),
+        ),
+      )
+  }
+  await transaction
+    .update(programs)
+    .set({ status: 'retired', updatedAt: now })
+    .where(and(eq(programs.userId, userId), eq(programs.status, 'active')))
+  await transaction
+    .update(programs)
+    .set({ status: 'active', updatedAt: now })
+    .where(eq(programs.id, owned.programId))
+  await transaction
+    .update(programRevisions)
+    .set({ status: 'active', activatedAt: now })
+    .where(eq(programRevisions.id, revisionId))
+  await transaction.insert(auditEvents).values({
+    id: newUuidV7(),
+    actorUserId: userId,
+    subjectUserId: userId,
+    eventType: 'program-activated',
+    entityType: 'program-revision',
+    entityId: revisionId,
+    metadata: { contentMode: config.contentMode },
+  })
+}
+
+export async function activateProgram(userId: string, revisionId: string): Promise<void> {
+  await getDb().transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+    )
+    await activatePersistedProgramRevision(transaction, {
+      kind: 'initial',
+      userId,
+      revisionId,
     })
   })
 }
@@ -513,6 +749,7 @@ export async function getProgramOverview(
       id: workout.id,
       scheduledDate: workout.scheduledDate,
       ordinal: workout.ordinal,
+      programOrdinal: workout.programOrdinal,
       slotCode: workout.slotCode,
       name: workout.name,
       exercises: exerciseRows

@@ -264,9 +264,10 @@ added until profiling proves a need.
 - Checks bound repetitions, loads, RPE, dates, statuses, and lifecycle transitions.
 - A planned workout belongs to a program revision. A workout-session row is created
   directly as `active`, then follows active ↔ paused → completed or abandoned.
-- The singleton installation row is locked in the first-owner transaction. Creating the
-  owner and closing bootstrap commit atomically, and a unique owner invariant rejects
-  concurrent bootstrap attempts.
+- The singleton installation and host-issued capability rows are locked in the
+  first-owner transaction. Credential creation, capability consumption, and bootstrap
+  closure commit atomically; explicit database creation modes and the unique owner
+  invariant reject generic or concurrent claims.
 - `null` remains unavailable.
 - JSONB is limited to immutable versioned content or snapshots; fields needing routine
   joins, filtering, or constraints remain relational.
@@ -281,8 +282,10 @@ added until profiling proves a need.
   Better Auth runtime migration/schema push is disabled and its CLI is never a production
   migration authority
 - `HttpOnly`, `Secure` in production, `SameSite=Lax` cookies
-- transactionally serialized first-owner bootstrap
-- public signup off by default after bootstrap
+- host-issued, expiring, one-use, transactionally serialized first-owner bootstrap
+- generic public signup disabled before and after bootstrap
+- one advisory-lock namespace covers password sign-in through session creation and owner
+  recovery through password replacement and session revocation
 - server-derived actor identity for every use case
 - optional SMTP is a future adapter, not an implemented password-reset path; no
   mandatory email/cloud identity exists

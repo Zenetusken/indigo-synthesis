@@ -5,8 +5,8 @@ import {
   LocalUserEmailConflictError,
   LocalUserInputError,
 } from '@/modules/identity/application/local-users'
-import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { requireActor } from '@/modules/identity/server/actor'
+import { createLocalUserAsOwner } from '@/modules/identity/server/local-users'
 
 export type LocalUserActionState = {
   readonly errors: readonly string[]
