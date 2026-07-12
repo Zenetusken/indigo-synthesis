@@ -2,22 +2,31 @@
   "name": "indigo-synthesis",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "description": "Clean-slate, self-hosted strength training system restart",
   "engines": {
     "node": ">=24.0.0 <25"
   },
   "packageManager": "pnpm@10.7.1",
   "scripts": {
-    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --hostname 127.0.0.1",
+    "dev:e2e": "NEXT_TELEMETRY_DISABLED=1 next dev --hostname 127.0.0.1 --port 3100",
     "build": "NEXT_TELEMETRY_DISABLED=1 next build",
-    "start": "NEXT_TELEMETRY_DISABLED=1 next start",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env.local --import tsx scripts/db/preflight.ts && NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1",
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "validate": "NEXT_TELEMETRY_DISABLED=1 pnpm check && pnpm typecheck && pnpm test && pnpm build"
+    "test:integration": "node --env-file-if-exists=.env.local ./node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
+    "test:e2e:prepare": "NODE_ENV=test node --env-file-if-exists=.env.local --env-file-if-exists=.env.e2e.local --import tsx scripts/db/reset-e2e.ts",
+    "test:e2e": "pnpm test:e2e:prepare && node --env-file-if-exists=.env.local --env-file-if-exists=.env.e2e.local ./node_modules/@playwright/test/cli.js test",
+    "owner:recover": "node --env-file-if-exists=.env.local --import tsx scripts/identity/recover-owner.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/db/migrate.ts",
+    "db:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/db/preflight.ts",
+    "validate": "NEXT_TELEMETRY_DISABLED=1 pnpm check && pnpm typecheck && pnpm test && INDIGO_CONTENT_MODE=reviewed pnpm build"
   },
   "dependencies": {
     "@fontsource-variable/saira": "5.2.11",
@@ -29,6 +38,7 @@
     "pg": "8.22.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "tsx": "4.23.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

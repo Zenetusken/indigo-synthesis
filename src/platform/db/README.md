@@ -1,9 +1,10 @@
 # Database adapter
 
-PostgreSQL 18 with Drizzle and `pg` is selected. Product/program schema is intentionally
-absent until the Methodology v1 decision pack closes and the first vertical-slice entity
-model is reviewed. Phase 1 may add only Better Auth tables and the singleton installation
-state required to prove bootstrap, sessions, and the migration path.
+PostgreSQL 18 with Drizzle and `pg` is the live persistence boundary. The committed
+schema includes Better Auth/installation state plus the generic athlete, program
+snapshot, workout, safety, audit, and portability entities needed by the engineering
+MVP. It does not include the future reviewed-content/evidence catalog, and the bundled
+development fixture does not close Methodology Gate 0.
 
 There will be:
 
@@ -14,4 +15,6 @@ There will be:
 - no Better Auth runtime migration, production CLI generation, or schema push;
 - no runtime schema push;
 - no seed data inside migrations; and
-- fresh-database migration tests.
+- fresh-database migration tests; and
+- startup preflight for the ledger, PostgreSQL version, required columns, exact enabled
+  trigger/table/function bindings, and reviewed-mode content eligibility.
