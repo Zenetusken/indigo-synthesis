@@ -25,8 +25,11 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
 - Offline mutation/synchronization is not a hard requirement and is deferred.
 - Docker/Compose, CI/CD, a monitoring stack, and deployment packaging are deliberately
   absent.
-- Neurotype assessment, nutrition, social features, wearables, and AI coaching are out of
-  scope.
+- Neurotype assessment, nutrition, social features, wearables, and AI coaching (model-led
+  decisions) are out of scope. Optional host-local grounded explanation prose is an
+  accepted design only—see
+  [ADR 0006](docs/architecture/adr/0006-optional-local-grounded-language.md)—and is not
+  implemented.
 
 ## Implemented engineering slice
 

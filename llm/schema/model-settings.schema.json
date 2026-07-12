@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://indigo-synthesis.local/llm/model-settings.schema.json",
+  "title": "Indigo local model pack settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "modelId",
+    "displayName",
+    "family",
+    "parameterCountLabel",
+    "format",
+    "quantization",
+    "source",
+    "artifacts",
+    "runtime",
+    "chat",
+    "sampling",
+    "limits",
+    "capabilities"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "modelId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "family": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "parameterCountLabel": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "format": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "quantization": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["huggingfaceRepo", "huggingfaceFileGlob", "baseModel", "notes"],
+      "properties": {
+        "huggingfaceRepo": { "type": "string", "minLength": 1 },
+        "huggingfaceFileGlob": { "type": "string", "minLength": 1 },
+        "baseModel": { "type": "string", "minLength": 1 },
+        "notes": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weightsRelativePath", "expectedSha256", "approxSizeBytes"],
+      "properties": {
+        "weightsRelativePath": { "type": "string", "minLength": 1 },
+        "expectedSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "approxSizeBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "defaultEndpoint",
+        "servedModelName",
+        "recommendedServer",
+        "minLlamaCppNote"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": ["openai-compatible-loopback", "disabled"]
+        },
+        "defaultEndpoint": { "type": "string", "minLength": 1 },
+        "servedModelName": { "type": "string", "minLength": 1 },
+        "recommendedServer": { "type": "string", "minLength": 1 },
+        "minLlamaCppNote": { "type": "string" }
+      }
+    },
+    "chat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enableThinking", "systemPromptProfile"],
+      "properties": {
+        "enableThinking": { "type": "boolean" },
+        "systemPromptProfile": {
+          "type": "string",
+          "enum": ["grounded-explanation"]
+        }
+      }
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temperature",
+        "topP",
+        "topK",
+        "minP",
+        "presencePenalty",
+        "repetitionPenalty",
+        "maxTokens"
+      ],
+      "properties": {
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "topP": { "type": "number", "minimum": 0, "maximum": 1 },
+        "topK": { "type": "integer", "minimum": 0 },
+        "minP": { "type": "number", "minimum": 0, "maximum": 1 },
+        "presencePenalty": { "type": "number", "minimum": -2, "maximum": 2 },
+        "repetitionPenalty": { "type": "number", "minimum": 0, "maximum": 2 },
+        "maxTokens": { "type": "integer", "minimum": 1, "maximum": 256 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs", "maxContextTokens"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+        "maxContextTokens": { "type": "integer", "minimum": 256 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tasks", "multimodal"],
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["grounded-explanation"] }
+        },
+        "multimodal": { "type": "boolean" }
+      }
+    }
+  }
+}

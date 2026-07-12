@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "modelId": "qwen3.5-9b-q5_k_m",
+  "displayName": "Qwen3.5 9B (Q5_K_M)",
+  "family": "qwen3.5",
+  "parameterCountLabel": "9B",
+  "format": "gguf",
+  "quantization": "Q5_K_M",
+  "source": {
+    "huggingfaceRepo": "unsloth/Qwen3.5-9B-GGUF",
+    "huggingfaceFileGlob": "*Q5_K_M*.gguf",
+    "baseModel": "Qwen/Qwen3.5-9B",
+    "notes": "Higher-fidelity alternate quant. Hot-swap from Q4 by changing INDIGO_LLM_MODEL_ID only."
+  },
+  "artifacts": {
+    "weightsRelativePath": "qwen3.5-9b-q5_k_m.gguf",
+    "expectedSha256": null,
+    "approxSizeBytes": 6580000000
+  },
+  "runtime": {
+    "adapter": "openai-compatible-loopback",
+    "defaultEndpoint": "http://127.0.0.1:8080/v1",
+    "servedModelName": "qwen3.5-9b-q5_k_m",
+    "recommendedServer": "llama-server",
+    "minLlamaCppNote": "Requires recent llama.cpp with qwen35 architecture support"
+  },
+  "chat": {
+    "enableThinking": false,
+    "systemPromptProfile": "grounded-explanation"
+  },
+  "sampling": {
+    "temperature": 0.3,
+    "topP": 0.8,
+    "topK": 20,
+    "minP": 0.0,
+    "presencePenalty": 0.0,
+    "repetitionPenalty": 1.0,
+    "maxTokens": 256
+  },
+  "limits": {
+    "timeoutMs": 3000,
+    "maxContextTokens": 4096
+  },
+  "capabilities": {
+    "tasks": ["grounded-explanation"],
+    "multimodal": false
+  }
+}

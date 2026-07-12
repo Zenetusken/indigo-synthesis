@@ -112,7 +112,10 @@ Only after Phase 2:
 - schedule-aware weekly adherence;
 - audited correction of completed sets;
 - program revision history and comparison; and
-- clearer explanation/source inspection.
+- clearer explanation/source inspection (optional host-local grounded prose per
+  [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md), only after the
+  [explanation generation contract](architecture/EXPLANATION_GENERATION_CONTRACT.md)
+  implementation sequence—not model-led coaching).
 
 Gate:
 

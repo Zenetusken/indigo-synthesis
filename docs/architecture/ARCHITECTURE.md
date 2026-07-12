@@ -190,6 +190,17 @@ Properties:
 - overrides are explicit audited decisions;
 - golden vectors and property tests prove determinism and bounds.
 
+### Optional grounded explanation (design only)
+
+Plain-language explanation of **already persisted** decisions may later use an optional
+host-local language model. That path is presentation only: structured reason codes,
+versions, and loads remain authoritative; model output is labeled inferred and must
+validate against a FactBundle. The methodology engine never calls a model.
+
+Design is pinned in [ADR 0006](adr/0006-optional-local-grounded-language.md) and the
+[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md). No inference
+adapter, prompt runtime, or prose store is implemented yet.
+
 ## Data model
 
 The lists below distinguish the live engineering schema from the reviewed-content target.

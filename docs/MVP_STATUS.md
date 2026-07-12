@@ -136,6 +136,26 @@ The target architecture describes module-owned gateways and a shared workflow
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.
 
+## Optional local grounded explanation (infra slice)
+
+[ADR 0006](architecture/adr/0006-optional-local-grounded-language.md) and the
+[explanation generation contract](architecture/EXPLANATION_GENERATION_CONTRACT.md) pin
+structured grounded generation as the only accepted product path for optional local
+language models.
+
+**Implemented (platform only, default disabled):**
+
+- model-agnostic `src/platform/llm` ports, registry, validation gate, and composition;
+- per-model packs under `llm/models/*/settings.json` (first packs: Qwen3.5-9B Q4_K_M and
+  Q5_K_M);
+- loopback-only OpenAI-compatible adapter for host-local servers (e.g. llama-server);
+- operator guide in `llm/README.md`.
+
+**Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations,
+weight download automation, or any methodology authority. History continues to show
+structured reason codes only. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
+**coaching** remains deferred.
+
 ## Production-release blockers
 
 1. Close Methodology Gate 0 with named, independent human reviewers and a rights matrix.

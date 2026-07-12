@@ -1,0 +1,49 @@
+export { createDisabledLanguageModel } from './adapters/disabled'
+export { createFakeLanguageModel } from './adapters/fake'
+export {
+  assertLoopbackEndpoint,
+  createOpenAiCompatibleLoopbackLanguageModel,
+  NonLoopbackEndpointError,
+} from './adapters/openai-compatible-loopback'
+export {
+  composeLlmStack,
+  getLlmComposition,
+  type LlmComposition,
+  resetLlmCompositionForTests,
+} from './composition'
+export {
+  getLlmConfig,
+  InvalidLlmConfigurationError,
+  type LlmRuntimeConfig,
+  parseLlmConfig,
+  resetLlmConfigForTests,
+} from './config'
+export type { ExplanationFactBundle } from './explanation/fact-bundle'
+export {
+  canonicalJsonStringify,
+  explanationCacheKey,
+  factBundleHash,
+} from './explanation/fact-bundle'
+export { createExplanationGenerationPort } from './explanation/synthesize'
+export { validateExplanationProse } from './explanation/validate-prose'
+export {
+  loadModelRegistry,
+  ModelRegistryError,
+  requireModelSettings,
+} from './model-registry'
+export type { ModelSettings } from './model-settings'
+export { InvalidModelSettingsError, parseModelSettings } from './model-settings'
+export type {
+  ExplanationGenerationPort,
+  LanguageModelPort,
+} from './ports'
+export { FUTURE_LOAD_PROMPT_VERSION } from './prompts/future-load.v1'
+export type {
+  ExplanationGenerationRequest,
+  ExplanationGenerationResult,
+  LanguageModelCompleteRequest,
+  LanguageModelCompleteResult,
+  LlmMode,
+  LlmUnavailableReason,
+  SamplingParams,
+} from './types'

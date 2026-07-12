@@ -58,6 +58,13 @@ Therefore:
 Optional outbound adapters must be disabled by default and fail without breaking core
 use.
 
+Optional **local** language inference (host-local only; operator-chosen runtime and
+weights) is an accepted non-mandatory design for grounded explanation prose. The product
+does not mandate a particular model. It is not part of the supported baseline today and
+must not become required for J1–J6. See
+[ADR 0006](adr/0006-optional-local-grounded-language.md) and the
+[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md).
+
 ## Configuration surface
 
 The current required configuration is:

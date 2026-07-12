@@ -110,10 +110,17 @@ Tailwind and a broad UI kit are rejected for the foundation, not prohibited fore
 - WebSockets
 - service mesh
 - SaaS analytics/monitoring
-- model/AI SDK
+- model/AI SDK (no runtime dependency yet)
 - remote font/CDN dependency
 - PWA/offline synchronization package
 - native mobile framework
 - Docker and CI/CD configuration
 
 Each requires its own measured need, entry criterion, and ADR.
+
+Optional local language generation for **grounded explanation prose only** is an accepted
+design. Platform infrastructure lives under `src/platform/llm` with per-model packs in
+`llm/models/*/settings.json` (default `INDIGO_LLM_MODE=disabled`). No cloud model SDK and
+no trainee UI yet. See [ADR 0006](adr/0006-optional-local-grounded-language.md), the
+[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md), and
+[llm/README.md](../../llm/README.md).
