@@ -57,6 +57,28 @@ The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
 `test/integration/`, and `test/e2e/mvp.spec.ts`. Application APIs are not mocked in the
 browser journey.
 
+## Access and recovery (specified 2026-07-12; partially implemented)
+
+A UI/UX audit surfaced a cold-start dead end: a locked-out visitor on a claimed
+instance has no path forward. The response is
+[Access and recovery](product/ACCESS_AND_RECOVERY_SPEC.md) (journeys J7–J9,
+review-hardened), which reconciles to the live repository as:
+
+- **Owner recovery — implemented, not surfaced.** `owner-recovery.ts` and
+  `scripts/identity/recover-owner.ts` provide host-issued one-use recovery with session
+  revocation and audit, but no product-surface entry point (web redeem `/recover`) yet
+  exists.
+- **Trainee credential reset (J7) — specified, not implemented.** No `member-reset`
+  domain, route, or migration exists today; trainees currently have no reset path.
+- **Cold-start orientation (J9) — specified, not implemented.** Sign-in offers no
+  next action for the locked-out.
+- **Account/profile separation (P1–P7) — a forward-compatibility direction**, not code:
+  training data still keys on `userId` (`athlete_profile.userId` is the primary key),
+  and cross-account isolation is application-layer only (no RLS).
+
+None of the above is part of the current green suite; it is a specified next slice, not
+implemented behavior.
+
 ## Cross-cutting status
 
 | Concern | Implemented | Still required for canonical Release 1 |
