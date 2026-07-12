@@ -2,7 +2,7 @@
   align-items: flex-start;
   color: var(--rack-ink-soft);
   display: inline-flex;
-  font-size: 0.9rem;
+  font-size: var(--text-md);
   font-weight: 700;
   gap: var(--space-2);
   line-height: 1.4;
@@ -15,7 +15,7 @@
   display: inline-flex;
   flex: 0 0 auto;
   font-family: var(--font-data);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   height: 1.35rem;
   justify-content: center;
   margin-top: 0.02rem;
@@ -31,7 +31,7 @@
 }
 
 .warning {
-  color: #74510a;
+  color: var(--warning);
 }
 
 .error {

@@ -51,7 +51,13 @@ export function SignOutButton() {
         </div>
       ) : null}
 
-      <button type="button" onClick={signOut} disabled={pending}>
+      <button
+        className={styles.signOut}
+        type="button"
+        onClick={signOut}
+        disabled={pending}
+        aria-busy={pending || undefined}
+      >
         {pending ? 'Signing out…' : 'Sign out'}
       </button>
     </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useEffect, useState } from 'react'
+import { useActionState, useEffect, useRef, useState } from 'react'
 import {
   type DisplayUnits,
   loadUnitLabel,
@@ -43,15 +43,26 @@ export function SetupForm() {
   )
   const [timezone, setTimezone] = useState('UTC')
   const [units, setUnits] = useState<DisplayUnits>('metric')
+  const errorSummaryRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
   }, [])
 
+  useEffect(() => {
+    if (state.errors.length > 0) errorSummaryRef.current?.focus()
+  }, [state])
+
   return (
     <form action={action} className={styles.form}>
       {state.errors.length > 0 ? (
-        <div className={styles.errorSummary} role="alert" tabIndex={-1}>
+        <div
+          className={styles.errorSummary}
+          id="setup-errors"
+          ref={errorSummaryRef}
+          role="alert"
+          tabIndex={-1}
+        >
           <strong>Review the setup information</strong>
           <ul>
             {state.errors.map((error) => (
@@ -75,6 +86,7 @@ export function SetupForm() {
               <option value="metric">Metric (kg)</option>
               <option value="imperial">Imperial (lb)</option>
             </select>
+            <small aria-hidden="true">&nbsp;</small>
           </label>
           <label>
             <span>IANA timezone</span>

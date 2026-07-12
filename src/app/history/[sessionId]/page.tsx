@@ -10,6 +10,7 @@ import {
   getWorkoutSession,
 } from '@/modules/training/application/workouts'
 import styles from '../history.module.css'
+import { PostCompletionSafetyReportForm } from './post-completion-safety-report-form'
 
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Workout history' }
@@ -29,6 +30,10 @@ export default async function SessionHistoryPage({
   if (session?.status !== 'completed' || !adjustments || !profile) notFound()
   const units = profile.profile.units
   const timezone = profile.profile.timezone
+  const correctedSets = session.exercises.flatMap((exercise) =>
+    exercise.sets.filter((set) => set.correction),
+  )
+  const feedbackCorrection = session.feedback?.correction ?? null
 
   return (
     <ProductFrame current="history">
@@ -39,13 +44,68 @@ export default async function SessionHistoryPage({
           description={`Started ${formatDateTimeInTimezone(session.startedAt, timezone)} · Completed ${session.completedAt ? formatDateTimeInTimezone(session.completedAt, timezone) : 'Unavailable'}`}
         />
 
-        <InlineStatus tone="success">Persisted immutable completion facts</InlineStatus>
+        <InlineStatus
+          tone={feedbackCorrection || correctedSets.length > 0 ? 'warning' : 'success'}
+        >
+          {feedbackCorrection || correctedSets.length > 0
+            ? 'Original completion facts retained with append-only audited corrections'
+            : 'Persisted immutable completion facts'}
+        </InlineStatus>
+
+        {feedbackCorrection ? (
+          <section className={styles.correction} aria-labelledby="correction-heading">
+            <h2 id="correction-heading">Post-completion safety correction</h2>
+            <dl className={styles.correctionFacts}>
+              <div>
+                <dt>Original completion answer</dt>
+                <dd>
+                  {session.feedback?.original.painReported
+                    ? 'Pain or a safety issue was reported at completion'
+                    : 'No pain or safety issue reported at completion'}{' '}
+                  ·{' '}
+                  {session.feedback
+                    ? formatDateTimeInTimezone(
+                        session.feedback.original.answeredAt,
+                        timezone,
+                      )
+                    : 'time unavailable'}
+                </dd>
+              </div>
+              <div>
+                <dt>Effective safety fact</dt>
+                <dd>Pain or a safety issue was reported after completion</dd>
+              </div>
+              <div>
+                <dt>Correction recorded</dt>
+                <dd>
+                  {formatDateTimeInTimezone(feedbackCorrection.createdAt, timezone)}
+                </dd>
+              </div>
+              <div>
+                <dt>Reason</dt>
+                <dd>{feedbackCorrection.reason}</dd>
+              </div>
+            </dl>
+            {session.feedback?.details ? (
+              <p>
+                <strong>Factual context:</strong> {session.feedback.details}
+              </p>
+            ) : null}
+            <p>
+              Every affected adjustment and descendant program revision is permanently
+              invalidated. The original workout remains completed; no replacement load is
+              invented.
+            </p>
+          </section>
+        ) : (
+          <PostCompletionSafetyReportForm sessionId={session.id} />
+        )}
 
         <section className={styles.facts} aria-labelledby="performed-heading">
           <h2 id="performed-heading">Performed and skipped sets</h2>
           {session.exercises.map((exercise) => (
             <article className={styles.exercise} key={exercise.id}>
-              <h2>{exercise.exerciseName}</h2>
+              <h3>{exercise.exerciseName}</h3>
               <ol className={styles.sets}>
                 {exercise.sets.map((set) => (
                   <li key={set.id}>
@@ -58,6 +118,17 @@ export default async function SessionHistoryPage({
                     ) : (
                       <strong>Skipped · {set.skipReason}</strong>
                     )}
+                    {set.correction ? (
+                      <small className={styles.setCorrection}>
+                        Original:{' '}
+                        {set.original.status === 'performed'
+                          ? `${formatLoad(set.original.actualLoadGrams, units)} × ${set.original.actualRepetitions ?? '—'} · RPE ${set.original.rpe ?? 'not reported'}`
+                          : `Skipped · ${set.original.skipReason}`}
+                        <br />
+                        Effective audited correction · {set.correction.reason} ·{' '}
+                        {formatDateTimeInTimezone(set.correction.createdAt, timezone)}
+                      </small>
+                    ) : null}
                   </li>
                 ))}
               </ol>
@@ -73,15 +144,32 @@ export default async function SessionHistoryPage({
           </p>
           <ul className={styles.adjustmentList}>
             {adjustments.map((decision) => (
-              <li key={decision.id}>
+              <li
+                className={
+                  decision.invalidatedAt ? styles.invalidatedDecision : undefined
+                }
+                key={decision.id}
+              >
                 <strong>{decision.exerciseCode}</strong>
                 <span>
-                  {decision.decision}: {formatLoad(decision.currentLoadGrams, units)} →{' '}
+                  {decision.invalidatedAt
+                    ? 'Invalidated original decision'
+                    : decision.decision}
+                  : {formatLoad(decision.currentLoadGrams, units)} →{' '}
                   {formatLoad(decision.nextLoadGrams, units)}
                 </span>
                 <code>
                   {decision.reasonCode} · rule {decision.ruleVersion}
                 </code>
+                {decision.invalidatedAt ? (
+                  <small>
+                    No longer active · invalidated{' '}
+                    {formatDateTimeInTimezone(decision.invalidatedAt, timezone)}
+                    {decision.invalidationReason
+                      ? ` · ${decision.invalidationReason}`
+                      : ''}
+                  </small>
+                ) : null}
               </li>
             ))}
           </ul>

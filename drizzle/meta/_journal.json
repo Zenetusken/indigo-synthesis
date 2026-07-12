@@ -78,6 +78,20 @@
       "when": 1783837252623,
       "tag": "0010_program_migration_ledger_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1783841183860,
+      "tag": "0011_zippy_vanisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783876479438,
+      "tag": "0012_empty_the_fury",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import {
   abandonWorkout,
   completeSet,
   completeWorkout,
+  proposeExerciseSubstitution,
   reportPain,
   setSessionPaused,
   skipSet,
@@ -99,6 +100,33 @@ export async function skipSetAction(formData: FormData): Promise<WorkoutActionRe
   }
   revalidatePath(`/workouts/${sessionId}`)
   return { success: true }
+}
+
+export async function proposeExerciseSubstitutionAction(
+  formData: FormData,
+): Promise<WorkoutActionResult> {
+  const actor = await requireActor()
+  const sessionId = String(formData.get('sessionId') ?? '')
+  try {
+    await proposeExerciseSubstitution({
+      userId: actor.userId,
+      sessionId,
+      sessionExerciseId: String(formData.get('sessionExerciseId') ?? ''),
+      commandId: String(formData.get('commandId') ?? ''),
+      requestedExerciseCode: String(formData.get('requestedExerciseCode') ?? ''),
+    })
+  } catch (error) {
+    return {
+      success: false,
+      code:
+        error instanceof WorkoutCommandError
+          ? error.code
+          : 'substitution.proposal-failed',
+      values: captureFormValues(formData, ['requestedExerciseCode']),
+    }
+  }
+
+  return { success: false, code: 'substitution.unapproved' }
 }
 
 export async function pauseAction(formData: FormData): Promise<WorkoutActionResult> {

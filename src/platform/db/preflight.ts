@@ -11,16 +11,22 @@ export type DatabasePreflight = {
   readonly bootstrapTriggerPresent: boolean
   readonly workoutSnapshotColumnsPresent: boolean
   readonly safetyHoldIntegrityPresent: boolean
+  readonly trainingCorrectionIntegrityPresent: boolean
   readonly integrityTriggerCount: number
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 11
+const expectedMigrationCount = 13
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
 } as const
 const requiredIntegrityTriggers = [
+  {
+    name: 'program_aggregate_guard',
+    table: 'program',
+    function: 'indigo_guard_program_aggregate',
+  },
   {
     name: 'workout_session_owner_guard',
     table: 'workout_session',
@@ -72,11 +78,6 @@ const requiredIntegrityTriggers = [
     function: 'indigo_guard_audit_event',
   },
   {
-    name: 'session_feedback_monotonicity_guard',
-    table: 'session_feedback',
-    function: 'indigo_guard_feedback_monotonicity',
-  },
-  {
     name: 'session_feedback_terminal_guard',
     table: 'session_feedback',
     function: 'indigo_guard_terminal_session_feedback',
@@ -85,6 +86,11 @@ const requiredIntegrityTriggers = [
     name: 'program_revision_lineage_immutability_guard',
     table: 'program_revision_lineage',
     function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'program_revision_lineage_provenance_guard',
+    table: 'program_revision_lineage',
+    function: 'indigo_guard_program_revision_lineage_insert',
   },
   {
     name: 'training_command_receipt_immutability_guard',
@@ -101,6 +107,56 @@ const requiredIntegrityTriggers = [
     table: 'safety_hold_resolution',
     function: 'indigo_guard_safety_hold_resolution',
   },
+  {
+    name: 'training_fact_correction_provenance_guard',
+    table: 'training_fact_correction',
+    function: 'indigo_guard_training_fact_correction_insert',
+  },
+  {
+    name: 'session_feedback_correction_provenance_guard',
+    table: 'session_feedback_correction',
+    function: 'indigo_guard_training_fact_specialization_insert',
+  },
+  {
+    name: 'performed_set_correction_provenance_guard',
+    table: 'performed_set_correction',
+    function: 'indigo_guard_training_fact_specialization_insert',
+  },
+  {
+    name: 'adjustment_decision_invalidation_provenance_guard',
+    table: 'adjustment_decision_invalidation',
+    function: 'indigo_guard_training_invalidation_insert',
+  },
+  {
+    name: 'program_revision_invalidation_provenance_guard',
+    table: 'program_revision_invalidation',
+    function: 'indigo_guard_training_invalidation_insert',
+  },
+  {
+    name: 'training_fact_correction_immutability_guard',
+    table: 'training_fact_correction',
+    function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'session_feedback_correction_immutability_guard',
+    table: 'session_feedback_correction',
+    function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'performed_set_correction_immutability_guard',
+    table: 'performed_set_correction',
+    function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'adjustment_decision_invalidation_immutability_guard',
+    table: 'adjustment_decision_invalidation',
+    function: 'indigo_guard_append_only_training_fact',
+  },
+  {
+    name: 'program_revision_invalidation_immutability_guard',
+    table: 'program_revision_invalidation',
+    function: 'indigo_guard_append_only_training_fact',
+  },
 ] as const
 
 export async function inspectDatabase(): Promise<DatabasePreflight> {
@@ -111,6 +167,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     triggerResult,
     columnsResult,
     safetyHoldResult,
+    trainingCorrectionResult,
     integrityResult,
     contentResult,
   ] = await Promise.all([
@@ -142,8 +199,13 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
         SELECT
           count(*) FILTER (
             WHERE table_name = 'workout_session'
-              AND column_name IN ('planned_workout_name', 'scheduled_date', 'slot_code')
-          ) = 3
+              AND column_name IN (
+                'planned_workout_name',
+                'scheduled_date',
+                'slot_code',
+                'snapshot_finalized_at'
+              )
+          ) = 4
           AND count(*) FILTER (
             WHERE table_name = 'adjustment_decision'
               AND column_name = 'applied_revision_id'
@@ -316,6 +378,43 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
               LIKE '%Only a source-less eligibility restriction hold may be cleared once.%'
         ) AS present
     `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        to_regclass('public.training_fact_correction') IS NOT NULL
+        AND to_regclass('public.session_feedback_correction') IS NOT NULL
+        AND to_regclass('public.performed_set_correction') IS NOT NULL
+        AND to_regclass('public.adjustment_decision_invalidation') IS NOT NULL
+        AND to_regclass('public.program_revision_invalidation') IS NOT NULL
+        AND (
+          SELECT count(*)
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'training_fact_correction'
+            AND column_name IN (
+              'id', 'user_id', 'session_id', 'actor_user_id', 'command_id',
+              'correction_kind', 'sequence', 'reason', 'created_at'
+            )
+        ) = 9
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.training_fact_correction'::regclass
+            AND conname = 'training_fact_correction_session_user_fk'
+            AND contype = 'f' AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.training_fact_correction'::regclass
+            AND conname = 'training_fact_correction_reason_check'
+            AND contype = 'c' AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.training_fact_correction_session_sequence_uidx'
+          )
+            AND indisunique AND indisvalid AND indisready
+        ) AS present
+    `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
@@ -370,6 +469,8 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     bootstrapTriggerPresent: triggerResult.rows[0]?.present ?? false,
     workoutSnapshotColumnsPresent: columnsResult.rows[0]?.present ?? false,
     safetyHoldIntegrityPresent: safetyHoldResult.rows[0]?.present ?? false,
+    trainingCorrectionIntegrityPresent:
+      trainingCorrectionResult.rows[0]?.present ?? false,
     integrityTriggerCount: integrityResult.rows[0]?.count ?? 0,
     ineligibleContentRevisionCount: contentResult.rows[0]?.count ?? 0,
   }
@@ -397,6 +498,11 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   if (!result.safetyHoldIntegrityPresent) {
     failures.push(
       'safety-hold ownership, provenance, and resolution constraints are absent',
+    )
+  }
+  if (!result.trainingCorrectionIntegrityPresent) {
+    failures.push(
+      'training correction, invalidation, and finalized-snapshot structures are absent',
     )
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {

@@ -1,4 +1,15 @@
-import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNull,
+  ne,
+  sql,
+} from 'drizzle-orm'
 import type { ZodType } from 'zod'
 import { formatIsoDateInTimezone } from '@/modules/athletes/domain/time'
 import { decideDevelopmentLoadAdjustment } from '@/modules/methodology/domain/adjustment'
@@ -29,21 +40,27 @@ import {
   abandonWorkoutCommandSchema,
   completeSetCommandSchema,
   completeWorkoutCommandSchema,
+  correctPerformedSetCommandSchema,
+  proposeExerciseSubstitutionCommandSchema,
   reportPainCommandSchema,
   resolveSafetyHoldCommandSchema,
   sessionPauseCommandSchema,
   skipSetCommandSchema,
   startWorkoutCommandSchema,
 } from '@/modules/training/domain/commands'
+import { evaluateSubstitution } from '@/modules/training/domain/substitution'
 import { getServerConfig } from '@/platform/config/server'
 import { type DatabaseTransaction, getDb } from '@/platform/db/client'
 import {
+  adjustmentDecisionInvalidations,
   adjustmentDecisions,
   athleteProfiles,
   auditEvents,
   exercisePrescriptions,
+  performedSetCorrections,
   performedSets,
   plannedWorkouts,
+  programRevisionInvalidations,
   programRevisionLineage,
   programRevisions,
   programs,
@@ -51,8 +68,10 @@ import {
   safetyHolds,
   sessionExercises,
   sessionFeedback,
+  sessionFeedbackCorrections,
   setPrescriptions,
   trainingCommandReceipts,
+  trainingFactCorrections,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -136,12 +155,127 @@ function activeHoldWhere(userId: string) {
   )
 }
 
+async function nextCorrectionSequence(
+  transaction: DatabaseTransaction,
+  sessionId: string,
+): Promise<number> {
+  const result = await transaction.execute<{ sequence: number }>(sql`
+    SELECT COALESCE(MAX(sequence), 0)::int + 1 AS sequence
+    FROM ${trainingFactCorrections}
+    WHERE ${trainingFactCorrections.sessionId} = ${sessionId}
+  `)
+  return result.rows[0]?.sequence ?? 1
+}
+
+async function invalidateProgressionFromCorrection(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly correctionId: string
+    readonly userId: string
+    readonly sourceSessionId: string
+    readonly now: Date
+  },
+): Promise<{
+  readonly decisionIds: readonly string[]
+  readonly revisionIds: readonly string[]
+  readonly pausedSessionIds: readonly string[]
+}> {
+  const affected = await transaction.execute<{
+    kind: 'decision' | 'revision'
+    id: string
+  }>(sql`
+    WITH RECURSIVE affected_revision(revision_id) AS (
+      SELECT DISTINCT decision.applied_revision_id
+      FROM ${adjustmentDecisions} AS decision
+      WHERE decision.session_id = ${input.sourceSessionId}
+        AND decision.applied_revision_id IS NOT NULL
+      UNION
+      SELECT lineage.revision_id
+      FROM ${programRevisionLineage} AS lineage
+      JOIN affected_revision AS parent
+        ON parent.revision_id = lineage.parent_revision_id
+    )
+    SELECT 'revision'::text AS kind, revision_id AS id
+    FROM affected_revision
+    UNION ALL
+    SELECT DISTINCT 'decision'::text AS kind, decision.id
+    FROM ${adjustmentDecisions} AS decision
+    LEFT JOIN ${workoutSessions} AS session ON session.id = decision.session_id
+    LEFT JOIN ${plannedWorkouts} AS workout ON workout.id = session.planned_workout_id
+    WHERE decision.session_id = ${input.sourceSessionId}
+       OR workout.revision_id IN (SELECT revision_id FROM affected_revision)
+  `)
+  const revisionIds = affected.rows
+    .filter((row) => row.kind === 'revision')
+    .map((row) => row.id)
+  const decisionIds = affected.rows
+    .filter((row) => row.kind === 'decision')
+    .map((row) => row.id)
+  const pausedSessionIds =
+    revisionIds.length === 0
+      ? []
+      : (
+          await transaction
+            .select({ id: workoutSessions.id })
+            .from(workoutSessions)
+            .innerJoin(
+              plannedWorkouts,
+              eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
+            )
+            .where(
+              and(
+                eq(workoutSessions.userId, input.userId),
+                eq(workoutSessions.status, 'active'),
+                inArray(plannedWorkouts.revisionId, revisionIds),
+              ),
+            )
+        ).map((session) => session.id)
+
+  if (revisionIds.length > 0) {
+    await transaction
+      .insert(programRevisionInvalidations)
+      .values(
+        revisionIds.map((revisionId) => ({
+          revisionId,
+          correctionId: input.correctionId,
+          createdAt: input.now,
+        })),
+      )
+      .onConflictDoNothing({ target: programRevisionInvalidations.revisionId })
+  }
+  if (decisionIds.length > 0) {
+    await transaction
+      .insert(adjustmentDecisionInvalidations)
+      .values(
+        decisionIds.map((decisionId) => ({
+          decisionId,
+          correctionId: input.correctionId,
+          createdAt: input.now,
+        })),
+      )
+      .onConflictDoNothing({ target: adjustmentDecisionInvalidations.decisionId })
+  }
+
+  return { decisionIds, revisionIds, pausedSessionIds }
+}
+
+async function completedSessionInvalidationIsDurable(
+  transaction: DatabaseTransaction,
+  sessionId: string,
+): Promise<boolean> {
+  const result = await transaction.execute<{ durable: boolean }>(sql`
+    SELECT indigo_completed_session_invalidation_is_durable(${sessionId}) AS durable
+  `)
+  return result.rows[0]?.durable ?? false
+}
+
 export type TodayState =
   | { readonly kind: 'program-required' }
   | {
       readonly kind: 'active'
       readonly sessionId: string
       readonly status: string
+      readonly progressionInvalidated: boolean
       readonly contentEligibility: ReturnType<typeof evaluatePersistedContentEligibility>
     }
   | {
@@ -202,6 +336,8 @@ function holdResolutionAvailability(input: {
   readonly reasonCode: string
   readonly sourceSessionId: string | null
   readonly sourceSessionStatus: string | null
+  readonly completedSourceInvalidated: boolean
+  readonly blockingAffectedSessionId: string | null
 }): HoldResolutionAvailability {
   if (input.reasonCode !== 'session-pain-reported') {
     return { kind: 'blocked', reason: 'not-session-pain-hold' }
@@ -209,7 +345,20 @@ function holdResolutionAvailability(input: {
   if (!input.sourceSessionId || !input.sourceSessionStatus) {
     return { kind: 'blocked', reason: 'source-session-missing' }
   }
-  if (input.sourceSessionStatus === 'abandoned') return { kind: 'available' }
+  if (
+    input.sourceSessionStatus === 'abandoned' ||
+    (input.sourceSessionStatus === 'completed' && input.completedSourceInvalidated)
+  )
+    return { kind: 'available' }
+  if (
+    input.sourceSessionStatus === 'completed' &&
+    input.blockingAffectedSessionId
+  ) {
+    return {
+      kind: 'requires-abandonment',
+      sessionId: input.blockingAffectedSessionId,
+    }
+  }
   if (input.sourceSessionStatus === 'active' || input.sourceSessionStatus === 'paused') {
     return {
       kind: 'requires-abandonment',
@@ -239,6 +388,22 @@ export type WorkoutSetView = {
   readonly skippedAt: Date | null
   readonly skipReason: string | null
   readonly note: string | null
+  readonly original: {
+    readonly status: string
+    readonly actualLoadGrams: number | null
+    readonly actualRepetitions: number | null
+    readonly rpe: number | null
+    readonly confirmedAt: Date | null
+    readonly skippedAt: Date | null
+    readonly skipReason: string | null
+    readonly note: string | null
+  }
+  readonly correction: {
+    readonly id: string
+    readonly reason: string
+    readonly actorUserId: string
+    readonly createdAt: Date
+  } | null
 }
 
 export type WorkoutExerciseView = {
@@ -265,6 +430,7 @@ export type WorkoutSessionView = {
   readonly pausedAt: Date | null
   readonly completedAt: Date | null
   readonly optimisticVersion: number
+  readonly progressionInvalidated: boolean
   readonly contentEligibility: ReturnType<typeof evaluatePersistedContentEligibility>
   readonly plannedWorkout: {
     readonly id: string
@@ -276,6 +442,17 @@ export type WorkoutSessionView = {
   readonly feedback: {
     readonly painReported: boolean
     readonly details: string | null
+    readonly original: {
+      readonly painReported: boolean
+      readonly details: string | null
+      readonly answeredAt: Date
+    }
+    readonly correction: {
+      readonly id: string
+      readonly reason: string
+      readonly actorUserId: string
+      readonly createdAt: Date
+    } | null
   } | null
 }
 
@@ -291,6 +468,31 @@ export async function getTodayState(
       reasonCode: safetyHolds.reasonCode,
       sourceSessionId: safetyHolds.sourceSessionId,
       sourceSessionStatus: workoutSessions.status,
+      completedSourceInvalidated: sql<boolean>`
+        indigo_completed_session_invalidation_is_durable(${safetyHolds.sourceSessionId})
+      `,
+      blockingAffectedSessionId: sql<string | null>`(
+        WITH RECURSIVE affected_revision(revision_id) AS (
+          SELECT DISTINCT decision.applied_revision_id
+          FROM ${adjustmentDecisions} AS decision
+          WHERE decision.session_id = ${safetyHolds.sourceSessionId}
+            AND decision.applied_revision_id IS NOT NULL
+          UNION
+          SELECT lineage.revision_id
+          FROM ${programRevisionLineage} AS lineage
+          JOIN affected_revision AS parent
+            ON parent.revision_id = lineage.parent_revision_id
+        )
+        SELECT session.id
+        FROM affected_revision AS affected
+        JOIN ${plannedWorkouts} AS workout
+          ON workout.revision_id = affected.revision_id
+        JOIN ${workoutSessions} AS session
+          ON session.planned_workout_id = workout.id
+        WHERE session.status IN ('initializing', 'active', 'paused')
+        ORDER BY session.started_at, session.id
+        LIMIT 1
+      )`,
     })
     .from(safetyHolds)
     .leftJoin(workoutSessions, eq(workoutSessions.id, safetyHolds.sourceSessionId))
@@ -312,10 +514,15 @@ export async function getTodayState(
       status: workoutSessions.status,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      invalidatedRevisionId: programRevisionInvalidations.revisionId,
     })
     .from(workoutSessions)
     .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
     .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+    .leftJoin(
+      programRevisionInvalidations,
+      eq(programRevisionInvalidations.revisionId, programRevisions.id),
+    )
     .where(
       and(
         eq(workoutSessions.userId, userId),
@@ -329,6 +536,7 @@ export async function getTodayState(
       kind: 'active',
       sessionId: activeSession.id,
       status: activeSession.status,
+      progressionInvalidated: activeSession.invalidatedRevisionId !== null,
       contentEligibility: evaluatePersistedContentEligibility({
         contentMode: getServerConfig().contentMode,
         methodologyStatus: activeSession.methodologyReviewStatus,
@@ -395,10 +603,10 @@ export async function startWorkout(
       .where(
         and(
           eq(workoutSessions.userId, userId),
-          inArray(workoutSessions.status, ['active', 'paused']),
+          inArray(workoutSessions.status, ['initializing', 'active', 'paused']),
         ),
       )
-      .for('update')
+      .for('update', { of: workoutSessions })
       .limit(1)
 
     if (existing) {
@@ -429,10 +637,15 @@ export async function startWorkout(
         slotCode: plannedWorkouts.slotCode,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
+        invalidatedRevisionId: programRevisionInvalidations.revisionId,
         timezone: athleteProfiles.timezone,
       })
       .from(plannedWorkouts)
       .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+      .leftJoin(
+        programRevisionInvalidations,
+        eq(programRevisionInvalidations.revisionId, programRevisions.id),
+      )
       .innerJoin(programs, eq(programs.id, programRevisions.programId))
       .innerJoin(athleteProfiles, eq(athleteProfiles.userId, programs.userId))
       .where(
@@ -464,6 +677,12 @@ export async function startWorkout(
       throw new WorkoutCommandError(
         eligibility.code,
         'The persisted content release is not eligible to start.',
+      )
+    }
+    if (ownedWorkout.invalidatedRevisionId) {
+      throw new WorkoutCommandError(
+        'program.revision-invalidated',
+        'This session progression was invalidated by a training correction.',
       )
     }
 
@@ -502,9 +721,10 @@ export async function startWorkout(
       plannedWorkoutName: ownedWorkout.name,
       scheduledDate: ownedWorkout.scheduledDate,
       slotCode: ownedWorkout.slotCode,
-      status: 'active',
+      status: 'initializing',
       startedAt: now,
       startCommandId: command.commandId,
+      snapshotFinalizedAt: null,
     })
 
     for (const exercise of exercises) {
@@ -534,6 +754,16 @@ export async function startWorkout(
       )
     }
 
+    await transaction
+      .update(workoutSessions)
+      .set({ status: 'active', snapshotFinalizedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(workoutSessions.id, sessionId),
+          eq(workoutSessions.status, 'initializing'),
+        ),
+      )
+
     await transaction.insert(auditEvents).values({
       id: newUuidV7(),
       actorUserId: userId,
@@ -558,10 +788,15 @@ export async function getWorkoutSession(
       session: workoutSessions,
       methodologyReviewStatus: programRevisions.methodologyReviewStatus,
       templateReviewStatus: programRevisions.templateReviewStatus,
+      invalidatedRevisionId: programRevisionInvalidations.revisionId,
     })
     .from(workoutSessions)
     .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
     .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+    .leftJoin(
+      programRevisionInvalidations,
+      eq(programRevisionInvalidations.revisionId, programRevisions.id),
+    )
     .where(and(eq(workoutSessions.id, sessionId), eq(workoutSessions.userId, userId)))
     .limit(1)
   if (!sessionContext) return null
@@ -587,17 +822,82 @@ export async function getWorkoutSession(
     .from(sessionFeedback)
     .where(eq(sessionFeedback.sessionId, sessionId))
     .limit(1)
-  const priorRows =
+  const [feedbackCorrection] = await db
+    .select({
+      id: trainingFactCorrections.id,
+      reason: trainingFactCorrections.reason,
+      actorUserId: trainingFactCorrections.actorUserId,
+      createdAt: trainingFactCorrections.createdAt,
+      painReported: sessionFeedbackCorrections.painReported,
+      details: sessionFeedbackCorrections.details,
+    })
+    .from(sessionFeedbackCorrections)
+    .innerJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, sessionFeedbackCorrections.correctionId),
+    )
+    .where(eq(sessionFeedbackCorrections.sessionId, sessionId))
+    .orderBy(desc(trainingFactCorrections.sequence))
+    .limit(1)
+  const setCorrections =
+    sets.length === 0
+      ? []
+      : await db
+          .select({
+            id: trainingFactCorrections.id,
+            reason: trainingFactCorrections.reason,
+            actorUserId: trainingFactCorrections.actorUserId,
+            createdAt: trainingFactCorrections.createdAt,
+            sequence: trainingFactCorrections.sequence,
+            performedSetId: performedSetCorrections.performedSetId,
+            status: performedSetCorrections.status,
+            actualLoadGrams: performedSetCorrections.actualLoadGrams,
+            actualRepetitions: performedSetCorrections.actualRepetitions,
+            rpe: performedSetCorrections.rpe,
+            confirmedAt: performedSetCorrections.confirmedAt,
+            skippedAt: performedSetCorrections.skippedAt,
+            skipReason: performedSetCorrections.skipReason,
+            note: performedSetCorrections.note,
+          })
+          .from(performedSetCorrections)
+          .innerJoin(
+            trainingFactCorrections,
+            eq(trainingFactCorrections.id, performedSetCorrections.correctionId),
+          )
+          .where(
+            inArray(
+              performedSetCorrections.performedSetId,
+              sets.map((set) => set.id),
+            ),
+          )
+          .orderBy(desc(trainingFactCorrections.sequence))
+  const effectiveSetCorrection = new Map<
+    string,
+    (typeof setCorrections)[number]
+  >()
+  for (const correction of setCorrections) {
+    if (!effectiveSetCorrection.has(correction.performedSetId)) {
+      effectiveSetCorrection.set(correction.performedSetId, correction)
+    }
+  }
+  const priorRowsWithCorrections =
     exercises.length > 0
       ? await db
           .select({
+            setId: performedSets.id,
             sessionId: workoutSessions.id,
             exerciseCode: sessionExercises.exerciseCode,
             completedAt: workoutSessions.completedAt,
             ordinal: performedSets.ordinal,
+            status: performedSets.status,
             loadGrams: performedSets.actualLoadGrams,
             repetitions: performedSets.actualRepetitions,
             rpe: performedSets.rpe,
+            correctionSequence: trainingFactCorrections.sequence,
+            correctedStatus: performedSetCorrections.status,
+            correctedLoadGrams: performedSetCorrections.actualLoadGrams,
+            correctedRepetitions: performedSetCorrections.actualRepetitions,
+            correctedRpe: performedSetCorrections.rpe,
           })
           .from(sessionExercises)
           .innerJoin(workoutSessions, eq(workoutSessions.id, sessionExercises.sessionId))
@@ -605,20 +905,43 @@ export async function getWorkoutSession(
             performedSets,
             eq(performedSets.sessionExerciseId, sessionExercises.id),
           )
+          .leftJoin(
+            performedSetCorrections,
+            eq(performedSetCorrections.performedSetId, performedSets.id),
+          )
+          .leftJoin(
+            trainingFactCorrections,
+            eq(trainingFactCorrections.id, performedSetCorrections.correctionId),
+          )
           .where(
             and(
               eq(workoutSessions.userId, userId),
               ne(workoutSessions.id, sessionId),
               eq(workoutSessions.status, 'completed'),
-              eq(performedSets.status, 'performed'),
               inArray(
                 sessionExercises.exerciseCode,
                 exercises.map((exercise) => exercise.exerciseCode),
               ),
             ),
           )
-          .orderBy(desc(workoutSessions.completedAt), asc(performedSets.ordinal))
+          .orderBy(
+            desc(workoutSessions.completedAt),
+            asc(performedSets.ordinal),
+            desc(trainingFactCorrections.sequence),
+          )
       : []
+  const seenPriorSets = new Set<string>()
+  const priorRows = priorRowsWithCorrections.flatMap((row) => {
+    if (seenPriorSets.has(row.setId)) return []
+    seenPriorSets.add(row.setId)
+    const status = row.correctedStatus ?? row.status
+    const loadGrams = row.correctedStatus ? row.correctedLoadGrams : row.loadGrams
+    const repetitions = row.correctedStatus
+      ? row.correctedRepetitions
+      : row.repetitions
+    const rpe = row.correctedStatus ? row.correctedRpe : row.rpe
+    return status === 'performed' ? [{ ...row, status, loadGrams, repetitions, rpe }] : []
+  })
 
   return {
     id: session.id,
@@ -627,6 +950,7 @@ export async function getWorkoutSession(
     pausedAt: session.pausedAt,
     completedAt: session.completedAt,
     optimisticVersion: session.optimisticVersion,
+    progressionInvalidated: sessionContext.invalidatedRevisionId !== null,
     contentEligibility: evaluatePersistedContentEligibility({
       contentMode: getServerConfig().contentMode,
       methodologyStatus: sessionContext.methodologyReviewStatus,
@@ -672,25 +996,75 @@ export async function getWorkoutSession(
       })(),
       sets: sets
         .filter((set) => set.sessionExerciseId === exercise.id)
-        .map((set) => ({
-          id: set.id,
-          ordinal: set.ordinal,
-          status: set.status,
-          targetLoadGrams: set.targetLoadGrams,
-          targetRepetitions: set.targetRepetitions,
-          restSeconds: set.restSeconds,
-          actualLoadGrams: set.actualLoadGrams,
-          actualRepetitions: set.actualRepetitions,
-          rpe: set.rpe,
-          confirmedAt: set.confirmedAt,
-          skippedAt: set.skippedAt,
-          skipReason: set.skipReason,
-          note: set.note,
-        })),
+        .map((set) => {
+          const correction = effectiveSetCorrection.get(set.id)
+          return {
+            id: set.id,
+            ordinal: set.ordinal,
+            status: correction?.status ?? set.status,
+            targetLoadGrams: set.targetLoadGrams,
+            targetRepetitions: set.targetRepetitions,
+            restSeconds: set.restSeconds,
+            actualLoadGrams: correction
+              ? correction.actualLoadGrams
+              : set.actualLoadGrams,
+            actualRepetitions: correction
+              ? correction.actualRepetitions
+              : set.actualRepetitions,
+            rpe: correction ? correction.rpe : set.rpe,
+            confirmedAt: correction ? correction.confirmedAt : set.confirmedAt,
+            skippedAt: correction ? correction.skippedAt : set.skippedAt,
+            skipReason: correction ? correction.skipReason : set.skipReason,
+            note: correction ? correction.note : set.note,
+            original: {
+              status: set.status,
+              actualLoadGrams: set.actualLoadGrams,
+              actualRepetitions: set.actualRepetitions,
+              rpe: set.rpe,
+              confirmedAt: set.confirmedAt,
+              skippedAt: set.skippedAt,
+              skipReason: set.skipReason,
+              note: set.note,
+            },
+            correction: correction
+              ? {
+                  id: correction.id,
+                  reason: correction.reason,
+                  actorUserId: correction.actorUserId,
+                  createdAt: correction.createdAt,
+                }
+              : null,
+          }
+        }),
     })),
-    feedback: feedback
-      ? { painReported: feedback.painReported, details: feedback.details }
-      : null,
+    feedback: feedbackCorrection
+      ? {
+          painReported: feedbackCorrection.painReported,
+          details: feedbackCorrection.details,
+          original: {
+            painReported: feedback?.painReported ?? false,
+            details: feedback?.details ?? null,
+            answeredAt: feedback?.answeredAt ?? feedbackCorrection.createdAt,
+          },
+          correction: {
+            id: feedbackCorrection.id,
+            reason: feedbackCorrection.reason,
+            actorUserId: feedbackCorrection.actorUserId,
+            createdAt: feedbackCorrection.createdAt,
+          },
+        }
+      : feedback
+        ? {
+            painReported: feedback.painReported,
+            details: feedback.details,
+            original: {
+              painReported: feedback.painReported,
+              details: feedback.details,
+              answeredAt: feedback.answeredAt,
+            },
+            correction: null,
+          }
+        : null,
   }
 }
 
@@ -722,6 +1096,7 @@ export async function completeSet(rawInput: {
         targetRepetitions: performedSets.targetRepetitions,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
+        invalidatedRevisionId: programRevisionInvalidations.revisionId,
       })
       .from(performedSets)
       .innerJoin(
@@ -734,6 +1109,10 @@ export async function completeSet(rawInput: {
         eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
       )
       .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+      .leftJoin(
+        programRevisionInvalidations,
+        eq(programRevisionInvalidations.revisionId, programRevisions.id),
+      )
       .where(
         and(
           eq(performedSets.id, input.setId),
@@ -741,7 +1120,7 @@ export async function completeSet(rawInput: {
           eq(workoutSessions.userId, input.userId),
         ),
       )
-      .for('update')
+      .for('update', { of: performedSets })
       .limit(1)
     if (!set) throw new WorkoutCommandError('set.not-found', 'Set not found.')
     const receiptRequest = {
@@ -768,6 +1147,12 @@ export async function completeSet(rawInput: {
         'This persisted session content is not eligible for set recording.',
       )
     }
+    if (set.invalidatedRevisionId) {
+      throw new WorkoutCommandError(
+        'program.revision-invalidated',
+        'This session progression was invalidated by a training correction.',
+      )
+    }
     if (set.status !== 'pending') {
       throw new WorkoutCommandError('set.already-resolved', 'Set is already resolved.')
     }
@@ -776,7 +1161,7 @@ export async function completeSet(rawInput: {
       .select({ status: workoutSessions.status })
       .from(workoutSessions)
       .where(eq(workoutSessions.id, input.sessionId))
-      .for('update')
+      .for('update', { of: workoutSessions })
       .limit(1)
     if (session?.status !== 'active') {
       throw new WorkoutCommandError('session.not-active', 'Resume the session first.')
@@ -820,6 +1205,55 @@ export async function completeSet(rawInput: {
   })
 }
 
+/**
+ * Authenticated application boundary for an exercise-substitution proposal.
+ *
+ * Indigo has no reviewed substitution release or persistence contract yet. This
+ * gateway therefore verifies ownership, evaluates the domain policy, and denies
+ * before any command receipt, session snapshot, or prescription can be written.
+ * The unconditional denial is deliberate: if the domain policy is broadened before
+ * persistence is implemented, this boundary still fails closed.
+ */
+export async function proposeExerciseSubstitution(rawInput: {
+  readonly userId: string
+  readonly sessionId: string
+  readonly sessionExerciseId: string
+  readonly commandId: string
+  readonly requestedExerciseCode: string
+}): Promise<never> {
+  const input = {
+    userId: rawInput.userId,
+    ...parseWorkoutCommand(proposeExerciseSubstitutionCommandSchema, rawInput),
+  }
+
+  const [exercise] = await getDb()
+    .select({ exerciseCode: sessionExercises.exerciseCode })
+    .from(sessionExercises)
+    .innerJoin(workoutSessions, eq(workoutSessions.id, sessionExercises.sessionId))
+    .where(
+      and(
+        eq(sessionExercises.id, input.sessionExerciseId),
+        eq(sessionExercises.sessionId, input.sessionId),
+        eq(workoutSessions.userId, input.userId),
+      ),
+    )
+    .limit(1)
+  if (!exercise) {
+    throw new WorkoutCommandError('exercise.not-found', 'Session exercise not found.')
+  }
+
+  const decision = evaluateSubstitution(
+    exercise.exerciseCode,
+    input.requestedExerciseCode,
+  )
+  throw new WorkoutCommandError(
+    'substitution.unapproved',
+    decision.allowed
+      ? 'Substitution persistence is unavailable, so this proposal cannot be applied.'
+      : decision.reason,
+  )
+}
+
 export async function skipSet(rawInput: {
   readonly userId: string
   readonly sessionId: string
@@ -844,6 +1278,7 @@ export async function skipSet(rawInput: {
         sessionStatus: workoutSessions.status,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
+        invalidatedRevisionId: programRevisionInvalidations.revisionId,
       })
       .from(performedSets)
       .innerJoin(
@@ -856,6 +1291,10 @@ export async function skipSet(rawInput: {
         eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
       )
       .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+      .leftJoin(
+        programRevisionInvalidations,
+        eq(programRevisionInvalidations.revisionId, programRevisions.id),
+      )
       .where(
         and(
           eq(performedSets.id, input.setId),
@@ -863,7 +1302,7 @@ export async function skipSet(rawInput: {
           eq(workoutSessions.userId, input.userId),
         ),
       )
-      .for('update')
+      .for('update', { of: performedSets })
       .limit(1)
     if (!set) throw new WorkoutCommandError('set.not-found', 'Set not found.')
     const receiptRequest = {
@@ -885,11 +1324,26 @@ export async function skipSet(rawInput: {
         'This persisted session content is not eligible for set changes.',
       )
     }
+    if (set.invalidatedRevisionId) {
+      throw new WorkoutCommandError(
+        'program.revision-invalidated',
+        'This session progression was invalidated by a training correction.',
+      )
+    }
     if (set.sessionStatus !== 'active') {
       throw new WorkoutCommandError('session.not-active', 'Resume the session first.')
     }
     if (set.status !== 'pending')
       throw new WorkoutCommandError('set.already-resolved', 'Set is already resolved.')
+
+    const [hold] = await transaction
+      .select({ id: safetyHolds.id })
+      .from(safetyHolds)
+      .where(activeHoldWhere(input.userId))
+      .limit(1)
+    if (hold) {
+      throw new WorkoutCommandError('safety.hold-active', 'Set skipping is blocked.')
+    }
 
     if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
@@ -933,6 +1387,7 @@ export async function setSessionPaused(
         .select({
           methodologyReviewStatus: programRevisions.methodologyReviewStatus,
           templateReviewStatus: programRevisions.templateReviewStatus,
+          invalidatedRevisionId: programRevisionInvalidations.revisionId,
         })
         .from(workoutSessions)
         .innerJoin(
@@ -940,6 +1395,10 @@ export async function setSessionPaused(
           eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
         )
         .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+        .leftJoin(
+          programRevisionInvalidations,
+          eq(programRevisionInvalidations.revisionId, programRevisions.id),
+        )
         .where(
           and(
             eq(workoutSessions.id, command.sessionId),
@@ -947,9 +1406,15 @@ export async function setSessionPaused(
             eq(workoutSessions.status, 'paused'),
           ),
         )
-        .for('update')
+        .for('update', { of: workoutSessions })
         .limit(1)
       if (contentContext) {
+        if (contentContext.invalidatedRevisionId) {
+          throw new WorkoutCommandError(
+            'program.revision-invalidated',
+            'This session progression was invalidated by a training correction.',
+          )
+        }
         const eligibility = evaluatePersistedContentEligibility({
           contentMode: getServerConfig().contentMode,
           methodologyStatus: contentContext.methodologyReviewStatus,
@@ -1024,7 +1489,7 @@ export async function reportPain(rawInput: {
           eq(workoutSessions.userId, input.userId),
         ),
       )
-      .for('update')
+      .for('update', { of: workoutSessions })
       .limit(1)
     if (!session) throw new WorkoutCommandError('session.not-found', 'Session not found.')
     const receiptRequest = {
@@ -1068,28 +1533,48 @@ export async function reportPain(rawInput: {
         .where(eq(workoutSessions.id, input.sessionId))
     }
 
+    let correctionId: string | null = null
+    let invalidation:
+      | Awaited<ReturnType<typeof invalidateProgressionFromCorrection>>
+      | undefined
     if (session.status === 'completed') {
-      await transaction.execute(
-        sql`SELECT set_config(
-          'indigo.session_feedback_write_mode',
-          'post-completion-safety-report',
-          true
-        )`,
-      )
-    }
-
-    await transaction
-      .insert(sessionFeedback)
-      .values({
+      correctionId = newUuidV7()
+      await transaction.insert(trainingFactCorrections).values({
+        id: correctionId,
+        userId: input.userId,
         sessionId: input.sessionId,
+        actorUserId: input.userId,
+        commandId: input.commandId,
+        correctionKind: 'session-feedback',
+        sequence: await nextCorrectionSequence(transaction, input.sessionId),
+        reason: 'Pain reported after session completion.',
+        createdAt: now,
+      })
+      await transaction.insert(sessionFeedbackCorrections).values({
+        correctionId,
+        sessionId: input.sessionId,
+        userId: input.userId,
         painReported: true,
         details: input.details || null,
         answeredAt: now,
       })
-      .onConflictDoUpdate({
-        target: sessionFeedback.sessionId,
-        set: { painReported: true, details: input.details || null, answeredAt: now },
+      invalidation = await invalidateProgressionFromCorrection(transaction, {
+        correctionId,
+        userId: input.userId,
+        sourceSessionId: input.sessionId,
+        now,
       })
+    } else {
+      await transaction
+        .insert(sessionFeedback)
+        .values({
+          sessionId: input.sessionId,
+          painReported: true,
+          details: input.details || null,
+          answeredAt: now,
+        })
+        .onConflictDoNothing({ target: sessionFeedback.sessionId })
+    }
     if (!existingHold) {
       await transaction.insert(safetyHolds).values({
         id: newUuidV7(),
@@ -1110,6 +1595,132 @@ export async function reportPain(rawInput: {
         action:
           session.status === 'completed' ? 'post-completion-hold' : 'paused-and-held',
         coalescedWithExistingHold: Boolean(existingHold),
+        correctionId,
+        invalidatedDecisionCount: invalidation?.decisionIds.length ?? 0,
+        invalidatedRevisionCount: invalidation?.revisionIds.length ?? 0,
+        pausedAffectedSessionCount: invalidation?.pausedSessionIds.length ?? 0,
+      },
+    })
+  })
+}
+
+export async function correctPerformedSet(rawInput: {
+  readonly userId: string
+  readonly sessionId: string
+  readonly setId: string
+  readonly commandId: string
+  readonly reason: string
+  readonly actualLoadGrams: number
+  readonly actualRepetitions: number
+  readonly rpe: number | null
+  readonly note: string | null
+}): Promise<void> {
+  const input = {
+    userId: rawInput.userId,
+    ...parseWorkoutCommand(correctPerformedSetCommandSchema, rawInput),
+  }
+
+  await getDb().transaction(async (transaction) => {
+    await transaction.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
+    )
+    const [target] = await transaction
+      .select({
+        id: performedSets.id,
+        status: performedSets.status,
+        targetLoadGrams: performedSets.targetLoadGrams,
+        targetRepetitions: performedSets.targetRepetitions,
+        sessionStatus: workoutSessions.status,
+      })
+      .from(performedSets)
+      .innerJoin(
+        sessionExercises,
+        eq(sessionExercises.id, performedSets.sessionExerciseId),
+      )
+      .innerJoin(workoutSessions, eq(workoutSessions.id, sessionExercises.sessionId))
+      .where(
+        and(
+          eq(performedSets.id, input.setId),
+          eq(workoutSessions.id, input.sessionId),
+          eq(workoutSessions.userId, input.userId),
+        ),
+      )
+      .for('update')
+      .limit(1)
+    if (!target) throw new WorkoutCommandError('set.not-found', 'Set not found.')
+
+    const receiptRequest = {
+      commandType: 'correct-performed-set',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      targetId: input.setId,
+      payload: {
+        reason: input.reason,
+        actualLoadGrams: input.actualLoadGrams,
+        actualRepetitions: input.actualRepetitions,
+        rpe: input.rpe,
+        note: input.note,
+      },
+    } satisfies TrainingCommandRequest
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (target.sessionStatus !== 'completed' || target.status === 'pending') {
+      throw new WorkoutCommandError(
+        'set.not-correctable',
+        'Only a resolved set from a completed session can be corrected.',
+      )
+    }
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
+
+    const now = new Date()
+    const correctionId = newUuidV7()
+    await transaction.insert(trainingFactCorrections).values({
+      id: correctionId,
+      userId: input.userId,
+      sessionId: input.sessionId,
+      actorUserId: input.userId,
+      commandId: input.commandId,
+      correctionKind: 'performed-set',
+      sequence: await nextCorrectionSequence(transaction, input.sessionId),
+      reason: input.reason,
+      createdAt: now,
+    })
+    await transaction.insert(performedSetCorrections).values({
+      correctionId,
+      sessionId: input.sessionId,
+      userId: input.userId,
+      performedSetId: input.setId,
+      status: 'performed',
+      actualLoadGrams: input.actualLoadGrams,
+      actualRepetitions: input.actualRepetitions,
+      rpe: input.rpe,
+      loadProvenance:
+        input.actualLoadGrams === target.targetLoadGrams ? 'copied-target' : 'edited',
+      repetitionsProvenance:
+        input.actualRepetitions === target.targetRepetitions
+          ? 'copied-target'
+          : 'edited',
+      explicitlyConfirmed: true,
+      confirmedAt: now,
+      note: input.note,
+    })
+    const invalidation = await invalidateProgressionFromCorrection(transaction, {
+      correctionId,
+      userId: input.userId,
+      sourceSessionId: input.sessionId,
+      now,
+    })
+    await transaction.insert(auditEvents).values({
+      id: newUuidV7(),
+      actorUserId: input.userId,
+      subjectUserId: input.userId,
+      eventType: 'training-fact-corrected',
+      entityType: 'performed-set',
+      entityId: input.setId,
+      metadata: {
+        correctionId,
+        invalidatedDecisionCount: invalidation.decisionIds.length,
+        invalidatedRevisionCount: invalidation.revisionIds.length,
+        pausedAffectedSessionCount: invalidation.pausedSessionIds.length,
       },
     })
   })
@@ -1204,13 +1815,19 @@ export async function resolveSafetyHold(rawInput: {
         'Abandon the affected workout before resolving this hold.',
       )
     }
-    if (sourceSession.status === 'completed') {
+    if (
+      sourceSession.status === 'completed' &&
+      !(await completedSessionInvalidationIsDurable(
+        transaction,
+        hold.sourceSessionId,
+      ))
+    ) {
       throw new WorkoutCommandError(
         'hold.completed-source-invalidation-required',
         'This hold remains active until affected future training is invalidated.',
       )
     }
-    if (sourceSession.status !== 'abandoned') {
+    if (!['abandoned', 'completed'].includes(sourceSession.status)) {
       throw new WorkoutCommandError(
         'hold.not-resolvable',
         'The source session is not in a resolvable terminal state.',
@@ -1283,10 +1900,10 @@ export async function completeWorkout(rawInput: {
         'Confirm the end-of-session safety question.',
       )
     }
-    if (!['active', 'paused'].includes(session.status)) {
+    if (session.status !== 'active') {
       throw new WorkoutCommandError(
         'session.not-completable',
-        'This session cannot be completed.',
+        'Resume the session before completing it.',
       )
     }
 
@@ -1295,6 +1912,7 @@ export async function completeWorkout(rawInput: {
         methodologyId: programRevisions.methodologyId,
         methodologyReviewStatus: programRevisions.methodologyReviewStatus,
         templateReviewStatus: programRevisions.templateReviewStatus,
+        invalidatedRevisionId: programRevisionInvalidations.revisionId,
       })
       .from(workoutSessions)
       .innerJoin(
@@ -1302,13 +1920,23 @@ export async function completeWorkout(rawInput: {
         eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId),
       )
       .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+      .leftJoin(
+        programRevisionInvalidations,
+        eq(programRevisionInvalidations.revisionId, programRevisions.id),
+      )
       .where(eq(workoutSessions.id, input.sessionId))
-      .for('update')
+      .for('update', { of: workoutSessions })
       .limit(1)
     if (!adjustmentContext) {
       throw new WorkoutCommandError(
         'content.release-missing',
         'The persisted content release is unavailable.',
+      )
+    }
+    if (adjustmentContext.invalidatedRevisionId) {
+      throw new WorkoutCommandError(
+        'program.revision-invalidated',
+        'This session progression was invalidated by a training correction.',
       )
     }
     const eligibility = evaluatePersistedContentEligibility({
@@ -1370,12 +1998,7 @@ export async function completeWorkout(rawInput: {
     if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
     const now = new Date()
-    if (feedback) {
-      await transaction
-        .update(sessionFeedback)
-        .set({ painReported: false, details: null, answeredAt: now })
-        .where(eq(sessionFeedback.sessionId, input.sessionId))
-    } else {
+    if (!feedback) {
       await transaction.insert(sessionFeedback).values({
         sessionId: input.sessionId,
         painReported: false,
@@ -1438,16 +2061,6 @@ export async function completeWorkout(rawInput: {
         reasonCode: decision.reasonCode,
         policyVersion: decision.policyVersion,
       })
-      await transaction.insert(adjustmentDecisions).values({
-        id: newUuidV7(),
-        sessionId: input.sessionId,
-        exerciseCode: exercise.exerciseCode,
-        decision: decision.kind === 'blocked' ? 'unavailable' : decision.kind,
-        currentLoadGrams: decision.currentTargetLoadGrams,
-        nextLoadGrams: decision.proposedTargetLoadGrams,
-        reasonCode: decision.reasonCode,
-        ruleVersion: decision.policyVersion,
-      })
     }
 
     const [programContext] = await transaction
@@ -1483,6 +2096,7 @@ export async function completeWorkout(rawInput: {
       .for('update')
       .limit(1)
 
+    let appliedRevisionId: string | null = null
     if (
       developmentAdjustmentEligible &&
       programContext?.sourceRevisionStatus === 'active' &&
@@ -1660,11 +2274,24 @@ export async function completeWorkout(rawInput: {
           revisionId,
           sourceSessionId: input.sessionId,
         })
-        await transaction
-          .update(adjustmentDecisions)
-          .set({ appliedRevisionId: revisionId })
-          .where(eq(adjustmentDecisions.sessionId, input.sessionId))
+        appliedRevisionId = revisionId
       }
+    }
+
+    if (decisions.length > 0) {
+      await transaction.insert(adjustmentDecisions).values(
+        decisions.map((decision) => ({
+          id: newUuidV7(),
+          sessionId: input.sessionId,
+          appliedRevisionId,
+          exerciseCode: decision.exerciseCode,
+          decision: decision.kind === 'blocked' ? 'unavailable' : decision.kind,
+          currentLoadGrams: decision.currentTargetLoadGrams,
+          nextLoadGrams: decision.proposedTargetLoadGrams,
+          reasonCode: decision.reasonCode,
+          ruleVersion: decision.policyVersion,
+        })),
+      )
     }
 
     await transaction
@@ -1805,8 +2432,21 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
     return null
   }
   return getDb()
-    .select()
+    .select({
+      ...getTableColumns(adjustmentDecisions),
+      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationReason: trainingFactCorrections.reason,
+    })
     .from(adjustmentDecisions)
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
     .where(eq(adjustmentDecisions.sessionId, sessionId))
     .orderBy(asc(adjustmentDecisions.exerciseCode))
 }

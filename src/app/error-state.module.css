@@ -6,7 +6,8 @@
 }
 
 .panel {
-  border-block-start: 0.4rem solid var(--danger);
+  background: var(--paper);
+  border-block-start: var(--accent-bar) solid var(--danger);
   display: grid;
   gap: var(--space-4);
   margin-inline: auto;
@@ -28,7 +29,7 @@
 
 .eyebrow {
   color: var(--danger);
-  font: 600 0.75rem / 1 var(--font-data);
+  font: 600 var(--text-sm) / 1 var(--font-data);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }

@@ -27,6 +27,7 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import { assertDatabaseReady } from '@/platform/db/preflight'
 import {
+  adjustmentDecisionInvalidations,
   adjustmentDecisions,
   athleteEquipment,
   athleteProfiles,
@@ -35,8 +36,11 @@ import {
   deletionTombstones,
   exercisePrescriptions,
   installationState,
+  performedSetCorrections,
   performedSets,
   plannedWorkouts,
+  programRevisionInvalidations,
+  programRevisionLineage,
   programRevisions,
   programs,
   safetyHoldResolutions,
@@ -46,6 +50,7 @@ import {
   setPrescriptions,
   strengthBaselines,
   trainingCommandReceipts,
+  trainingFactCorrections,
   user,
   verification,
   workoutSessions,
@@ -124,7 +129,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
     await transaction.insert(programs).values({
       id: programId,
       userId,
-      status: 'active',
+      status: 'draft',
       createdAt: now,
       updatedAt: now,
     })
@@ -191,7 +196,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
       },
       {
         id: completedWorkoutId,
-        revisionId: secondRevisionId,
+        revisionId: firstRevisionId,
         scheduledDate: '2026-07-12',
         ordinal: 2,
         programOrdinal: 2,
@@ -228,16 +233,16 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
       })),
     )
     await transaction
-      .update(programRevisions)
-      .set({ status: 'superseded', activatedAt: now })
-      .where(eq(programRevisions.id, firstRevisionId))
+      .update(programs)
+      .set({ status: 'active', updatedAt: now })
+      .where(eq(programs.id, programId))
     await transaction
       .update(programRevisions)
       .set({
         status: 'active',
-        activatedAt: new Date('2026-07-11T12:10:00.000Z'),
+        activatedAt: now,
       })
-      .where(eq(programRevisions.id, secondRevisionId))
+      .where(eq(programRevisions.id, firstRevisionId))
 
     const sessionFixtures = [
       {
@@ -283,7 +288,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
         plannedWorkoutName: fixture.workoutName,
         scheduledDate: fixture.scheduledDate,
         slotCode: fixture.slotCode,
-        status: 'active',
+        status: 'initializing',
         startedAt: fixture.startedAt,
         optimisticVersion: 1,
         startCommandId: `start-${fixture.suffix}`,
@@ -303,24 +308,61 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
         id: fixture.setId,
         sessionExerciseId: fixture.exerciseId,
         ordinal: 1,
-        status: fixture.status,
+        status: 'pending',
         targetLoadGrams: 60_000,
         targetRepetitions: 5,
         restSeconds: 180,
-        actualLoadGrams: fixture.status === 'performed' ? 62_500 : null,
-        actualRepetitions: fixture.status === 'performed' ? 5 : null,
-        rpe: fixture.status === 'performed' ? 8 : null,
-        loadProvenance: fixture.status === 'performed' ? 'edited' : null,
-        repetitionsProvenance: fixture.status === 'performed' ? 'copied-target' : null,
-        explicitlyConfirmed: fixture.status === 'performed',
-        confirmedAt:
-          fixture.status === 'performed' ? new Date('2026-07-10T12:20:00.000Z') : null,
-        skippedAt:
-          fixture.status === 'skipped' ? new Date('2026-07-09T12:05:00.000Z') : null,
-        skipReason: fixture.status === 'skipped' ? 'Session ended early.' : null,
-        note: fixture.status === 'performed' ? 'Felt controlled.' : null,
-        commandId: fixture.status === 'pending' ? null : `set-${fixture.suffix}`,
       })
+      await transaction
+        .update(workoutSessions)
+        .set({
+          status: 'active',
+          snapshotFinalizedAt: fixture.startedAt,
+          updatedAt: fixture.startedAt,
+        })
+        .where(eq(workoutSessions.id, fixture.sessionId))
+
+      if (fixture.status !== 'pending') {
+        const setCommandId = `set-${fixture.suffix}`
+        await transaction.insert(trainingCommandReceipts).values({
+          commandId: setCommandId,
+          userId,
+          commandType: fixture.status === 'performed' ? 'complete-set' : 'skip-set',
+          sessionId: fixture.sessionId,
+          targetId: fixture.setId,
+          requestHash: `canonical-${fixture.status}-request-hash`,
+          resultSnapshot: { status: 'succeeded' },
+          createdAt: fixture.startedAt,
+        })
+        await transaction
+          .update(performedSets)
+          .set(
+            fixture.status === 'performed'
+              ? {
+                  status: 'performed',
+                  actualLoadGrams: 62_500,
+                  actualRepetitions: 5,
+                  rpe: 8,
+                  loadProvenance: 'edited',
+                  repetitionsProvenance: 'copied-target',
+                  explicitlyConfirmed: true,
+                  confirmedAt: new Date('2026-07-10T12:20:00.000Z'),
+                  note: 'Felt controlled.',
+                  commandId: setCommandId,
+                }
+              : {
+                  status: 'skipped',
+                  skippedAt: new Date('2026-07-09T12:05:00.000Z'),
+                  skipReason: 'Session ended early.',
+                  commandId: setCommandId,
+                },
+          )
+          .where(eq(performedSets.id, fixture.setId))
+        await transaction
+          .update(workoutSessions)
+          .set({ optimisticVersion: 2, updatedAt: fixture.startedAt })
+          .where(eq(workoutSessions.id, fixture.sessionId))
+      }
 
       if (fixture.suffix === 'completed') {
         await transaction.insert(sessionFeedback).values({
@@ -328,6 +370,13 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           painReported: false,
           details: null,
           answeredAt: new Date('2026-07-10T12:30:00.000Z'),
+        })
+        await transaction.insert(programRevisionLineage).values({
+          revisionId: secondRevisionId,
+          parentRevisionId: firstRevisionId,
+          sourceSessionId: fixture.sessionId,
+          sourceProgramOrdinal: 2,
+          createdAt: new Date('2026-07-10T12:30:00.000Z'),
         })
         await transaction.insert(adjustmentDecisions).values({
           id: newUuidV7(),
@@ -340,22 +389,44 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           reasonCode: 'all-sets-within-rpe-bound',
           ruleVersion: 'development-adjustment-v1',
         })
+        await transaction.insert(trainingCommandReceipts).values({
+          commandId: 'complete-completed',
+          userId,
+          commandType: 'complete-workout',
+          sessionId: fixture.sessionId,
+          targetId: fixture.sessionId,
+          requestHash: 'canonical-completion-request-hash',
+          resultSnapshot: { status: 'succeeded' },
+          createdAt: new Date('2026-07-10T12:30:00.000Z'),
+        })
         await transaction
           .update(workoutSessions)
           .set({
             status: 'completed',
             completedAt: new Date('2026-07-10T12:30:00.000Z'),
             completionCommandId: 'complete-completed',
-            optimisticVersion: 2,
+            optimisticVersion: 3,
           })
           .where(eq(workoutSessions.id, fixture.sessionId))
+        await transaction
+          .update(programRevisions)
+          .set({ status: 'superseded' })
+          .where(eq(programRevisions.id, firstRevisionId))
+        await transaction
+          .update(programRevisions)
+          .set({
+            status: 'active',
+            activatedAt: new Date('2026-07-10T12:30:00.000Z'),
+          })
+          .where(eq(programRevisions.id, secondRevisionId))
       } else if (fixture.suffix === 'abandoned') {
         await transaction
           .update(workoutSessions)
           .set({
             status: 'abandoned',
             abandonedAt: new Date('2026-07-09T12:10:00.000Z'),
-            optimisticVersion: 2,
+            abandonedReason: 'Session ended early.',
+            optimisticVersion: 3,
           })
           .where(eq(workoutSessions.id, fixture.sessionId))
       }
@@ -375,16 +446,6 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
       reason: 'Symptoms were reviewed; I am choosing to resume training.',
       acknowledged: true,
       createdAt: new Date('2026-07-11T12:05:00.000Z'),
-    })
-    await transaction.insert(trainingCommandReceipts).values({
-      commandId: 'complete-completed',
-      userId,
-      commandType: 'complete-workout',
-      sessionId: completedSessionId,
-      targetId: completedSessionId,
-      requestHash: 'canonical-completion-request-hash',
-      resultSnapshot: { status: 'succeeded' },
-      createdAt: new Date('2026-07-10T12:30:00.000Z'),
     })
     await transaction.insert(auditEvents).values({
       id: newUuidV7(),
@@ -417,6 +478,10 @@ async function seedResolvedHoldForSubject(userId: string): Promise<{
         name: plannedWorkouts.name,
         scheduledDate: plannedWorkouts.scheduledDate,
         slotCode: plannedWorkouts.slotCode,
+        revisionId: programRevisions.id,
+        revisionStatus: programRevisions.status,
+        programId: programs.id,
+        programStatus: programs.status,
       })
       .from(plannedWorkouts)
       .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
@@ -428,7 +493,20 @@ async function seedResolvedHoldForSubject(userId: string): Promise<{
     const sessionId = newUuidV7()
     const holdId = newUuidV7()
     const resolutionId = newUuidV7()
+    const exerciseId = newUuidV7()
     const abandonedAt = new Date('2026-07-11T14:00:00.000Z')
+    if (workout.programStatus === 'draft') {
+      await transaction
+        .update(programs)
+        .set({ status: 'active', updatedAt: abandonedAt })
+        .where(eq(programs.id, workout.programId))
+    }
+    if (workout.revisionStatus === 'draft') {
+      await transaction
+        .update(programRevisions)
+        .set({ status: 'active', activatedAt: abandonedAt })
+        .where(eq(programRevisions.id, workout.revisionId))
+    }
     await transaction.insert(workoutSessions).values({
       id: sessionId,
       userId,
@@ -436,13 +514,44 @@ async function seedResolvedHoldForSubject(userId: string): Promise<{
       plannedWorkoutName: workout.name,
       scheduledDate: workout.scheduledDate,
       slotCode: workout.slotCode,
-      status: 'abandoned',
+      status: 'initializing',
       startedAt: new Date('2026-07-11T13:30:00.000Z'),
-      abandonedAt,
-      abandonedReason: 'Stopped after reporting pain.',
       optimisticVersion: 1,
       startCommandId: newUuidV7(),
     })
+    await transaction.insert(sessionExercises).values({
+      id: exerciseId,
+      sessionId,
+      exerciseCode: 'development.back-squat',
+      exerciseName: 'Back squat member deletion fixture',
+      ordinal: 1,
+      safetyTier: 'standard',
+      rationaleCode: 'development.fixture-instantiation',
+      originalExerciseCode: 'development.back-squat',
+      substitutionReason: null,
+    })
+    await transaction.insert(performedSets).values({
+      id: newUuidV7(),
+      sessionExerciseId: exerciseId,
+      ordinal: 1,
+      status: 'pending',
+      targetLoadGrams: 60_000,
+      targetRepetitions: 5,
+      restSeconds: 180,
+    })
+    await transaction
+      .update(workoutSessions)
+      .set({ status: 'active', snapshotFinalizedAt: abandonedAt })
+      .where(eq(workoutSessions.id, sessionId))
+    await transaction
+      .update(workoutSessions)
+      .set({
+        status: 'abandoned',
+        abandonedAt,
+        abandonedReason: 'Stopped after reporting pain.',
+        optimisticVersion: 2,
+      })
+      .where(eq(workoutSessions.id, sessionId))
     await transaction.insert(safetyHolds).values({
       id: holdId,
       userId,
@@ -524,29 +633,54 @@ describe('subject export and exact instance reset', () => {
     )
     expect(completed?.prescriptionProvenance).toMatchObject({
       available: true,
-      revisionId: secondRevisionId,
-      normalizedInputHash: 'input-hash-v2',
-      outputHash: 'output-hash-v2',
+      revisionId: firstRevisionId,
+      normalizedInputHash: 'input-hash-v1',
+      outputHash: 'output-hash-v1',
     })
     expect(completed?.exercises[0]?.sets[0]).toMatchObject({
       status: 'performed',
       loadProvenance: 'edited',
       repetitionsProvenance: 'copied-target',
       explicitlyConfirmed: true,
+      original: {
+        status: 'performed',
+        actualLoadGrams: 62_500,
+        actualRepetitions: 5,
+      },
+      corrections: [],
+      effective: {
+        status: 'performed',
+        actualLoadGrams: 62_500,
+        actualRepetitions: 5,
+        correctionId: null,
+      },
     })
     expect(completed?.adjustments[0]).toMatchObject({
       appliedRevisionId: secondRevisionId,
       ruleVersion: 'development-adjustment-v1',
       reasonCode: 'all-sets-within-rpe-bound',
+      invalidation: null,
     })
-    expect(completed?.commandReceipts).toEqual([
-      expect.objectContaining({
-        commandId: 'complete-completed',
-        commandType: 'complete-workout',
-        requestHash: 'canonical-completion-request-hash',
-      }),
-    ])
-    expect(archive.manifest.schemaVersion).toBe('1.3.0-development')
+    expect(completed?.feedback).toMatchObject({
+      original: { painReported: false, details: null },
+      corrections: [],
+      effective: { painReported: false, details: null, correctionId: null },
+    })
+    expect(completed?.corrections).toEqual([])
+    expect(completed?.commandReceipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          commandId: 'set-completed',
+          commandType: 'complete-set',
+        }),
+        expect.objectContaining({
+          commandId: 'complete-completed',
+          commandType: 'complete-workout',
+          requestHash: 'canonical-completion-request-hash',
+        }),
+      ]),
+    )
+    expect(archive.manifest.schemaVersion).toBe('1.4.0-development')
     expect(archive.profile.safetyHolds).toEqual([
       expect.objectContaining({
         id: resolvedHoldId,
@@ -593,12 +727,173 @@ describe('subject export and exact instance reset', () => {
       .set({
         status: 'paused',
         pausedAt: new Date('2026-07-11T12:15:00.000Z'),
+        optimisticVersion: sql`${workoutSessions.optimisticVersion} + 1`,
+        updatedAt: new Date('2026-07-11T12:15:00.000Z'),
       })
       .where(eq(workoutSessions.id, activeSessionId))
     const pausedArchive = await createDataExport(actor)
     expect(
       pausedArchive.sessions.find((session) => session.id === activeSessionId),
     ).toMatchObject({ status: 'paused' })
+  })
+
+  it('exports correction history and binds append-only correction facts into deletion previews', async () => {
+    const [completedExercise] = await getDb()
+      .select({ id: sessionExercises.id })
+      .from(sessionExercises)
+      .where(eq(sessionExercises.sessionId, completedSessionId))
+      .limit(1)
+    const [completedSet] = completedExercise
+      ? await getDb()
+          .select()
+          .from(performedSets)
+          .where(eq(performedSets.sessionExerciseId, completedExercise.id))
+          .limit(1)
+      : []
+    const [decision] = await getDb()
+      .select({ id: adjustmentDecisions.id })
+      .from(adjustmentDecisions)
+      .where(eq(adjustmentDecisions.sessionId, completedSessionId))
+      .limit(1)
+    if (!completedSet || !decision) {
+      throw new Error('Correction export fixture is incomplete.')
+    }
+
+    const commandId = 'correct-completed-set'
+    const correctionId = newUuidV7()
+    const correctedAt = new Date('2026-07-11T12:40:00.000Z')
+    await getDb().transaction(async (transaction) => {
+      await transaction.insert(trainingCommandReceipts).values({
+        commandId,
+        userId: actor.userId,
+        commandType: 'correct-performed-set',
+        sessionId: completedSessionId,
+        targetId: completedSet.id,
+        requestHash: 'canonical-correction-request-hash',
+        resultSnapshot: { status: 'succeeded' },
+        createdAt: correctedAt,
+      })
+      await transaction.insert(trainingFactCorrections).values({
+        id: correctionId,
+        userId: actor.userId,
+        sessionId: completedSessionId,
+        actorUserId: actor.userId,
+        commandId,
+        correctionKind: 'performed-set',
+        sequence: 1,
+        reason: 'Corrected a transcription error in the completed set.',
+        createdAt: correctedAt,
+      })
+      await transaction.insert(performedSetCorrections).values({
+        correctionId,
+        sessionId: completedSessionId,
+        userId: actor.userId,
+        performedSetId: completedSet.id,
+        status: 'performed',
+        actualLoadGrams: 60_000,
+        actualRepetitions: 5,
+        rpe: 7,
+        loadProvenance: 'copied-target',
+        repetitionsProvenance: 'copied-target',
+        explicitlyConfirmed: true,
+        confirmedAt: correctedAt,
+        note: 'Corrected after reviewing the training log.',
+      })
+      await transaction.insert(adjustmentDecisionInvalidations).values({
+        decisionId: decision.id,
+        correctionId,
+        createdAt: correctedAt,
+      })
+      await transaction.insert(programRevisionInvalidations).values({
+        revisionId: secondRevisionId,
+        correctionId,
+        createdAt: correctedAt,
+      })
+    })
+
+    const archive = await createDataExport(actor)
+    const completed = archive.sessions.find(
+      (session) => session.id === completedSessionId,
+    )
+    expect(completed?.corrections).toEqual([
+      expect.objectContaining({
+        id: correctionId,
+        commandId,
+        correctionKind: 'performed-set',
+        sequence: 1,
+      }),
+    ])
+    expect(completed?.exercises[0]?.sets[0]).toMatchObject({
+      original: { actualLoadGrams: 62_500, rpe: 8 },
+      corrections: [
+        {
+          correctionId,
+          sessionId: completedSessionId,
+          userId: actor.userId,
+          performedSetId: completedSet.id,
+          status: 'performed',
+          actualLoadGrams: 60_000,
+          actualRepetitions: 5,
+          rpe: 7,
+          loadProvenance: 'copied-target',
+          repetitionsProvenance: 'copied-target',
+          explicitlyConfirmed: true,
+          confirmedAt: correctedAt,
+          skippedAt: null,
+          skipReason: null,
+          note: 'Corrected after reviewing the training log.',
+          correction: expect.objectContaining({
+            id: correctionId,
+            actorUserId: actor.userId,
+            reason: 'Corrected a transcription error in the completed set.',
+          }),
+        },
+      ],
+      effective: {
+        status: 'performed',
+        actualLoadGrams: 60_000,
+        actualRepetitions: 5,
+        rpe: 7,
+        loadProvenance: 'copied-target',
+        repetitionsProvenance: 'copied-target',
+        explicitlyConfirmed: true,
+        confirmedAt: correctedAt,
+        skippedAt: null,
+        skipReason: null,
+        note: 'Corrected after reviewing the training log.',
+        correctionId,
+      },
+    })
+    expect(completed?.adjustments[0]?.invalidation).toMatchObject({
+      decisionId: decision.id,
+      correctionId,
+      correction: {
+        id: correctionId,
+        commandId,
+        kind: 'performed-set',
+        sequence: 1,
+        reason: 'Corrected a transcription error in the completed set.',
+        actorUserId: actor.userId,
+        createdAt: correctedAt,
+      },
+    })
+    const invalidatedRevision = archive.programs
+      .flatMap((program) => program.revisions)
+      .find((revision) => revision.id === secondRevisionId)
+    expect(invalidatedRevision?.invalidation).toMatchObject({
+      revisionId: secondRevisionId,
+      correctionId,
+      correction: { id: correctionId, kind: 'performed-set' },
+    })
+
+    const plan = await createInstanceResetPlan(actor)
+    expect(plan.counts).toMatchObject({
+      trainingFactCorrections: 1,
+      sessionFeedbackCorrections: 0,
+      performedSetCorrections: 1,
+      adjustmentDecisionInvalidations: 1,
+      programRevisionInvalidations: 1,
+    })
   })
 
   it('enforces durable hold provenance and fail-closed append-only resolution facts', async () => {
@@ -911,12 +1206,13 @@ describe('subject export and exact instance reset', () => {
 
   it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(25)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(31)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
       authAccounts: 1,
       authVerifications: 1,
+      destructiveReauthenticationStates: 0,
       athleteProfiles: 1,
       athleteTrainingDays: 1,
       athleteEquipment: 1,
@@ -931,10 +1227,15 @@ describe('subject export and exact instance reset', () => {
       workoutSessions: 3,
       sessionExercises: 3,
       performedSets: 3,
-      programRevisionLineage: 0,
-      trainingCommandReceipts: 1,
+      programRevisionLineage: 1,
+      trainingCommandReceipts: 4,
       sessionFeedback: 1,
       adjustmentDecisions: 1,
+      trainingFactCorrections: 1,
+      sessionFeedbackCorrections: 0,
+      performedSetCorrections: 1,
+      adjustmentDecisionInvalidations: 1,
+      programRevisionInvalidations: 1,
       auditEvents: 4,
       deletionPlans: 1,
     })
@@ -976,10 +1277,12 @@ describe('subject export and exact instance reset', () => {
       code: 'deletion.reauthentication-failed',
     } satisfies Partial<DeletionError>)
 
+    const retryPlan = await createInstanceResetPlan(actor)
+    expect(retryPlan.counts.auditEvents).toBe(plan.counts.auditEvents + 1)
     await executeInstanceReset({
       actor,
-      planId: plan.id,
-      planDigest: plan.digest,
+      planId: retryPlan.id,
+      planDigest: retryPlan.digest,
       password: ownerPassword,
       typedConfirmation: 'RESET',
       acknowledged: true,
@@ -1009,6 +1312,12 @@ describe('subject export and exact instance reset', () => {
         (SELECT count(*) FROM training_command_receipt) +
         (SELECT count(*) FROM session_feedback) +
         (SELECT count(*) FROM adjustment_decision) +
+        (SELECT count(*) FROM training_fact_correction) +
+        (SELECT count(*) FROM session_feedback_correction) +
+        (SELECT count(*) FROM performed_set_correction) +
+        (SELECT count(*) FROM adjustment_decision_invalidation) +
+        (SELECT count(*) FROM program_revision_invalidation) +
+        (SELECT count(*) FROM destructive_reauthentication_state) +
         (SELECT count(*) FROM audit_event) +
         (SELECT count(*) FROM deletion_plan)
       )::int AS "liveRows"
@@ -1024,7 +1333,7 @@ describe('subject export and exact instance reset', () => {
     expect(tombstone).toMatchObject({
       actorClass: 'owner',
       scope: 'instance-reset',
-      rowCounts: plan.counts,
+      rowCounts: retryPlan.counts,
     })
     expect(tombstone?.completionDigest).toBe(
       canonicalSha256({
@@ -1032,7 +1341,7 @@ describe('subject export and exact instance reset', () => {
         scope: 'instance-reset',
         schemaVersion: tombstone.schemaVersion,
         completedAt: tombstone.createdAt.toISOString(),
-        counts: plan.counts,
+        counts: retryPlan.counts,
       }),
     )
     const serializedTombstone = JSON.stringify(tombstone)

@@ -357,12 +357,16 @@ export const workoutSessions = pgTable(
     plannedWorkoutName: text('planned_workout_name').notNull(),
     scheduledDate: date('scheduled_date', { mode: 'string' }).notNull(),
     slotCode: text('slot_code').notNull(),
-    status: text('status').default('active').notNull(),
+    status: text('status').default('initializing').notNull(),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
     pausedAt: timestamp('paused_at', { withTimezone: true, mode: 'date' }),
     completedAt: timestamp('completed_at', { withTimezone: true, mode: 'date' }),
     abandonedAt: timestamp('abandoned_at', { withTimezone: true, mode: 'date' }),
     abandonedReason: text('abandoned_reason'),
+    snapshotFinalizedAt: timestamp('snapshot_finalized_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
     optimisticVersion: integer('optimistic_version').default(1).notNull(),
     startCommandId: text('start_command_id').notNull().unique(),
     completionCommandId: text('completion_command_id').unique(),
@@ -374,28 +378,37 @@ export const workoutSessions = pgTable(
     uniqueIndex('workout_session_planned_workout_uidx').on(table.plannedWorkoutId),
     uniqueIndex('workout_session_active_user_uidx')
       .on(table.userId)
-      .where(sql`${table.status} IN ('active', 'paused')`),
+      .where(sql`${table.status} IN ('initializing', 'active', 'paused')`),
     check(
       'workout_session_status_check',
-      sql`${table.status} IN ('active', 'paused', 'completed', 'abandoned')`,
+      sql`${table.status} IN ('initializing', 'active', 'paused', 'completed', 'abandoned')`,
     ),
     check('workout_session_version_check', sql`${table.optimisticVersion} > 0`),
     check('workout_session_slot_check', sql`${table.slotCode} IN ('A', 'B', 'C')`),
     check(
       'workout_session_lifecycle_shape_check',
-      sql`(${table.status} = 'active'
+      sql`(${table.status} = 'initializing'
+          AND ${table.snapshotFinalizedAt} IS NULL
+          AND ${table.pausedAt} IS NULL
+          AND ${table.completedAt} IS NULL
+          AND ${table.abandonedAt} IS NULL)
+        OR (${table.status} = 'active'
+          AND ${table.snapshotFinalizedAt} IS NOT NULL
           AND ${table.pausedAt} IS NULL
           AND ${table.completedAt} IS NULL
           AND ${table.abandonedAt} IS NULL)
         OR (${table.status} = 'paused'
+          AND ${table.snapshotFinalizedAt} IS NOT NULL
           AND ${table.pausedAt} IS NOT NULL
           AND ${table.completedAt} IS NULL
           AND ${table.abandonedAt} IS NULL)
         OR (${table.status} = 'completed'
+          AND ${table.snapshotFinalizedAt} IS NOT NULL
           AND ${table.pausedAt} IS NULL
           AND ${table.completedAt} IS NOT NULL
           AND ${table.abandonedAt} IS NULL)
         OR (${table.status} = 'abandoned'
+          AND ${table.snapshotFinalizedAt} IS NOT NULL
           AND ${table.pausedAt} IS NULL
           AND ${table.completedAt} IS NULL
           AND ${table.abandonedAt} IS NOT NULL)`,
@@ -489,22 +502,37 @@ export const performedSets = pgTable(
       sql`(${table.status} = 'pending'
           AND ${table.actualLoadGrams} IS NULL
           AND ${table.actualRepetitions} IS NULL
+          AND ${table.rpe} IS NULL
+          AND ${table.loadProvenance} IS NULL
+          AND ${table.repetitionsProvenance} IS NULL
+          AND ${table.explicitlyConfirmed} = false
           AND ${table.confirmedAt} IS NULL
-          AND ${table.skippedAt} IS NULL)
+          AND ${table.skippedAt} IS NULL
+          AND ${table.skipReason} IS NULL
+          AND ${table.note} IS NULL
+          AND ${table.commandId} IS NULL)
         OR (${table.status} = 'performed'
           AND ${table.actualLoadGrams} IS NOT NULL
           AND ${table.actualRepetitions} IS NOT NULL
+          AND ${table.loadProvenance} IS NOT NULL
+          AND ${table.repetitionsProvenance} IS NOT NULL
           AND ${table.explicitlyConfirmed} = true
           AND ${table.confirmedAt} IS NOT NULL
           AND ${table.skippedAt} IS NULL
-          AND ${table.skipReason} IS NULL)
+          AND ${table.skipReason} IS NULL
+          AND ${table.commandId} IS NOT NULL)
         OR (${table.status} = 'skipped'
           AND ${table.actualLoadGrams} IS NULL
           AND ${table.actualRepetitions} IS NULL
+          AND ${table.rpe} IS NULL
+          AND ${table.loadProvenance} IS NULL
+          AND ${table.repetitionsProvenance} IS NULL
           AND ${table.explicitlyConfirmed} = false
           AND ${table.confirmedAt} IS NULL
           AND ${table.skippedAt} IS NOT NULL
-          AND ${table.skipReason} IS NOT NULL)`,
+          AND ${table.skipReason} IS NOT NULL
+          AND ${table.note} IS NULL
+          AND ${table.commandId} IS NOT NULL)`,
     ),
   ],
 )
@@ -567,7 +595,7 @@ export const trainingCommandReceipts = pgTable(
     index('training_command_receipt_session_idx').on(table.sessionId),
     check(
       'training_command_receipt_type_check',
-      sql`${table.commandType} IN ('complete-set', 'skip-set', 'complete-workout', 'report-pain', 'resolve-safety-hold')`,
+      sql`${table.commandType} IN ('complete-set', 'skip-set', 'complete-workout', 'report-pain', 'resolve-safety-hold', 'correct-performed-set')`,
     ),
   ],
 )
@@ -600,6 +628,195 @@ export const adjustmentDecisions = pgTable(
       sql`${table.decision} IN ('increase', 'hold', 'unavailable')`,
     ),
   ],
+)
+
+export const trainingFactCorrections = pgTable(
+  'training_fact_correction',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').notNull(),
+    actorUserId: text('actor_user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'restrict' }),
+    commandId: text('command_id').notNull().unique(),
+    correctionKind: text('correction_kind').notNull(),
+    sequence: integer('sequence').notNull(),
+    reason: text('reason').notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('training_fact_correction_id_session_user_uidx').on(
+      table.id,
+      table.sessionId,
+      table.userId,
+    ),
+    uniqueIndex('training_fact_correction_session_sequence_uidx').on(
+      table.sessionId,
+      table.sequence,
+    ),
+    index('training_fact_correction_user_idx').on(table.userId),
+    index('training_fact_correction_session_idx').on(table.sessionId),
+    foreignKey({
+      name: 'training_fact_correction_session_user_fk',
+      columns: [table.sessionId, table.userId],
+      foreignColumns: [workoutSessions.id, workoutSessions.userId],
+    }).onDelete('cascade'),
+    check(
+      'training_fact_correction_kind_check',
+      sql`${table.correctionKind} IN ('session-feedback', 'performed-set')`,
+    ),
+    check(
+      'training_fact_correction_self_actor_check',
+      sql`${table.actorUserId} = ${table.userId}`,
+    ),
+    check('training_fact_correction_sequence_check', sql`${table.sequence} > 0`),
+    check(
+      'training_fact_correction_reason_check',
+      sql`char_length(${table.reason}) BETWEEN 1 AND 500
+        AND left(${table.reason}, 1) !~ '[[:space:]]'
+        AND right(${table.reason}, 1) !~ '[[:space:]]'`,
+    ),
+  ],
+)
+
+export const sessionFeedbackCorrections = pgTable(
+  'session_feedback_correction',
+  {
+    correctionId: text('correction_id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    userId: text('user_id').notNull(),
+    painReported: boolean('pain_reported').notNull(),
+    details: text('details'),
+    answeredAt: timestamp('answered_at', {
+      withTimezone: true,
+      mode: 'date',
+    }).notNull(),
+  },
+  (table) => [
+    index('session_feedback_correction_session_idx').on(table.sessionId),
+    foreignKey({
+      name: 'session_feedback_correction_root_fk',
+      columns: [table.correctionId, table.sessionId, table.userId],
+      foreignColumns: [
+        trainingFactCorrections.id,
+        trainingFactCorrections.sessionId,
+        trainingFactCorrections.userId,
+      ],
+    }).onDelete('cascade'),
+    check(
+      'session_feedback_correction_pain_check',
+      sql`${table.painReported} = true`,
+    ),
+  ],
+)
+
+export const performedSetCorrections = pgTable(
+  'performed_set_correction',
+  {
+    correctionId: text('correction_id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    userId: text('user_id').notNull(),
+    performedSetId: text('performed_set_id')
+      .notNull()
+      .references(() => performedSets.id, { onDelete: 'cascade' }),
+    status: text('status').notNull(),
+    actualLoadGrams: integer('actual_load_grams'),
+    actualRepetitions: smallint('actual_repetitions'),
+    rpe: smallint('rpe'),
+    loadProvenance: text('load_provenance'),
+    repetitionsProvenance: text('repetitions_provenance'),
+    explicitlyConfirmed: boolean('explicitly_confirmed').notNull(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true, mode: 'date' }),
+    skippedAt: timestamp('skipped_at', { withTimezone: true, mode: 'date' }),
+    skipReason: text('skip_reason'),
+    note: text('note'),
+  },
+  (table) => [
+    index('performed_set_correction_set_idx').on(table.performedSetId),
+    foreignKey({
+      name: 'performed_set_correction_root_fk',
+      columns: [table.correctionId, table.sessionId, table.userId],
+      foreignColumns: [
+        trainingFactCorrections.id,
+        trainingFactCorrections.sessionId,
+        trainingFactCorrections.userId,
+      ],
+    }).onDelete('cascade'),
+    check(
+      'performed_set_correction_status_check',
+      sql`${table.status} IN ('performed', 'skipped')`,
+    ),
+    check(
+      'performed_set_correction_actual_load_check',
+      sql`${table.actualLoadGrams} IS NULL OR ${table.actualLoadGrams} BETWEEN 0 AND 1000000`,
+    ),
+    check(
+      'performed_set_correction_actual_repetitions_check',
+      sql`${table.actualRepetitions} IS NULL OR ${table.actualRepetitions} BETWEEN 1 AND 100`,
+    ),
+    check(
+      'performed_set_correction_rpe_check',
+      sql`${table.rpe} IS NULL OR ${table.rpe} BETWEEN 1 AND 10`,
+    ),
+    check(
+      'performed_set_correction_provenance_check',
+      sql`(${table.loadProvenance} IS NULL OR ${table.loadProvenance} IN ('copied-target', 'edited'))
+        AND (${table.repetitionsProvenance} IS NULL OR ${table.repetitionsProvenance} IN ('copied-target', 'edited'))`,
+    ),
+    check(
+      'performed_set_correction_state_shape_check',
+      sql`(${table.status} = 'performed'
+          AND ${table.actualLoadGrams} IS NOT NULL
+          AND ${table.actualRepetitions} IS NOT NULL
+          AND ${table.loadProvenance} IS NOT NULL
+          AND ${table.repetitionsProvenance} IS NOT NULL
+          AND ${table.explicitlyConfirmed} = true
+          AND ${table.confirmedAt} IS NOT NULL
+          AND ${table.skippedAt} IS NULL
+          AND ${table.skipReason} IS NULL)
+        OR (${table.status} = 'skipped'
+          AND ${table.actualLoadGrams} IS NULL
+          AND ${table.actualRepetitions} IS NULL
+          AND ${table.rpe} IS NULL
+          AND ${table.loadProvenance} IS NULL
+          AND ${table.repetitionsProvenance} IS NULL
+          AND ${table.explicitlyConfirmed} = false
+          AND ${table.confirmedAt} IS NULL
+          AND ${table.skippedAt} IS NOT NULL
+          AND ${table.skipReason} IS NOT NULL)`,
+    ),
+  ],
+)
+
+export const adjustmentDecisionInvalidations = pgTable(
+  'adjustment_decision_invalidation',
+  {
+    decisionId: text('decision_id')
+      .primaryKey()
+      .references(() => adjustmentDecisions.id, { onDelete: 'cascade' }),
+    correctionId: text('correction_id')
+      .notNull()
+      .references(() => trainingFactCorrections.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (table) => [index('adjustment_decision_invalidation_correction_idx').on(table.correctionId)],
+)
+
+export const programRevisionInvalidations = pgTable(
+  'program_revision_invalidation',
+  {
+    revisionId: text('revision_id')
+      .primaryKey()
+      .references(() => programRevisions.id, { onDelete: 'cascade' }),
+    correctionId: text('correction_id')
+      .notNull()
+      .references(() => trainingFactCorrections.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (table) => [index('program_revision_invalidation_correction_idx').on(table.correctionId)],
 )
 
 export const auditEvents = pgTable(

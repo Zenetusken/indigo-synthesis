@@ -26,6 +26,13 @@ export const skipSetCommandSchema = z.object({
   reason: z.string().trim().min(1).max(300),
 })
 
+export const proposeExerciseSubstitutionCommandSchema = z.object({
+  sessionId: recordIdSchema,
+  sessionExerciseId: recordIdSchema,
+  commandId: commandIdSchema,
+  requestedExerciseCode: z.string().trim().min(1).max(200),
+})
+
 export const sessionPauseCommandSchema = z.object({
   sessionId: recordIdSchema,
   paused: z.boolean(),
@@ -53,4 +60,15 @@ export const resolveSafetyHoldCommandSchema = z.object({
   commandId: commandIdSchema,
   reason: z.string().trim().min(1).max(300),
   acknowledged: z.boolean(),
+})
+
+export const correctPerformedSetCommandSchema = z.object({
+  sessionId: recordIdSchema,
+  setId: recordIdSchema,
+  commandId: commandIdSchema,
+  reason: z.string().trim().min(1).max(500),
+  actualLoadGrams: z.number().finite().int().min(0).max(MAX_CANONICAL_LOAD_GRAMS),
+  actualRepetitions: z.number().finite().int().min(1).max(100),
+  rpe: z.number().finite().int().min(1).max(10).nullable(),
+  note: z.string().trim().max(500).nullable(),
 })

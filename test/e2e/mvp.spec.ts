@@ -180,7 +180,10 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Start workout' }).click()
   await expect(page).toHaveURL(/\/workouts\//)
-  await expect(page.getByText(/Substitution unavailable/).first()).toBeVisible()
+  await expect(page.getByText('Prescription unchanged').first()).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Propose substitute' }).first(),
+  ).toBeVisible()
 
   let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
   expect(remaining).toBeGreaterThan(0)
@@ -189,7 +192,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     const form = button.locator('xpath=ancestor::form')
     await form.getByLabel('RPE (optional)').fill('8')
     await button.click()
-    await expect(page.getByText(/Draft saved in PostgreSQL/)).toBeVisible()
+    await expect(page.getByText(/Draft saved · revision/)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Complete set' })).toHaveCount(
       remaining - 1,
     )
@@ -297,6 +300,84 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     )
     expect(Number(users.rows[0]?.count)).toBe(0)
     expect(Number(tombstones.rows[0]?.count)).toBe(1)
+  } finally {
+    await client.end()
+  }
+})
+
+test('owner deletes only trainee data and keeps installation login continuity', async ({
+  page,
+}) => {
+  await bootstrapAndSignIn(page)
+  await completeSetup(page)
+  await generateAndActivate(page)
+
+  await page.goto('/settings')
+  await page.getByLabel('Name').fill('Retained Browser Member')
+  await page
+    .getByLabel('Local sign-in email')
+    .fill('retained-browser-member@example.test')
+  await page.getByLabel('Initial password').fill('retained-browser-member-password')
+  await page.getByRole('button', { name: 'Create local user' }).click()
+  await expect(
+    page.getByText('Local user retained-browser-member@example.test created.'),
+  ).toBeVisible()
+
+  await page.getByRole('link', { name: 'Review training-data deletion' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Delete my training data.' }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(/owner credential, current login sessions, installation ownership/),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Generate exact training-data preview' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Exact training rows in this preview' }),
+  ).toBeVisible()
+  await page.getByLabel('Current password').fill(owner.password)
+  await page.getByLabel('Type DELETE').fill('DELETE')
+  await page.getByLabel('I understand that my training data cannot be recovered.').check()
+  await page.getByRole('button', { name: 'Delete my training data' }).click()
+
+  await expect(page).toHaveURL(/\/settings\?training-data-deleted=1/)
+  await expect(
+    page.getByRole('heading', { name: 'Your instance and data.' }),
+  ).toBeVisible()
+  await expect(page.getByText(owner.email).first()).toBeVisible()
+  await expect(page.getByText('retained-browser-member@example.test')).toBeVisible()
+
+  const client = await databaseClient()
+  try {
+    const retained = await client.query<{
+      owner_user_id: string | null
+      owner_users: string
+      owner_accounts: string
+      owner_sessions: string
+      owner_profiles: string
+      owner_programs: string
+      member_users: string
+      tombstones: string
+    }>(
+      `SELECT
+         (SELECT owner_user_id FROM installation_state WHERE singleton = 1) AS owner_user_id,
+         (SELECT count(*) FROM "user" WHERE email = $1) AS owner_users,
+         (SELECT count(*) FROM account a JOIN "user" u ON u.id = a.user_id WHERE u.email = $1) AS owner_accounts,
+         (SELECT count(*) FROM "session" s JOIN "user" u ON u.id = s.user_id WHERE u.email = $1) AS owner_sessions,
+         (SELECT count(*) FROM athlete_profile ap JOIN "user" u ON u.id = ap.user_id WHERE u.email = $1) AS owner_profiles,
+         (SELECT count(*) FROM program p JOIN "user" u ON u.id = p.user_id WHERE u.email = $1) AS owner_programs,
+         (SELECT count(*) FROM "user" WHERE email = $2) AS member_users,
+         (SELECT count(*) FROM deletion_tombstone WHERE scope = 'trainee-data') AS tombstones`,
+      [owner.email, 'retained-browser-member@example.test'],
+    )
+    const row = retained.rows[0]
+    expect(row?.owner_user_id).toBeTruthy()
+    expect(Number(row?.owner_users)).toBe(1)
+    expect(Number(row?.owner_accounts)).toBe(1)
+    expect(Number(row?.owner_sessions)).toBeGreaterThan(0)
+    expect(Number(row?.owner_profiles)).toBe(0)
+    expect(Number(row?.owner_programs)).toBe(0)
+    expect(Number(row?.member_users)).toBe(1)
+    expect(Number(row?.tombstones)).toBe(1)
   } finally {
     await client.end()
   }
@@ -437,7 +518,7 @@ test('a reported issue can be abandoned and resolved to unblock training decisio
     page.getByRole('heading', { name: /Today’s workout was abandoned./ }),
   ).toBeVisible()
   await expect(page.getByRole('status')).toContainText(
-    'Safety hold resolution recorded. The abandoned workout remains closed.',
+    'Safety hold resolution recorded. The source workout remains closed',
   )
 
   const supervisorBefore = await readE2eSupervisorState()
@@ -477,6 +558,112 @@ test('a reported issue can be abandoned and resolved to unblock training decisio
     ])
   } finally {
     await client.end()
+  }
+})
+
+test('a post-completion safety correction invalidates progression before hold resolution', async ({
+  page,
+}) => {
+  await bootstrapAndSignIn(page)
+  await completeSetup(page)
+  await generateAndActivate(page)
+  await page.getByRole('button', { name: 'Start workout' }).click()
+
+  let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
+  while (remaining > 0) {
+    const button = page.getByRole('button', { name: 'Complete set' }).first()
+    await button.locator('xpath=ancestor::form').getByLabel('RPE (optional)').fill('8')
+    await button.click()
+    remaining -= 1
+    await expect(page.getByRole('button', { name: 'Complete set' })).toHaveCount(
+      remaining,
+    )
+  }
+
+  await page
+    .getByLabel(
+      'I confirm that I am not reporting pain or a safety issue from this session.',
+    )
+    .check()
+  await page.getByRole('button', { name: 'Complete workout' }).click()
+  await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
+
+  const context = 'Pain became apparent after the completed workout.'
+  await page.getByLabel('Optional factual context').fill(context)
+  await page.getByRole('button', { name: 'Record safety report' }).click()
+
+  await expect(
+    page.getByRole('heading', { name: 'Post-completion safety correction' }),
+  ).toBeVisible()
+  await expect(
+    page.getByText('No pain or safety issue reported at completion'),
+  ).toBeVisible()
+  await expect(
+    page.getByText('Pain or a safety issue was reported after completion'),
+  ).toBeVisible()
+  await expect(page.getByText(context)).toBeVisible()
+  expect(
+    await page.getByText('Invalidated original decision', { exact: false }).count(),
+  ).toBeGreaterThan(0)
+
+  const invalidationClient = await databaseClient()
+  try {
+    const facts = await invalidationClient.query<{
+      corrections: number
+      decision_invalidations: number
+      revision_invalidations: number
+      active_live_sessions: number
+      unresolved_holds: number
+    }>(
+      `SELECT
+        (SELECT count(*)::int FROM session_feedback_correction) AS corrections,
+        (SELECT count(*)::int FROM adjustment_decision_invalidation) AS decision_invalidations,
+        (SELECT count(*)::int FROM program_revision_invalidation) AS revision_invalidations,
+        (SELECT count(*)::int FROM workout_session WHERE status = 'active') AS active_live_sessions,
+        (SELECT count(*)::int FROM safety_hold sh
+          WHERE NOT EXISTS (
+            SELECT 1 FROM safety_hold_resolution shr WHERE shr.hold_id = sh.id
+          )) AS unresolved_holds`,
+    )
+    expect(facts.rows[0]?.corrections).toBe(1)
+    expect(facts.rows[0]?.decision_invalidations ?? 0).toBeGreaterThan(0)
+    expect(facts.rows[0]?.revision_invalidations).toBe(1)
+    expect(facts.rows[0]?.active_live_sessions).toBe(0)
+    expect(facts.rows[0]?.unresolved_holds).toBe(1)
+
+    const programs = await invalidationClient.query<{ status: string }>(
+      'SELECT status FROM program',
+    )
+    const revisions = await invalidationClient.query<{ status: string }>(
+      'SELECT status FROM program_revision ORDER BY revision_number',
+    )
+    expect(programs.rows).toEqual([{ status: 'retired' }])
+    expect(revisions.rows).toEqual([{ status: 'superseded' }, { status: 'superseded' }])
+  } finally {
+    await invalidationClient.end()
+  }
+
+  await page.goto('/today')
+  const reason = 'I understand that the invalidated progression remains unavailable.'
+  await page.getByLabel('Factual reason for resolving the hold (required)').fill(reason)
+  await page
+    .getByLabel('I understand that this product does not assess or clear symptoms.')
+    .check()
+  await page.getByRole('button', { name: 'Resolve safety hold' }).click()
+
+  await expect(page.getByRole('heading', { name: 'No active program.' })).toBeVisible()
+  await expect(page.getByRole('status')).toContainText(
+    'any invalidated progression stays unavailable',
+  )
+
+  const resolutionClient = await databaseClient()
+  try {
+    const resolutions = await resolutionClient.query<{ count: string }>(
+      'SELECT count(*) FROM safety_hold_resolution',
+    )
+    expect(Number(resolutions.rows[0]?.count)).toBe(1)
+  } finally {
+    await resolutionClient.end()
   }
 })
 
@@ -824,6 +1011,19 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   await expect(page).toHaveTitle('Today | Indigo Synthesis')
   titles.add(await page.title())
 
+  await page.goto('/settings')
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '200%'
+  })
+  const signOutButton = page.getByRole('button', { name: 'Sign out' })
+  await expect(signOutButton).toBeVisible()
+  await signOutButton.click({ trial: true })
+  await expectNoHorizontalOverflow(page)
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = ''
+  })
+  await page.goto('/today')
+
   const skipLink = page.getByRole('link', { name: 'Skip to main content' })
   await expect(skipLink).toHaveCSS('transition-duration', '0s')
   await page.keyboard.press('Tab')
@@ -841,7 +1041,7 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
 
   const draftStatus = page
     .getByRole('status')
-    .filter({ hasText: 'Draft saved in PostgreSQL' })
+    .filter({ hasText: 'Draft saved · revision' })
   const initialDraftStatus = await draftStatus.textContent()
   const firstLoad = page.getByLabel('Actual load (kg)').first()
   await expect(firstLoad).toBeFocused()
@@ -876,5 +1076,33 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   })
   await expectNoHorizontalOverflow(page)
   await expect(page.getByRole('button', { name: 'Complete set' }).first()).toBeVisible()
+
+  const workoutDock = page.locator('footer')
+  await expect(workoutDock).toHaveCSS('position', 'static')
+  await page.getByRole('link', { name: 'Report pain or an issue' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'Report pain or an issue' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Stop and report issue' }).click({ trial: true })
+
+  let remainingSets = await page.getByRole('button', { name: 'Complete set' }).count()
+  while (remainingSets > 0) {
+    await page.getByRole('button', { name: 'Complete set' }).first().click()
+    remainingSets -= 1
+    await expect(page.getByRole('button', { name: 'Complete set' })).toHaveCount(
+      remainingSets,
+    )
+  }
+
+  const completionAcknowledgement = page.getByLabel(
+    'I confirm that I am not reporting pain or a safety issue from this session.',
+  )
+  await completionAcknowledgement.scrollIntoViewIfNeeded()
+  await expect(completionAcknowledgement).toBeInViewport()
+  await completionAcknowledgement.check()
+  const completeWorkoutButton = page.getByRole('button', { name: 'Complete workout' })
+  await expect(completeWorkoutButton).toBeInViewport()
+  await completeWorkoutButton.click({ trial: true })
+  await expectNoHorizontalOverflow(page)
   expect(nonLoopbackRequests).toEqual([])
 })

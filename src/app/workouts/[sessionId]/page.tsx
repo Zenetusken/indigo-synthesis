@@ -32,14 +32,33 @@ export default async function WorkoutPage({
   const pendingSets = session.exercises
     .flatMap((exercise) => exercise.sets)
     .filter((set) => set.status === 'pending')
-  const currentSetId = pendingSets[0]?.id ?? null
-  const continuationTargetId = currentSetId ? `set-${currentSetId}-actual-load` : null
+  const currentSetId = session.progressionInvalidated
+    ? null
+    : (pendingSets[0]?.id ?? null)
+  const canComplete =
+    !session.progressionInvalidated &&
+    pendingSets.length === 0 &&
+    !session.feedback?.painReported &&
+    session.contentEligibility.eligible &&
+    session.status === 'active'
+  const continuationTargetId = currentSetId
+    ? `set-${currentSetId}-actual-load`
+    : canComplete
+      ? 'complete-workout-ack'
+      : session.status === 'paused' &&
+          !session.progressionInvalidated &&
+          !session.feedback?.painReported &&
+          session.contentEligibility.eligible
+        ? 'resume-workout'
+        : null
   const orderedSets = session.exercises.flatMap((exercise) => exercise.sets)
   const currentSetIndex = orderedSets.findIndex((set) => set.id === currentSetId)
-  const previousPerformedSet = orderedSets
-    .slice(0, currentSetIndex < 0 ? 0 : currentSetIndex)
-    .reverse()
-    .find((set) => set.status === 'performed' && set.confirmedAt)
+  const previousPerformedSet = session.progressionInvalidated
+    ? null
+    : orderedSets
+        .slice(0, currentSetIndex < 0 ? 0 : currentSetIndex)
+        .reverse()
+        .find((set) => set.status === 'performed' && set.confirmedAt)
 
   return (
     <WorkoutClient
@@ -52,6 +71,7 @@ export default async function WorkoutPage({
       continuationTargetId={continuationTargetId}
       previousPerformedSet={previousPerformedSet ?? null}
       initialError={query.error ?? null}
+      serverNow={new Date().toISOString()}
     />
   )
 }

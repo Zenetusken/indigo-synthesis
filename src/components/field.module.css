@@ -14,7 +14,7 @@
 .optional {
   color: var(--steel);
   font-family: var(--font-data);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -22,7 +22,7 @@
 
 .hint,
 .error {
-  font-size: 0.88rem;
+  font-size: var(--text-md);
   margin: 0;
 }
 
@@ -40,7 +40,7 @@
   border: 1px solid var(--steel);
   border-radius: var(--radius-sm);
   color: var(--rack-ink);
-  font-size: 1rem;
+  font-size: var(--text-base);
   min-height: 3rem;
   padding: 0.7rem var(--space-3);
   width: 100%;

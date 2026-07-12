@@ -5,14 +5,17 @@ import {
 } from '@/modules/methodology/domain/canonical'
 import { getDb } from '@/platform/db/client'
 import {
+  adjustmentDecisionInvalidations,
   adjustmentDecisions,
   athleteEquipment,
   athleteProfiles,
   athleteTrainingDays,
   auditEvents,
   exercisePrescriptions,
+  performedSetCorrections,
   performedSets,
   plannedWorkouts,
+  programRevisionInvalidations,
   programRevisionLineage,
   programRevisions,
   programs,
@@ -20,14 +23,16 @@ import {
   safetyHolds,
   sessionExercises,
   sessionFeedback,
+  sessionFeedbackCorrections,
   setPrescriptions,
   strengthBaselines,
   trainingCommandReceipts,
+  trainingFactCorrections,
   user,
   workoutSessions,
 } from '@/platform/db/schema'
 
-export const exportSchemaVersion = '1.3.0-development'
+export const exportSchemaVersion = '1.4.0-development'
 
 function canonical(value: unknown): CanonicalValue {
   return JSON.parse(JSON.stringify(value)) as CanonicalValue
@@ -216,6 +221,51 @@ export async function createDataExport(actor: {
                 asc(adjustmentDecisions.exerciseCode),
               )
 
+      const correctionRows =
+        sessionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(trainingFactCorrections)
+              .where(eq(trainingFactCorrections.userId, actor.userId))
+              .orderBy(
+                asc(trainingFactCorrections.sessionId),
+                asc(trainingFactCorrections.sequence),
+                asc(trainingFactCorrections.id),
+              )
+      const correctionIds = correctionRows.map((correction) => correction.id)
+      const feedbackCorrectionRows =
+        correctionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(sessionFeedbackCorrections)
+              .where(inArray(sessionFeedbackCorrections.correctionId, correctionIds))
+      const performedSetCorrectionRows =
+        correctionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(performedSetCorrections)
+              .where(inArray(performedSetCorrections.correctionId, correctionIds))
+      const adjustmentIds = adjustmentRows.map((adjustment) => adjustment.id)
+      const adjustmentInvalidationRows =
+        adjustmentIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(adjustmentDecisionInvalidations)
+              .where(inArray(adjustmentDecisionInvalidations.decisionId, adjustmentIds))
+              .orderBy(asc(adjustmentDecisionInvalidations.decisionId))
+      const revisionInvalidationRows =
+        revisionIds.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(programRevisionInvalidations)
+              .where(inArray(programRevisionInvalidations.revisionId, revisionIds))
+              .orderBy(asc(programRevisionInvalidations.revisionId))
+
       const auditRows = await transaction
         .select({
           id: auditEvents.id,
@@ -233,6 +283,23 @@ export async function createDataExport(actor: {
       const workoutById = new Map(workouts.map((workout) => [workout.id, workout]))
       const revisionById = new Map(revisions.map((revision) => [revision.id, revision]))
       const programById = new Map(ownedPrograms.map((program) => [program.id, program]))
+      const correctionById = new Map(
+        correctionRows.map((correction) => [correction.id, correction]),
+      )
+      const correctionAttribution = (correctionId: string) => {
+        const correction = correctionById.get(correctionId)
+        return correction
+          ? {
+              id: correction.id,
+              commandId: correction.commandId,
+              kind: correction.correctionKind,
+              sequence: correction.sequence,
+              reason: correction.reason,
+              actorUserId: correction.actorUserId,
+              createdAt: correction.createdAt,
+            }
+          : null
+      }
 
       return {
         identity,
@@ -250,6 +317,17 @@ export async function createDataExport(actor: {
             .filter((revision) => revision.programId === program.id)
             .map((revision) => ({
               ...revision,
+              invalidation: (() => {
+                const invalidation = revisionInvalidationRows.find(
+                  (entry) => entry.revisionId === revision.id,
+                )
+                return invalidation
+                  ? {
+                      ...invalidation,
+                      correction: correctionAttribution(invalidation.correctionId),
+                    }
+                  : null
+              })(),
               lineage:
                 revisionLineage.find((entry) => entry.revisionId === revision.id) ?? null,
               plannedWorkouts: workouts
@@ -316,12 +394,116 @@ export async function createDataExport(actor: {
               .filter((exercise) => exercise.sessionId === session.id)
               .map((exercise) => ({
                 ...exercise,
-                sets: setRows.filter((set) => set.sessionExerciseId === exercise.id),
+                sets: setRows
+                  .filter((set) => set.sessionExerciseId === exercise.id)
+                  .map((set) => {
+                    const corrections = performedSetCorrectionRows
+                      .filter((entry) => entry.performedSetId === set.id)
+                      .map((entry) => ({
+                        ...entry,
+                        correction: correctionAttribution(entry.correctionId),
+                      }))
+                      .sort(
+                        (left, right) =>
+                          (left.correction?.sequence ?? 0) -
+                          (right.correction?.sequence ?? 0),
+                      )
+                    const latest = corrections.at(-1)
+                    return {
+                      ...set,
+                      original: {
+                        status: set.status,
+                        actualLoadGrams: set.actualLoadGrams,
+                        actualRepetitions: set.actualRepetitions,
+                        rpe: set.rpe,
+                        loadProvenance: set.loadProvenance,
+                        repetitionsProvenance: set.repetitionsProvenance,
+                        explicitlyConfirmed: set.explicitlyConfirmed,
+                        confirmedAt: set.confirmedAt,
+                        skippedAt: set.skippedAt,
+                        skipReason: set.skipReason,
+                        note: set.note,
+                      },
+                      corrections,
+                      effective: latest
+                        ? {
+                            status: latest.status,
+                            actualLoadGrams: latest.actualLoadGrams,
+                            actualRepetitions: latest.actualRepetitions,
+                            rpe: latest.rpe,
+                            loadProvenance: latest.loadProvenance,
+                            repetitionsProvenance: latest.repetitionsProvenance,
+                            explicitlyConfirmed: latest.explicitlyConfirmed,
+                            confirmedAt: latest.confirmedAt,
+                            skippedAt: latest.skippedAt,
+                            skipReason: latest.skipReason,
+                            note: latest.note,
+                            correctionId: latest.correctionId,
+                          }
+                        : {
+                            status: set.status,
+                            actualLoadGrams: set.actualLoadGrams,
+                            actualRepetitions: set.actualRepetitions,
+                            rpe: set.rpe,
+                            loadProvenance: set.loadProvenance,
+                            repetitionsProvenance: set.repetitionsProvenance,
+                            explicitlyConfirmed: set.explicitlyConfirmed,
+                            confirmedAt: set.confirmedAt,
+                            skippedAt: set.skippedAt,
+                            skipReason: set.skipReason,
+                            note: set.note,
+                            correctionId: null,
+                          },
+                    }
+                  }),
               })),
-            feedback:
-              feedbackRows.find((feedback) => feedback.sessionId === session.id) ?? null,
-            adjustments: adjustmentRows.filter(
-              (adjustment) => adjustment.sessionId === session.id,
+            feedback: (() => {
+              const original =
+                feedbackRows.find((feedback) => feedback.sessionId === session.id) ?? null
+              const corrections = feedbackCorrectionRows
+                .filter((entry) => entry.sessionId === session.id)
+                .map((entry) => ({
+                  ...entry,
+                  correction: correctionAttribution(entry.correctionId),
+                }))
+                .sort(
+                  (left, right) =>
+                    (left.correction?.sequence ?? 0) - (right.correction?.sequence ?? 0),
+                )
+              const latest = corrections.at(-1)
+              return {
+                original,
+                corrections,
+                effective: latest
+                  ? {
+                      painReported: latest.painReported,
+                      details: latest.details,
+                      answeredAt: latest.answeredAt,
+                      correctionId: latest.correctionId,
+                    }
+                  : original
+                    ? { ...original, correctionId: null }
+                    : null,
+              }
+            })(),
+            adjustments: adjustmentRows
+              .filter((adjustment) => adjustment.sessionId === session.id)
+              .map((adjustment) => {
+                const invalidation = adjustmentInvalidationRows.find(
+                  (entry) => entry.decisionId === adjustment.id,
+                )
+                return {
+                  ...adjustment,
+                  invalidation: invalidation
+                    ? {
+                        ...invalidation,
+                        correction: correctionAttribution(invalidation.correctionId),
+                      }
+                    : null,
+                }
+              }),
+            corrections: correctionRows.filter(
+              (correction) => correction.sessionId === session.id,
             ),
             commandReceipts: commandReceipts.filter(
               (receipt) => receipt.sessionId === session.id,
@@ -345,7 +527,9 @@ export async function createDataExport(actor: {
           performedSet:
             'loadProvenance and repetitionsProvenance distinguish copied targets from trainee edits; explicitlyConfirmed and confirmedAt record attestation.',
           adjustment:
-            'Each adjustment records the source session, rule version, reason code, prior load, proposed load, and applied revision when one was created.',
+            'Each adjustment records the source session, rule version, reason code, prior load, proposed load, applied revision, and permanent correction-attributed invalidation when present.',
+          correction:
+            'Original feedback and resolved-set facts are retained. Ordered, actor-attributed corrections expose a separate effective projection without rewriting history.',
           commandReceipt:
             'Every idempotent training mutation records an append-only command identifier, canonical request hash, target, and result snapshot.',
           safetyHold:

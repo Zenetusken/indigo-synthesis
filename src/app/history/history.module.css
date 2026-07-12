@@ -5,7 +5,7 @@
 
 .list {
   background: var(--paper);
-  border-block-start: 0.35rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -32,20 +32,114 @@
 .date,
 .meta {
   color: var(--steel);
-  font: 500 0.8rem / 1.5 var(--font-data);
+  font: 500 var(--text-sm) / 1.5 var(--font-data);
 }
 
 .empty {
   background: var(--paper);
-  border-block-start: 0.35rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   padding: clamp(1.5rem, 5vw, 3rem);
 }
 
 .facts,
-.adjustments {
+.adjustments,
+.correction,
+.safetyReport {
   background: var(--paper);
-  border-block-start: 0.35rem solid var(--rack-ink);
+  border-block-start: var(--accent-bar) solid var(--rack-ink);
   padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.correction,
+.safetyReport {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.correction {
+  border-block-start-color: var(--danger);
+}
+
+.correction h2,
+.correction p,
+.safetyReport h2,
+.safetyReport p {
+  margin: 0;
+}
+
+.correctionFacts {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.correctionFacts div {
+  border-block-end: 1px solid var(--hairline);
+  display: grid;
+  gap: var(--space-1);
+  padding-block-end: var(--space-3);
+}
+
+.correctionFacts dt {
+  color: var(--steel);
+  font: 600 var(--text-sm) / 1.4 var(--font-data);
+  text-transform: uppercase;
+}
+
+.correctionFacts dd {
+  margin: 0;
+}
+
+.reportForm,
+.reportForm label,
+.reportError {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.reportForm textarea {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  color: var(--rack-ink);
+  font: inherit;
+  min-height: 7rem;
+  padding: var(--space-3);
+  resize: vertical;
+  width: 100%;
+}
+
+.reportError,
+.reportSuccess {
+  border-inline-start: 0.3rem solid var(--danger);
+  padding: var(--space-4);
+}
+
+.reportError {
+  background: var(--danger-soft);
+}
+
+.reportSuccess {
+  background: var(--warning-soft);
+  border-inline-start-color: var(--warning);
+}
+
+.setCorrection {
+  color: var(--warning);
+  display: block;
+  font-weight: 700;
+  grid-column: 1 / -1;
+  margin-block-start: var(--space-2);
+}
+
+.invalidatedDecision {
+  background: var(--danger-soft);
+  border-inline-start: 0.3rem solid var(--danger);
+  padding-inline: var(--space-3);
+}
+
+.invalidatedDecision small {
+  font-weight: 700;
 }
 
 .exercise {
@@ -53,9 +147,9 @@
   padding-block: var(--space-6);
 }
 
-.exercise h2 {
+.exercise h3 {
   font-family: var(--font-display);
-  font-size: 2rem;
+  font-size: var(--text-4xl);
   font-stretch: condensed;
   margin: 0 0 var(--space-3);
 }

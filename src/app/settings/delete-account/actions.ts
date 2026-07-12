@@ -38,5 +38,9 @@ export async function deleteAccountAction(formData: FormData): Promise<void> {
       error instanceof DeletionError ? error.code : 'deletion.execution-failed',
     )
   }
-  redirect('/sign-in?deleted=1')
+  redirect(postDeletionRedirect(actor.role) as never)
+}
+
+function postDeletionRedirect(role: 'owner' | 'member'): string {
+  return role === 'owner' ? '/settings?training-data-deleted=1' : '/sign-in?deleted=1'
 }

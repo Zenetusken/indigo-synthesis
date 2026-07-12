@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { PageHeading, ProductFrame } from '@/components'
+import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveInstanceResetPlan } from '@/modules/data-portability/application/deletion'
 import { requireActor } from '@/modules/identity/server/actor'
 import { createResetPreviewAction, resetInstanceAction } from './actions'
@@ -11,8 +11,12 @@ export const metadata: Metadata = { title: 'Reset instance' }
 const errorMessages: Readonly<Record<string, string>> = {
   'deletion.confirmation-invalid': 'Acknowledge the consequences and type RESET exactly.',
   'deletion.reauthentication-failed': 'The current owner password was not accepted.',
+  'deletion.reauthentication-locked':
+    'Too many password attempts. Wait for the lockout to expire before trying again.',
   'deletion.plan-invalid': 'The preview expired or no longer matches.',
   'deletion.plan-changed': 'Instance data changed. Generate a fresh preview.',
+  'deletion.owner-changed':
+    'Installation ownership changed. Sign in again before resetting this instance.',
   'deletion.preview-failed': 'The deletion preview could not be created.',
   'deletion.execution-failed': 'The instance was not reset. Existing data remains.',
 }
@@ -57,9 +61,9 @@ export default async function DeleteSettingsPage({
 
         {!plan ? (
           <form action={createResetPreviewAction}>
-            <button className={styles.previewButton} type="submit">
+            <SubmitButton variant="secondary" pendingLabel="Generating preview…">
               Generate exact reset preview
-            </button>
+            </SubmitButton>
           </form>
         ) : (
           <section className={styles.preview}>
@@ -102,9 +106,9 @@ export default async function DeleteSettingsPage({
                   I understand that live-instance data cannot be recovered after commit.
                 </span>
               </label>
-              <button className={styles.dangerButton} type="submit">
+              <SubmitButton variant="danger" pendingLabel="Resetting…">
                 Reset instance
-              </button>
+              </SubmitButton>
             </form>
           </section>
         )}

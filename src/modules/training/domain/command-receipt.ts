@@ -9,6 +9,7 @@ export const trainingCommandTypes = [
   'complete-workout',
   'report-pain',
   'resolve-safety-hold',
+  'correct-performed-set',
 ] as const
 
 export type TrainingCommandType = (typeof trainingCommandTypes)[number]

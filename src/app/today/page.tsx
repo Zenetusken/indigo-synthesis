@@ -1,7 +1,7 @@
 import type { Metadata, Route } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { InlineStatus, PageHeading, ProductFrame } from '@/components'
+import { InlineStatus, PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { formatLoad } from '@/modules/athletes/domain/units'
 import { requireActor } from '@/modules/identity/server/actor'
@@ -23,6 +23,8 @@ const errorMessages: Readonly<Record<string, string>> = {
     'This unreviewed development program cannot run in reviewed content mode.',
   'content.prohibited': 'This content release has been prohibited.',
   'content.expired': 'This content release has expired.',
+  'program.revision-invalidated':
+    'This workout progression was invalidated by a corrected training fact.',
   'session.start-failed': 'The workout could not be started from the saved prescription.',
 }
 
@@ -53,7 +55,7 @@ export default async function TodayPage({
     : null
   const notice =
     query.notice === 'hold-resolved'
-      ? 'Safety hold resolution recorded. The abandoned workout remains closed.'
+      ? 'Safety hold resolution recorded. The source workout remains closed, and any invalidated progression stays unavailable.'
       : null
 
   return (
@@ -90,24 +92,30 @@ export default async function TodayPage({
         {state.kind === 'active' ? (
           <section className={styles.statePanel}>
             <h2>
-              {state.contentEligibility.eligible
-                ? state.status === 'paused'
-                  ? 'Workout paused.'
-                  : 'Workout in progress.'
-                : 'Saved workout blocked in this content mode.'}
+              {state.progressionInvalidated
+                ? 'Workout progression invalidated.'
+                : state.contentEligibility.eligible
+                  ? state.status === 'paused'
+                    ? 'Workout paused.'
+                    : 'Workout in progress.'
+                  : 'Saved workout blocked in this content mode.'}
             </h2>
             <p>
-              {state.contentEligibility.eligible
-                ? 'The exact saved session is ready to resume.'
-                : 'The session remains inspectable, but training entries, resume, and completion are disabled. Safe unwind actions remain available without adding it to completed history.'}
+              {state.progressionInvalidated
+                ? 'The session remains available for factual review and abandonment, but it cannot accept more training entries or completion.'
+                : state.contentEligibility.eligible
+                  ? 'The exact saved session is ready to resume.'
+                  : 'The session remains inspectable, but training entries, resume, and completion are disabled. Safe unwind actions remain available without adding it to completed history.'}
             </p>
             <Link
               className={styles.primaryAction}
               href={`/workouts/${state.sessionId}` as Route}
             >
-              {state.contentEligibility.eligible
-                ? 'Resume workout'
-                : 'Review blocked session'}
+              {state.progressionInvalidated
+                ? 'Review invalidated session'
+                : state.contentEligibility.eligible
+                  ? 'Resume workout'
+                  : 'Review blocked session'}
             </Link>
           </section>
         ) : null}
@@ -167,9 +175,9 @@ export default async function TodayPage({
             <form action={startWorkoutAction}>
               <input type="hidden" name="plannedWorkoutId" value={state.workout.id} />
               <input type="hidden" name="commandId" value={newUuidV7()} />
-              <button className={styles.primaryAction} type="submit">
+              <SubmitButton variant="primary" pendingLabel="Starting…">
                 Start workout
-              </button>
+              </SubmitButton>
             </form>
           </section>
         ) : null}

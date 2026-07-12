@@ -41,19 +41,23 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import { assertDatabaseReady } from '@/platform/db/preflight'
 import {
+  adjustmentDecisionInvalidations,
   adjustmentDecisions,
   auditEvents,
   exercisePrescriptions,
   performedSets,
   plannedWorkouts,
+  programRevisionInvalidations,
   programRevisionLineage,
   programRevisions,
   programs,
   safetyHoldResolutions,
   safetyHolds,
   sessionFeedback,
+  sessionFeedbackCorrections,
   setPrescriptions,
   trainingCommandReceipts,
+  trainingFactCorrections,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -646,23 +650,22 @@ describe('training PostgreSQL command boundary', () => {
     ['used', TEST_NEXT_DAY, 2, true],
     ['gapped', TEST_NEXT_DAY, 3, false],
   ] as const)('rejects a %s persisted remaining schedule before superseding its source', async (_case, scheduledDate, programOrdinal, markFutureUsed) => {
-    const { seeded, sessionId } = await startedSession()
+    const seeded = await seedCoherentProgram(owner.id)
     if (markFutureUsed) {
-      await getDb()
-        .insert(workoutSessions)
-        .values({
-          id: newUuidV7(),
-          userId: owner.id,
-          plannedWorkoutId: seeded.nextWorkoutId,
-          plannedWorkoutName: 'Previously consumed future workout',
-          scheduledDate: TEST_NEXT_DAY,
-          slotCode: 'B',
-          status: 'abandoned',
-          startedAt: new Date('2026-07-10T10:00:00.000Z'),
-          abandonedAt: new Date('2026-07-10T10:05:00.000Z'),
-          startCommandId: newUuidV7(),
-        })
+      const consumedSessionId = await startWorkout(
+        owner.id,
+        seeded.nextWorkoutId,
+        newUuidV7(),
+        new Date('2026-07-13T12:00:00.000Z'),
+      )
+      await abandonWorkout(owner.id, consumedSessionId, 'Schedule was already consumed.')
     }
+    const sessionId = await startWorkout(
+      owner.id,
+      seeded.currentWorkoutId,
+      newUuidV7(),
+      TEST_NOW,
+    )
     const revisionId = await seedRemainingDraft({
       programId: seeded.programId,
       sourceRevisionId: seeded.revisionId,
@@ -832,15 +835,42 @@ describe('training PostgreSQL command boundary', () => {
       .select()
       .from(sessionFeedback)
       .where(eq(sessionFeedback.sessionId, sessionId))
+    const [correction] = await getDb()
+      .select({
+        correctionKind: trainingFactCorrections.correctionKind,
+        reason: trainingFactCorrections.reason,
+        painReported: sessionFeedbackCorrections.painReported,
+        details: sessionFeedbackCorrections.details,
+      })
+      .from(trainingFactCorrections)
+      .innerJoin(
+        sessionFeedbackCorrections,
+        eq(sessionFeedbackCorrections.correctionId, trainingFactCorrections.id),
+      )
+      .where(eq(trainingFactCorrections.sessionId, sessionId))
+    const [decisionInvalidationCount] = await getDb()
+      .select({ value: count() })
+      .from(adjustmentDecisionInvalidations)
+    const [revisionInvalidationCount] = await getDb()
+      .select({ value: count() })
+      .from(programRevisionInvalidations)
     const [safetyAudit] = await getDb()
       .select()
       .from(auditEvents)
       .where(eq(auditEvents.eventType, 'session-safety-stop'))
 
     expect(feedback).toMatchObject({
+      painReported: false,
+      details: null,
+    })
+    expect(correction).toMatchObject({
+      correctionKind: 'session-feedback',
       painReported: true,
       details: 'reported after completion',
     })
+    expect(correction?.reason).toBe('Pain reported after session completion.')
+    expect(decisionInvalidationCount?.value).toBeGreaterThan(0)
+    expect(revisionInvalidationCount?.value).toBeGreaterThan(0)
     expect(safetyAudit).toMatchObject({
       actorUserId: owner.id,
       subjectUserId: owner.id,
@@ -920,30 +950,39 @@ describe('training PostgreSQL command boundary', () => {
   })
 
   it('keeps pain holds independent across different source sessions', async () => {
-    const { seeded, sessionId } = await startedSession()
-    const priorSessionId = newUuidV7()
-    await getDb()
-      .insert(workoutSessions)
-      .values({
-        id: priorSessionId,
-        userId: owner.id,
-        plannedWorkoutId: seeded.nextWorkoutId,
-        plannedWorkoutName: 'Prior concluded safety source',
-        scheduledDate: TEST_NEXT_DAY,
-        slotCode: 'B',
-        status: 'abandoned',
-        startedAt: new Date('2026-07-10T10:00:00.000Z'),
-        abandonedAt: new Date('2026-07-10T10:05:00.000Z'),
-        abandonedReason: 'Prior pain report source.',
-        startCommandId: newUuidV7(),
-      })
-    await getDb().insert(safetyHolds).values({
-      id: newUuidV7(),
+    const seeded = await seedCoherentProgram(owner.id)
+    const priorSessionId = await startWorkout(
+      owner.id,
+      seeded.nextWorkoutId,
+      newUuidV7(),
+      new Date('2026-07-13T12:00:00.000Z'),
+    )
+    await reportPain({
       userId: owner.id,
-      sourceSessionId: priorSessionId,
-      reasonCode: 'session-pain-reported',
+      sessionId: priorSessionId,
+      commandId: newUuidV7(),
       details: 'pain from the prior session',
     })
+    await abandonWorkout(owner.id, priorSessionId, 'Prior pain report source.')
+    const [priorHold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.sourceSessionId, priorSessionId))
+    if (!priorHold) throw new Error('Prior session pain hold was not created.')
+    await resolveSafetyHold({
+      userId: owner.id,
+      holdId: priorHold.id,
+      commandId: newUuidV7(),
+      reason: 'Prior session was abandoned and reviewed.',
+      acknowledged: true,
+    })
+
+    const sessionId = await startWorkout(
+      owner.id,
+      seeded.currentWorkoutId,
+      newUuidV7(),
+      TEST_NOW,
+    )
 
     await reportPain({
       userId: owner.id,
@@ -1286,7 +1325,7 @@ describe('training PostgreSQL command boundary', () => {
     expect(today.kind).not.toBe('hold')
   })
 
-  it('fails closed for a completed-session pain hold until H1 invalidation exists', async () => {
+  it('resolves a completed-session pain hold only after durable H1 invalidation', async () => {
     const { sessionId, setId } = await startedSession()
     await completeSet({
       userId: owner.id,
@@ -1319,29 +1358,24 @@ describe('training PostgreSQL command boundary', () => {
     expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
       kind: 'hold',
       holdId: hold.id,
-      resolutionAvailability: {
-        kind: 'blocked',
-        reason: 'completed-source-awaiting-invalidation',
-      },
+      resolutionAvailability: { kind: 'available' },
     })
 
-    await expect(
-      resolveSafetyHold({
-        userId: owner.id,
-        holdId: hold.id,
-        commandId: newUuidV7(),
-        reason: 'Choosing to continue with qualified guidance.',
-        acknowledged: true,
-      }),
-    ).rejects.toMatchObject({
-      code: 'hold.completed-source-invalidation-required',
+    await resolveSafetyHold({
+      userId: owner.id,
+      holdId: hold.id,
+      commandId: newUuidV7(),
+      reason: 'Choosing to continue with qualified guidance.',
+      acknowledged: true,
     })
-    expect(
-      await getDb()
-        .select()
-        .from(safetyHoldResolutions)
-        .where(eq(safetyHoldResolutions.holdId, hold.id)),
-    ).toEqual([])
+    const resolutions = await getDb()
+      .select()
+      .from(safetyHoldResolutions)
+      .where(eq(safetyHoldResolutions.holdId, hold.id))
+    expect(resolutions).toHaveLength(1)
+    expect(await getTodayState(owner.id, 'UTC', TEST_NOW)).toMatchObject({
+      kind: 'program-required',
+    })
   })
 
   it('denies self-resolution of a source-less eligibility hold', async () => {

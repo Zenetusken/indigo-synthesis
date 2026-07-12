@@ -5,7 +5,7 @@
 
 .statePanel {
   background: var(--paper);
-  border-block-start: 0.4rem solid var(--plate-yellow);
+  border-block-start: var(--accent-bar) solid var(--plate-yellow);
   display: grid;
   gap: var(--space-6);
   padding: clamp(1.5rem, 5vw, 3.5rem);
@@ -62,7 +62,7 @@
 
 .preview span {
   color: var(--steel);
-  font: 500 0.8rem / 1 var(--font-data);
+  font: 500 var(--text-sm) / 1 var(--font-data);
 }
 
 .preview code {
@@ -72,7 +72,7 @@
 .next {
   color: var(--steel);
   font-family: var(--font-data);
-  font-size: 0.9rem;
+  font-size: var(--text-md);
 }
 
 .holdResolution,
