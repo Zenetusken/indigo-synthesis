@@ -12,12 +12,6 @@ export type PostCompletionSafetyReportState = {
   }
 }
 
-export const initialPostCompletionSafetyReportState: PostCompletionSafetyReportState = {
-  errorCode: null,
-  success: false,
-  values: { details: '' },
-}
-
 export async function reportPostCompletionSafetyIssueAction(
   _previousState: PostCompletionSafetyReportState,
   formData: FormData,
