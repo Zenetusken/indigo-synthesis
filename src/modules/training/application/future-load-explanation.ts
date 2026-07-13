@@ -28,6 +28,7 @@ export type FutureLoadExplanationUnavailableReason =
   | 'llm-disabled'
   | 'llm-not-ready'
   | 'decision-not-found'
+  | 'content-ineligible'
   | 'fact-bundle-failed'
   | 'decision-invalidated'
   | 'synthesis-failed'
@@ -104,7 +105,10 @@ export async function explainFutureLoadDecision(input: {
   if (bundlesResult.status !== 'available') {
     return {
       status: 'unavailable',
-      reason: 'decision-not-found',
+      reason:
+        bundlesResult.reason === 'ineligible'
+          ? 'content-ineligible'
+          : 'decision-not-found',
       detail: `Session future-load decisions unavailable (${bundlesResult.reason}).`,
       durationMs: elapsed(),
     }

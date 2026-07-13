@@ -9,6 +9,7 @@ import {
   completeSetup,
   completeWorkoutToHistory,
   databaseClient,
+  expectNoHorizontalOverflow,
   generateAndActivate,
 } from './support/journey'
 
@@ -148,6 +149,15 @@ test.describe('live GPU History explanations', () => {
       expect(proseText).toMatch(/60(?:\s*kg)?/)
       expect(proseText).toMatch(/61(?:\s*kg)?/)
     }
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = '200%'
+    })
+    await expectNoHorizontalOverflow(page)
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = ''
+    })
 
     // Re-explain the same decision: should hit prose cache (no second model wait).
     await explain.click()

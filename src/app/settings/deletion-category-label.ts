@@ -6,6 +6,7 @@ const overrides: Readonly<Record<string, string>> = {
   deletionPlans: 'Deletion previews',
   auditEvents: 'Audit events',
   contentReleaseRevocations: 'Content-release revocations',
+  futureLoadExplanationCache: 'Cached plain-language explanations',
 }
 
 /**

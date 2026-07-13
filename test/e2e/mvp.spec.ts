@@ -11,6 +11,7 @@ import {
   clearApplicationData,
   completeSetup,
   databaseClient,
+  expectNoHorizontalOverflow,
   generateAndActivate,
   e2eOwner as owner,
   todayIso,
@@ -39,24 +40,6 @@ const cachedExplanationFixture = {
 // Server-side modules read DATABASE_URL and BETTER_AUTH_SECRET; the E2E harness
 // exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET.
 bindE2eProcessEnv()
-
-async function expectNoHorizontalOverflow(page: Page): Promise<void> {
-  const overflow = await page.evaluate(() => {
-    const viewportWidth = document.documentElement.clientWidth
-    return Array.from(document.body.querySelectorAll<HTMLElement>('*'))
-      .map((element) => {
-        const bounds = element.getBoundingClientRect()
-        return {
-          element: `${element.tagName.toLowerCase()}.${element.className}`,
-          left: Math.round(bounds.left),
-          right: Math.round(bounds.right),
-        }
-      })
-      .filter(({ left, right }) => left < -1 || right > viewportWidth + 1)
-      .slice(0, 10)
-  })
-  expect(overflow, 'elements extending beyond the document viewport').toEqual([])
-}
 
 /** Codes-first History contract for future-load decisions (LLM may be off). */
 async function expectFutureLoadHistoryCodes(page: Page): Promise<void> {
@@ -162,6 +145,10 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await expect(page).toHaveURL(/\/history\//)
   await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
   await expect(page.getByText('Persisted immutable completion facts')).toBeVisible()
+  await expect(
+    page.getByText('Back squat — development fixture', { exact: true }).first(),
+  ).toBeVisible()
+  await expect(page.getByText('development.back-squat', { exact: true })).toHaveCount(0)
   await expectFutureLoadHistoryCodes(page)
   await expectExplainDegradesWhenLlmDisabled(page)
 
@@ -279,6 +266,35 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   ])
   expect(JSON.stringify(archive)).not.toContain('correct-horse-battery-staple')
 
+  if (!cachedExplanationOwner) {
+    throw new Error('Cached explanation owner was not established.')
+  }
+  const revocationClient = await databaseClient()
+  try {
+    const revocation = await revocationClient.query(
+      `INSERT INTO content_release_revocation (
+         id, content_kind, content_id, content_version, reason, actor_user_id
+       )
+       SELECT $1, 'methodology', pr.methodology_id, pr.methodology_version,
+              'Revoked during browser wiring coverage.', ws.user_id
+       FROM workout_session ws
+       JOIN planned_workout pw ON pw.id = ws.planned_workout_id
+       JOIN program_revision pr ON pr.id = pw.revision_id
+       WHERE ws.id = $2`,
+      ['01900000-0000-7000-8000-000000000102', cachedExplanationOwner.sessionId],
+    )
+    expect(revocation.rowCount).toBe(1)
+  } finally {
+    await revocationClient.end()
+  }
+  await page.goto(`/history/${cachedExplanationOwner.sessionId}`)
+  await expect(
+    page.getByText(/content release was revoked/, { exact: false }).first(),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Explain in plain language' }).first(),
+  ).toBeDisabled()
+
   await page.goto('/settings')
   await page.getByLabel('Name').fill('Second Trainee')
   await page.getByLabel('Local sign-in email').fill('second@example.test')
@@ -292,7 +308,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     page.getByRole('heading', { name: 'Exact rows in this preview' }),
   ).toBeVisible()
   await expect(
-    page.getByText('Future load explanation cache').locator('..'),
+    page.getByText('Cached plain-language explanations').locator('..'),
   ).toContainText('1')
   await page.getByLabel('Current owner password').fill(owner.password)
   await page.getByLabel('Type RESET').fill('RESET')
@@ -607,6 +623,10 @@ test('a post-completion safety correction invalidates progression before hold re
     .check()
   await page.getByRole('button', { name: 'Complete workout' }).click()
   await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
+  await expect(page.getByText('Late safety report')).toBeVisible()
+  await expect(
+    page.getByText(/create a safety hold that stops training until it is resolved/),
+  ).toBeVisible()
 
   const context = 'Pain became apparent after the completed workout.'
   await page.getByLabel('Optional factual context').fill(context)
@@ -616,6 +636,9 @@ test('a post-completion safety correction invalidates progression before hold re
     page.getByRole('heading', { name: 'Post-completion safety correction' }),
   ).toBeVisible()
   await expect(
+    page.locator('section[aria-labelledby="correction-heading"]'),
+  ).toBeFocused()
+  await expect(
     page.getByText('No pain or safety issue reported at completion'),
   ).toBeVisible()
   await expect(
@@ -623,8 +646,17 @@ test('a post-completion safety correction invalidates progression before hold re
   ).toBeVisible()
   await expect(page.getByText(context)).toBeVisible()
   expect(
-    await page.getByText('Invalidated original decision', { exact: false }).count(),
+    await page
+      .getByText(/Original (increase|hold|unavailable) decision — invalidated/)
+      .count(),
   ).toBeGreaterThan(0)
+  await expect(
+    page.getByRole('link', { name: 'review its current status on Today' }),
+  ).toHaveAttribute('href', '/today')
+  await expect(
+    page.getByText('Back squat — development fixture', { exact: true }).first(),
+  ).toBeVisible()
+  await expect(page.getByText('development.back-squat', { exact: true })).toHaveCount(0)
 
   const invalidationClient = await databaseClient()
   try {
@@ -1122,7 +1154,12 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   await completionAcknowledgement.check()
   const completeWorkoutButton = page.getByRole('button', { name: 'Complete workout' })
   await expect(completeWorkoutButton).toBeInViewport()
-  await completeWorkoutButton.click({ trial: true })
+  await completeWorkoutButton.click()
+  await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
+  await expect(page.getByText('Late safety report')).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Explain in plain language' }).first(),
+  ).toBeVisible()
   await expectNoHorizontalOverflow(page)
   expect(nonLoopbackRequests).toEqual([])
 })

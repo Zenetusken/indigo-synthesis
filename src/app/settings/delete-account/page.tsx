@@ -63,8 +63,8 @@ export default async function DeleteAccountPage({
           <h2>This cannot be undone.</h2>
           <p>
             {preservesIdentity
-              ? 'Your profile, programs, workouts, performed sets, and subject-linked training audit events are removed. Your owner credential, current login sessions, installation ownership, and every other local user remain.'
-              : 'Your credential, sessions, profile, programs, workouts, performed sets, and subject-linked audit events are removed. Other local accounts and their data remain.'}{' '}
+              ? 'Your profile, programs, workouts, performed sets, saved plain-language explanations, and subject-linked training audit events are removed. Your owner credential, current login sessions, installation ownership, and every other local user remain.'
+              : 'Your credential, sessions, profile, programs, workouts, performed sets, saved plain-language explanations, and subject-linked audit events are removed. Other local accounts and their data remain.'}{' '}
             Non-personal destructive-action audit evidence and an aggregate completion
             tombstone may remain.
           </p>

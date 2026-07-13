@@ -20,6 +20,8 @@ function unavailableMessage(
       return 'The local model is not available right now. The rule codes above still apply.'
     case 'decision-not-found':
       return 'This decision could not be loaded for explanation.'
+    case 'content-ineligible':
+      return 'Plain-language explanation is unavailable because this content is not eligible. The stored rule code remains visible as historical evidence.'
     case 'fact-bundle-failed':
       return 'This decision cannot be explained from incomplete stored facts. The rule codes above still apply.'
     case 'decision-invalidated':
@@ -37,15 +39,20 @@ function unavailableMessage(
 export function FutureLoadExplanationControl(props: {
   readonly sessionId: string
   readonly decisionId: string
-  readonly disabled?: boolean
+  readonly disabledReason?: 'decision-invalidated' | 'content-revoked'
 }) {
   const [pending, startTransition] = useTransition()
   const [result, setResult] = useState<FutureLoadExplanationResult | null>(null)
+  const [requestFailed, setRequestFailed] = useState(false)
   const [latePainReported, setLatePainReported] = useState(false)
-  const disabled = props.disabled || latePainReported
+  const disabledReason = latePainReported ? 'decision-invalidated' : props.disabledReason
+  const disabled = disabledReason !== undefined
 
   useEffect(() => {
-    if (disabled) setResult(null)
+    if (disabled) {
+      setResult(null)
+      setRequestFailed(false)
+    }
   }, [disabled])
 
   useEffect(() => {
@@ -59,12 +66,18 @@ export function FutureLoadExplanationControl(props: {
   }, [props.sessionId])
 
   function onExplain() {
+    setRequestFailed(false)
     startTransition(async () => {
-      const next = await explainFutureLoadDecisionAction({
-        sessionId: props.sessionId,
-        decisionId: props.decisionId,
-      })
-      setResult(next)
+      try {
+        const next = await explainFutureLoadDecisionAction({
+          sessionId: props.sessionId,
+          decisionId: props.decisionId,
+        })
+        setResult(next)
+      } catch {
+        setResult(null)
+        setRequestFailed(true)
+      }
     })
   }
 
@@ -84,28 +97,36 @@ export function FutureLoadExplanationControl(props: {
       <div
         id={`explanation-status-${props.decisionId}`}
         className={styles.explanationBody}
-        aria-live="polite"
       >
-        {!disabled && result?.status === 'available' ? (
-          <>
-            <p className={styles.explanationLabel}>
-              Inferred paraphrase of the stored rule (not a new decision)
+        <div className={styles.explanationResult} aria-live="polite">
+          {!disabled && result?.status === 'available' ? (
+            <>
+              <p className={styles.explanationLabel}>
+                Inferred paraphrase of the stored rule (not a new decision)
+              </p>
+              <p className={styles.explanationProse}>{result.prose}</p>
+              <p className={styles.explanationMeta}>
+                Local model {result.modelId}
+                {result.fromCache ? ' · cached' : ''} · {result.durationMs} ms · rules
+                still authoritative
+              </p>
+            </>
+          ) : null}
+          {!disabled && result?.status === 'unavailable' ? (
+            <p className={styles.explanationUnavailable}>{unavailableMessage(result)}</p>
+          ) : null}
+          {!disabled && requestFailed ? (
+            <p className={styles.explanationUnavailable}>
+              The explanation request did not finish. Try again; the stored rule code
+              still applies.
             </p>
-            <p className={styles.explanationProse}>{result.prose}</p>
-            <p className={styles.explanationMeta}>
-              Local model {result.modelId}
-              {result.fromCache ? ' · cached' : ''} · {result.durationMs} ms · rules still
-              authoritative
-            </p>
-          </>
-        ) : null}
-        {!disabled && result?.status === 'unavailable' ? (
-          <p className={styles.explanationUnavailable}>{unavailableMessage(result)}</p>
-        ) : null}
+          ) : null}
+        </div>
         {disabled ? (
           <p className={styles.explanationUnavailable}>
-            Plain-language explanation unavailable because this decision is no longer
-            active. Its original code remains visible as historical evidence.
+            {disabledReason === 'content-revoked'
+              ? 'Plain-language explanation unavailable because this content release was revoked. The stored rule code remains visible as historical evidence.'
+              : 'Plain-language explanation unavailable because this decision is no longer active. Its original code remains visible as historical evidence.'}
           </p>
         ) : null}
       </div>

@@ -12,6 +12,7 @@ import {
   revokeContentRelease,
 } from '@/modules/programs/application/content-revocations'
 import { activateProgram } from '@/modules/programs/application/programs'
+import { explainFutureLoadDecision } from '@/modules/training/application/future-load-explanation'
 import {
   completeSet,
   completeWorkout,
@@ -347,6 +348,18 @@ describe('runtime content revocation', () => {
 
     const adjustments = await getSessionAdjustments(ownerActor.userId, sessionId)
     expect(adjustments?.length).toBeGreaterThan(0)
+    const decisionId = adjustments?.[0]?.id
+    if (!decisionId) throw new Error('Completed revoked fixture has no decision.')
+    await expect(
+      explainFutureLoadDecision({
+        userId: ownerActor.userId,
+        sessionId,
+        decisionId,
+      }),
+    ).resolves.toMatchObject({
+      status: 'unavailable',
+      reason: 'content-ineligible',
+    })
 
     const archive = await createDataExport(ownerActor)
     expect(archive.identity.id).toBe(ownerActor.userId)
