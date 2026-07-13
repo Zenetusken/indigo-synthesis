@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 import { getServerConfig } from '@/platform/config/server'
+import { BrandMark } from './brand-mark'
 import { type PrimaryDestination, PrimaryNavigation } from './primary-navigation'
 import styles from './product-frame.module.css'
 
@@ -28,9 +29,7 @@ export function ProductFrame({ accountActions, children, current }: ProductFrame
           href={{ pathname: '/today' }}
           aria-label="Indigo Synthesis Today"
         >
-          <span className={styles.mark} aria-hidden="true">
-            IS
-          </span>
+          <BrandMark />
           <span className={styles.wordmarkText}>
             <strong>Indigo Synthesis</strong>
             <small>{instanceLabel}</small>

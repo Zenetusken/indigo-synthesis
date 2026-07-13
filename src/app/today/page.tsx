@@ -1,7 +1,13 @@
 import type { Metadata, Route } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { InlineStatus, PageHeading, ProductFrame, SubmitButton } from '@/components'
+import {
+  FocusAlert,
+  InlineStatus,
+  PageHeading,
+  ProductFrame,
+  SubmitButton,
+} from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { formatCalendarDate } from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
@@ -71,9 +77,9 @@ export default async function TodayPage({
         />
 
         {error ? (
-          <InlineStatus tone="error" live="assertive">
-            {error}
-          </InlineStatus>
+          <FocusAlert>
+            <InlineStatus tone="error">{error}</InlineStatus>
+          </FocusAlert>
         ) : null}
 
         {notice ? (

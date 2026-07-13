@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import {
   Disclosure,
+  FocusAlert,
   InlineStatus,
   PageHeading,
   ProductFrame,
@@ -94,9 +95,11 @@ export default async function ProgramPage({
         />
 
         {error ? (
-          <InlineStatus tone="error" live="assertive">
-            {error} Review setup before trying again.
-          </InlineStatus>
+          <FocusAlert>
+            <InlineStatus tone="error">
+              {error} Review setup before trying again.
+            </InlineStatus>
+          </FocusAlert>
         ) : null}
 
         {isDevelopmentMode ? (

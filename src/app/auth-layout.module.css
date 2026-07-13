@@ -29,18 +29,6 @@
   text-transform: uppercase;
 }
 
-.mark {
-  align-items: center;
-  background: var(--indigo-enamel);
-  border-radius: var(--radius-sm);
-  color: white;
-  display: inline-flex;
-  font: 500 var(--text-sm) / 1 var(--font-data);
-  height: 2.5rem;
-  justify-content: center;
-  width: 2.5rem;
-}
-
 .heading p,
 .footnote {
   color: var(--steel);

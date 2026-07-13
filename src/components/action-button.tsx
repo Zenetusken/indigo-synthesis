@@ -13,6 +13,7 @@ export function ActionButton({
   className,
   disabled,
   fullWidth = false,
+  onClick,
   type = 'button',
   variant = 'primary',
   ...props
@@ -26,13 +27,25 @@ export function ActionButton({
     .filter(Boolean)
     .join(' ')
 
+  // While busy the control stays focusable (aria-disabled, not the native
+  // disabled attribute) so keyboard/SR focus is not dropped to the body
+  // mid-submit; pointer re-activation is blocked here and repeat submits are
+  // already guarded by command idempotency / React's pending form action.
   return (
     <button
       {...props}
       className={classes}
       type={type}
       aria-busy={busy || undefined}
-      disabled={disabled || busy}
+      aria-disabled={busy || undefined}
+      disabled={disabled}
+      onClick={
+        busy
+          ? (event) => {
+              event.preventDefault()
+            }
+          : onClick
+      }
     >
       {children}
     </button>

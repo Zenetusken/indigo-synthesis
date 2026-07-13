@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { BrandMark } from '@/components'
 import { getInstallationStatus } from '@/modules/identity/application/installation'
 import { BootstrapForm } from '@/modules/identity/ui/bootstrap-form'
 import styles from '../auth-layout.module.css'
@@ -22,9 +23,7 @@ export default async function BootstrapPage({
     <main className={styles.page}>
       <section className={styles.frame} aria-labelledby="bootstrap-heading">
         <Link className={styles.wordmark} href={{ pathname: '/' }}>
-          <span className={styles.mark} aria-hidden="true">
-            IS
-          </span>
+          <BrandMark />
           Indigo Synthesis
         </Link>
 

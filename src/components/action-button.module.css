@@ -14,7 +14,7 @@
   text-decoration: none;
 }
 
-.button:not(:disabled):active {
+.button:not(:disabled, [aria-disabled="true"]):active {
   transform: translateY(1px);
 }
 
@@ -23,12 +23,17 @@
   opacity: 0.65;
 }
 
+.button[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .primary {
   background: var(--indigo-enamel);
   color: white;
 }
 
-.primary:not(:disabled):hover {
+.primary:not(:disabled, [aria-disabled="true"]):hover {
   background: var(--indigo-deep);
 }
 
@@ -38,8 +43,8 @@
   color: var(--rack-ink);
 }
 
-.secondary:not(:disabled):hover,
-.quiet:not(:disabled):hover {
+.secondary:not(:disabled, [aria-disabled="true"]):hover,
+.quiet:not(:disabled, [aria-disabled="true"]):hover {
   background: var(--paper);
 }
 
@@ -56,7 +61,7 @@
   color: white;
 }
 
-.danger:not(:disabled):hover {
+.danger:not(:disabled, [aria-disabled="true"]):hover {
   background: var(--danger-deep);
 }
 
@@ -65,7 +70,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button:not(:disabled):active {
+  .button:not(:disabled, [aria-disabled="true"]):active {
     transform: none;
   }
 }
