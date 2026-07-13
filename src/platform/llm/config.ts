@@ -126,11 +126,12 @@ export function parseLlmConfig(
   input: Record<string, string | undefined>,
   cwd = process.cwd(),
 ): LlmRuntimeConfig {
+  const requestedMode = input.INDIGO_LLM_MODE === '' ? undefined : input.INDIGO_LLM_MODE
   // Disabled mode is an isolation boundary: stale or hostile local-runtime variables
   // must not make a codes-only product path fail while no model can be called.
   const selectedInput =
-    input.INDIGO_LLM_MODE === undefined || input.INDIGO_LLM_MODE === 'disabled'
-      ? { INDIGO_LLM_MODE: input.INDIGO_LLM_MODE }
+    requestedMode === undefined || requestedMode === 'disabled'
+      ? { INDIGO_LLM_MODE: requestedMode }
       : input
   const parsed = llmConfigSchema.safeParse(selectedInput)
   if (!parsed.success) {

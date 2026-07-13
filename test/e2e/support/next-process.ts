@@ -114,6 +114,7 @@ export function createNextProcessLifecycle(
 
     async waitUntilReady(child) {
       const deadline = Date.now() + options.readinessTimeoutMs
+      const authReadinessUrl = new URL('/api/auth/get-session', options.applicationUrl)
 
       while (Date.now() < deadline) {
         if (childExited(child)) {
@@ -123,13 +124,26 @@ export function createNextProcessLifecycle(
         }
 
         try {
-          const response = await fetch(options.applicationUrl, {
+          const applicationResponse = await fetch(options.applicationUrl, {
             redirect: 'manual',
             signal: AbortSignal.timeout(1_500),
           })
-          if (response.status >= 200 && response.status < 400) return
+          if (applicationResponse.status < 200 || applicationResponse.status >= 400) {
+            await delay(250)
+            continue
+          }
+
+          // The first credential request otherwise cold-compiles the catch-all auth
+          // route while a browser submission is in flight. A slow webpack rebuild can
+          // force a dev-client reload and abort that POST with ERR_NETWORK_IO_SUSPENDED.
+          // Prewarm the read-only session endpoint before exposing this generation.
+          const authResponse = await fetch(authReadinessUrl, {
+            redirect: 'manual',
+            signal: AbortSignal.timeout(1_500),
+          })
+          if (authResponse.status >= 200 && authResponse.status < 400) return
         } catch {
-          // A refused connection is expected while Next.js compiles the first route.
+          // A refused connection or timed-out cold compile is expected during startup.
         }
 
         await delay(250)

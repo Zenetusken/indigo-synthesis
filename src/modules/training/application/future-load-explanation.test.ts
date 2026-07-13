@@ -216,6 +216,25 @@ describe('explainFutureLoadDecision', () => {
     expect(result).toMatchObject({ status: 'unavailable', reason: 'decision-not-found' })
   })
 
+  it('reports ineligible content distinctly from a missing decision', async () => {
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache: createMemoryFutureLoadExplanationCache(),
+        getBundles: async () => ({ status: 'unavailable', reason: 'ineligible' }),
+        getConfig: disabledConfig,
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'content-ineligible',
+      detail: expect.stringContaining('ineligible'),
+    })
+  })
+
   it('returns fact-bundle-failed when the decision failed to build', async () => {
     const result = await explainFutureLoadDecision({
       userId,

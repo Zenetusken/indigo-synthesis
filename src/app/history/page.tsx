@@ -26,7 +26,7 @@ export default async function HistoryPage() {
         <PageHeading
           eyebrow="History"
           title="Completed work, without invention."
-          description="Only persisted performed and skipped sets appear here."
+          description="Completed sessions keep recorded sets, correction history, deterministic future-load decisions, and clearly labeled optional explanations."
         />
 
         {sessions.length === 0 ? (

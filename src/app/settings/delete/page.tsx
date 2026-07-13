@@ -54,9 +54,10 @@ export default async function DeleteSettingsPage({
         <section className={styles.warning}>
           <h2>This deletes every local account and all product data.</h2>
           <p>
-            Profiles, programs, planned workouts, sessions, performed sets, explanations,
-            and subject-linked audit history are removed. Backups remain the operator’s
-            responsibility. Only a non-personal completion tombstone remains.
+            Profiles, programs, planned workouts, sessions, performed sets, saved
+            plain-language explanations, and subject-linked audit history are removed.
+            Backups remain the operator’s responsibility. Only a non-personal completion
+            tombstone remains.
           </p>
         </section>
 

@@ -110,7 +110,7 @@ Only after Phase 2:
 - PR definitions and source sets;
 - mathematically defined volume;
 - schedule-aware weekly adherence;
-- audited correction of completed sets;
+- trainee entry and review of audited completed-set corrections;
 - program revision history and comparison; and
 - clearer explanation/source inspection (optional host-local grounded prose per
   [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md), only after the
@@ -123,10 +123,11 @@ Gate:
 - no duplicate aggregate truth;
 - performance measurements justify any read model.
 
-Checkpoint: append-only correction of completed sets and completion feedback, recursive
-decision/revision invalidation, factual History correction provenance, and optional
-host-local explanations are implemented. Exercise-specific aggregates, e1RM/PR/volume/
-adherence definitions, and program comparison remain open, so Phase 3 is not closed.
+Checkpoint: the append-only completed-set correction ledger/projection, completion-feedback
+entry, recursive decision/revision invalidation, factual History correction provenance,
+and optional host-local History explanations are implemented. Trainee completed-set
+correction entry, exercise-specific aggregates, e1RM/PR/volume/adherence definitions, and
+program comparison remain open, so Phase 3 is not closed.
 
 ## Phase 4 — Small private beta
 

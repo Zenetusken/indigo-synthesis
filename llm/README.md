@@ -119,8 +119,9 @@ Only the opt-in live Playwright configuration enables local mode. Default E2E fo
 ## Contract gates
 
 `pnpm llm:validate-baseline` runs without weights or a server. It checks FactBundle v2,
-closed-output prompt v3, validator v3, the committed pack registry, accepted templates, adversarial
-numeric and advice cases, invalidation, fake synthesis, and disabled composition.
+closed-output prompt v3, validator v4, the committed pack registry, non-empty accepted
+and rejection matrices, adversarial numeric and advice cases, invalidation, fake
+synthesis, and disabled composition.
 
 The live probe is useful only after full preflight succeeds. A calibrated product-path
 archive requires a clean staged/unstaged/untracked worktree and at least three runs with

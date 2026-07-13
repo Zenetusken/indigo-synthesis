@@ -1,43 +1,15 @@
 import type { LanguageModelPort } from '../ports'
+import { assertLoopbackEndpoint, fetchLoopback } from '../runtime/loopback-fetch'
 import type {
   LanguageModelCompleteRequest,
   LanguageModelCompleteResult,
   SamplingParams,
 } from '../types'
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
-
-export class NonLoopbackEndpointError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'NonLoopbackEndpointError'
-  }
-}
-
-/**
- * Asserts the OpenAI-compatible base URL is host-local only.
- * Call before any network I/O.
- */
-export function assertLoopbackEndpoint(endpoint: string): URL {
-  let url: URL
-  try {
-    url = new URL(endpoint)
-  } catch {
-    throw new NonLoopbackEndpointError(`Invalid endpoint URL: ${endpoint}`)
-  }
-
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new NonLoopbackEndpointError('Endpoint protocol must be http or https.')
-  }
-
-  if (!LOOPBACK_HOSTS.has(url.hostname)) {
-    throw new NonLoopbackEndpointError(
-      `Endpoint host must be loopback (127.0.0.1, localhost, or [::1]); got ${url.hostname}`,
-    )
-  }
-
-  return url
-}
+export {
+  assertLoopbackEndpoint,
+  NonLoopbackEndpointError,
+} from '../runtime/loopback-fetch'
 
 function chatCompletionsUrl(baseEndpoint: string): string {
   const url = assertLoopbackEndpoint(baseEndpoint)
@@ -90,14 +62,13 @@ export type OpenAiCompatibleLoopbackOptions = {
 
 /**
  * OpenAI-compatible client restricted to loopback. Used with llama-server and similar
- * host-local runtimes. This is the sole runtime file allowed to call fetch for LLM I/O.
+ * host-local runtimes. All I/O crosses the shared loopback-only network primitive.
  */
 export function createOpenAiCompatibleLoopbackLanguageModel(
   options: OpenAiCompatibleLoopbackOptions,
 ): LanguageModelPort {
   // Fail fast at construction if misconfigured.
   assertLoopbackEndpoint(options.endpoint)
-  const fetchImpl = options.fetchImpl ?? fetch
   const runtimeId = options.runtimeId ?? 'openai-compatible-loopback'
 
   return {
@@ -118,16 +89,19 @@ export function createOpenAiCompatibleLoopbackLanguageModel(
       let responseReceived = false
 
       try {
-        const response = await fetchImpl(url, {
-          method: 'POST',
-          redirect: 'error',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json',
+        const response = await fetchLoopback(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json',
+            },
+            body: JSON.stringify(buildRequestBody(request, request.sampling)),
+            signal: controller.signal,
           },
-          body: JSON.stringify(buildRequestBody(request, request.sampling)),
-          signal: controller.signal,
-        })
+          options.fetchImpl,
+        )
         responseReceived = true
 
         if (response.redirected || (response.status >= 300 && response.status < 400)) {

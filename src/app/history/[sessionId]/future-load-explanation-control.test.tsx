@@ -23,7 +23,7 @@ describe('FutureLoadExplanationControl', () => {
       <FutureLoadExplanationControl
         sessionId="session-1"
         decisionId="decision-1"
-        disabled
+        disabledReason="decision-invalidated"
       />,
     )
 
@@ -59,7 +59,7 @@ describe('FutureLoadExplanationControl', () => {
       <FutureLoadExplanationControl
         sessionId="session-1"
         decisionId="decision-1"
-        disabled
+        disabledReason="decision-invalidated"
       />,
     )
 
@@ -113,5 +113,38 @@ describe('FutureLoadExplanationControl', () => {
     expect(
       screen.getByRole('button', { name: 'Explain in plain language' }),
     ).toBeDisabled()
+  })
+
+  it('explains why revoked content cannot use the optional model', () => {
+    render(
+      <FutureLoadExplanationControl
+        sessionId="session-1"
+        decisionId="decision-1"
+        disabledReason="content-revoked"
+      />,
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Explain in plain language' }),
+    ).toBeDisabled()
+    expect(screen.getByText(/content release was revoked/)).toBeVisible()
+    expect(
+      screen.getByText(/content release was revoked/).closest('[aria-live]'),
+    ).toBeNull()
+    expect(explainFutureLoadDecisionAction).not.toHaveBeenCalled()
+  })
+
+  it('keeps a rejected explanation request inline and codes-only', async () => {
+    vi.mocked(explainFutureLoadDecisionAction).mockRejectedValue(
+      new Error('server action transport failed'),
+    )
+    render(<FutureLoadExplanationControl sessionId="session-1" decisionId="decision-1" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explain in plain language' }))
+
+    expect(await screen.findByText(/explanation request did not finish/)).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Explain in plain language' }),
+    ).toBeEnabled()
   })
 })

@@ -61,19 +61,21 @@ training decisions.
 - Bump the FactBundle to contract version `2`.
 - Remove free-form `skipReason` from model input entirely. Skipped status is sufficient;
   the database already guarantees that the authoritative row has a reason.
-- The initial FactBundle hardening bumped prompt/validator identity to v2. The final
-  adversarial pass bumps both to v3 and accepts only the exact closed
-  FactBundle-derived paragraph; old cache keys cannot collide.
+- The initial FactBundle hardening bumped prompt/validator identity to v2. The closed
+  output pass bumped the prompt to v3; the realistic-name adversarial fix independently
+  bumped the validator to v4. Only the exact FactBundle-derived paragraph is accepted,
+  and old cache keys cannot collide.
 - Purge v1 cache rows during migration rather than relabeling unverified prose. New rows
   store non-null validator version, served model name, runtime ID, and runtime-attestation
   digest.
 
 ### Prose validation
 
-- Normalize Unicode, whitespace, and exact required strings. Mask only complete authorized
-  display labels plus the exact required reason code and rule version, then reject every
-  remaining digit. Repetitions, RPE, ordinals, and raw grams are not authorized prose
-  fields in v2; any later contextual numeric grammar requires another validator bump.
+- Normalize Unicode, whitespace, and exact required strings. Independently safety-check
+  the structured exercise name, then mask it with complete authorized display labels plus
+  the exact required reason code and rule version before rejecting every remaining digit.
+  Repetitions, RPE, ordinals, and raw grams are not authorized prose fields; any later
+  contextual numeric grammar requires another validator bump.
 - Reject second-person modal/imperative action and any action or permission near pain,
   hurt, symptom, hold, clearance, training, or lifting language. Explanation does not need
   forward coaching, so uncertain advice fails closed.
@@ -158,8 +160,9 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 ```
 
 - The action name and result copy remain consistent.
-- A successful report appends a correction, replaces the form with correction provenance,
-  and disables explanation generation for every invalidated decision.
+- A successful report appends a correction and safety hold, replaces the form with
+  correction provenance plus a Today status handoff, and disables explanation generation
+  for every invalidated decision.
 - The control is keyboard accessible, mobile-safe, and uses an explicit live error region.
 - Browser coverage completes a workout, generates/caches prose, submits late pain from
   History, and verifies invalidation copy plus absence of cached/active prose.
@@ -167,7 +170,7 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 ## Commit sequence and gates
 
 1. **Specification.** This document only; review against live code and audit evidence.
-2. **Grounding and provenance.** FactBundle v2 plus prompt/validator v3, cache-version migration,
+2. **Grounding and provenance.** FactBundle v2 plus prompt v3 / validator v4, cache-version migration,
    redirects, exact model response, verified pack/runtime identity. Gate: focused LLM tests,
    offline baseline, typecheck.
 3. **Linearizable invalidation and cache coordination.** Active-state cache port,

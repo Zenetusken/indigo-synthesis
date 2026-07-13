@@ -2,11 +2,13 @@ import { resolve } from 'node:path'
 import { createDisabledLanguageModel } from '../adapters/disabled'
 import { createFakeLanguageModel } from '../adapters/fake'
 import { parseLlmConfig } from '../config'
+import { canonicalFutureLoadExplanation } from '../explanation/canonical-prose'
 import { createExplanationGenerationPort } from '../explanation/synthesize'
 import { validateExplanationProse } from '../explanation/validate-prose'
 import { loadModelRegistry } from '../model-registry'
 import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v3'
 import {
+  EXERCISE_NAME_REJECTION_TRAPS,
   GOLDEN_BASELINE_CASES,
   type GoldenBaselineCase,
   LLM_BASELINE_VERSION,
@@ -77,6 +79,39 @@ function runValidationMatrix(
   }
 
   return results
+}
+
+function runExerciseNameRejectionMatrix(): BaselineCheckResult[] {
+  const source = GOLDEN_BASELINE_CASES.find(
+    (golden) => golden.id === 'increase-at-target',
+  )
+  if (!source) {
+    return [
+      check(
+        'exercise-name/reject:fixture-missing',
+        false,
+        'Missing increase fixture for structured exercise-name rejection traps',
+      ),
+    ]
+  }
+
+  return EXERCISE_NAME_REJECTION_TRAPS.map((trap) => {
+    const factBundle = {
+      ...source.factBundle,
+      display: { ...source.factBundle.display, exerciseName: trap.exerciseName },
+    }
+    const canonical = canonicalFutureLoadExplanation(factBundle)
+    const result = canonical
+      ? validateExplanationProse(canonical, factBundle)
+      : { ok: false as const, detail: 'No canonical paragraph was derived' }
+    return check(
+      `exercise-name/reject:${trap.label}`,
+      !result.ok,
+      result.ok
+        ? `Unsafe structured exercise name passed: ${trap.exerciseName}`
+        : `Correctly rejected structured exercise-name trap ${trap.label}`,
+    )
+  })
 }
 
 async function runSynthesizeMatrix(
@@ -175,7 +210,23 @@ export async function runOfflineBaseline(options?: {
       ),
     )
 
+    const activeCases = GOLDEN_BASELINE_CASES.filter(
+      (golden) => golden.id !== 'invalidated-decision',
+    )
+    const rejectTrapCount = GOLDEN_BASELINE_CASES.reduce<number>(
+      (total, golden) => total + golden.rejectedProse.length,
+      EXERCISE_NAME_REJECTION_TRAPS.length,
+    )
+    checks.push(
+      check(
+        'coverage/non-empty-validation-matrices',
+        activeCases.length > 0 && rejectTrapCount > 0,
+        `${activeCases.length} active accepted case(s); ${rejectTrapCount} rejection trap(s)`,
+      ),
+    )
+
     checks.push(...runValidationMatrix(GOLDEN_BASELINE_CASES))
+    checks.push(...runExerciseNameRejectionMatrix())
     checks.push(
       ...(await runSynthesizeMatrix(GOLDEN_BASELINE_CASES, 'qwen3.5-9b-q4_k_m')),
     )

@@ -2,7 +2,7 @@
 
 - Status: accepted; History on-demand Explain + PG prose cache + append-only training-fact
   correction invalidation implemented (default LLM off; GPU-local optional). Program-page
-  Explain still open.
+  Explain is explicitly deferred as separate product work.
 - Date: 2026-07-13
 - Supplements: [ADR 0003](0003-deterministic-methodology.md), [ADR 0004](0004-self-hosted-online-first.md)
 - Contract: [Explanation generation contract](../EXPLANATION_GENERATION_CONTRACT.md)
@@ -54,7 +54,7 @@ runtime. Adding or changing that profile is a reviewed code/provenance change.
 7. **Implementation gate.** Product routes, tables, controls, and flags ship only after
    the [explanation generation contract](../EXPLANATION_GENERATION_CONTRACT.md)
    acceptance criteria for that slice pass. The History slice crossed this gate; Program
-   explanation remains open.
+   explanation remains deferred and requires its own product evidence and acceptance.
 
 ## Non-goals
 

@@ -5,7 +5,7 @@ export type ProseValidationResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly detail: string }
 
-export const EXPLANATION_VALIDATOR_VERSION = 'future-load-validator.v3'
+export const EXPLANATION_VALIDATOR_VERSION = 'future-load-validator.v4'
 
 const diagnosisPatterns: readonly RegExp[] = [
   /\bdiagnos(?:e|is|ed|ing)\b/i,
@@ -15,6 +15,18 @@ const diagnosisPatterns: readonly RegExp[] = [
   /\bovertraining syndrome\b/i,
 ]
 
+const sentenceInitialActionPattern =
+  /(?:^|[.!?]\s+)(?:please\s+)?(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i
+
+// These are unambiguously forward verbs rather than movement nouns such as "push" or
+// "lift". Reject them anywhere in a structured label so punctuation, slashes, or Unicode
+// dashes cannot turn an authorized exercise name into an imperative clause.
+const unambiguousExerciseDirectivePattern =
+  /\b(?:continu(?:e|es|ed|ing)|resum(?:e|es|ed|ing)|restart(?:s|ed|ing)?|proceed(?:s|ed|ing)?)\b/i
+const exerciseNameClauseDirectivePattern =
+  /(?:^|[.!?;:]\s*|[—–/|]\s*)(?:please\s+)?(?:continue|resume|restart|train|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i
+const unsafeExerciseNameControlPattern = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+
 /**
  * Explanation is retrospective presentation, never forward coaching. These patterns are
  * deliberately broad: the accepted paragraph does not need modal or imperative advice.
@@ -23,21 +35,61 @@ const forwardAdvicePatterns: readonly RegExp[] = [
   /\b(?:should|must|ought|recommend|recommended|suggest|suggested|consider)\b/i,
   /\b(?:best|prudent|advisable|encouraged|urged)\s+to\s+(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i,
   /\b(?:you|the (?:athlete|trainee)|they)\s+(?:can|could|may|might|need to)\b/i,
-  /(?:^|[.!?]\s+)(?:please\s+)?(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i,
+  sentenceInitialActionPattern,
   /\b(?:safe|okay|ok|fine|cleared)\s+to\s+(?:continue|resume|restart|push|train|lift|exercise|proceed|keep)\b/i,
   /\b(?:ignore|disregard|override|bypass|push through)\b.{0,60}\b(?:pain|hurt|symptom|discomfort|hold|warning)\b/i,
   /\b(?:continu(?:e|ing)|resum(?:e|ing)|restart(?:ing)?|push(?:ing)?|train(?:ing)?|lift(?:ing)?|exercis(?:e|ing)|work(?:ing)?\s+out|proceed(?:ing)?|keep(?:ing)?)\b.{0,60}\b(?:pain|hurt|symptom|discomfort|hold)\b/i,
   /\b(?:pain|hurt|symptom|discomfort|hold)\b.{0,60}\b(?:continu(?:e|ing)|resum(?:e|ing)|restart(?:ing)?|push(?:ing)?|train(?:ing)?|lift(?:ing)?|exercis(?:e|ing)|work(?:ing)?\s+out|proceed(?:ing)?|keep(?:ing)?)\b/i,
 ]
 
+const exerciseNameAdvicePatterns: readonly RegExp[] = [
+  ...forwardAdvicePatterns.filter((pattern) => pattern !== sentenceInitialActionPattern),
+  unambiguousExerciseDirectivePattern,
+  exerciseNameClauseDirectivePattern,
+  /(?:^|[.!?;:]\s*|[—–/|]\s*)please\s+(?:push|lift|exercise)\b/i,
+  /\b(?:safely|carefully|hard(?:er)?|yourself|now)\b/i,
+]
+
 const maxProseLength = 2_000
 
 function normalize(text: string): string {
-  return text.normalize('NFKC')
+  return text.normalize('NFKC').replace(/\s+/gu, ' ')
 }
 
 function replaceAllLiteral(text: string, literal: string): string {
   return literal ? text.split(literal).join(' ') : text
+}
+
+function validateExerciseNameSafety(
+  bundle: ExplanationFactBundle,
+): ProseValidationResult {
+  if (unsafeExerciseNameControlPattern.test(bundle.display.exerciseName)) {
+    return {
+      ok: false,
+      detail: 'Exercise name contains prohibited control or line-separator characters.',
+    }
+  }
+  const exerciseName = normalize(bundle.display.exerciseName).trim()
+  if (!exerciseName) {
+    return { ok: false, detail: 'Exercise name is empty.' }
+  }
+  for (const pattern of diagnosisPatterns) {
+    if (pattern.test(exerciseName)) {
+      return {
+        ok: false,
+        detail: 'Exercise name contains prohibited diagnostic language.',
+      }
+    }
+  }
+  for (const pattern of exerciseNameAdvicePatterns) {
+    if (pattern.test(exerciseName)) {
+      return {
+        ok: false,
+        detail: 'Exercise name contains prohibited advice or safety-bypass language.',
+      }
+    }
+  }
+  return { ok: true }
 }
 
 const loadMentionPattern =
@@ -47,11 +99,18 @@ function validateNumericContexts(
   normalized: string,
   bundle: ExplanationFactBundle,
 ): ProseValidationResult {
+  // The exact structured name is an authorized identity field. Mask it before every
+  // numeric scan so names such as "25 kg Plate Carry" cannot be mistaken for an invented
+  // working load. Closed-template byte equality later prevents extra name repetitions.
+  const exerciseNameMasked = replaceAllLiteral(
+    normalized,
+    normalize(bundle.display.exerciseName),
+  )
   const authorizedLoadLabels = new Set(
     [bundle.display.currentLoadLabel, bundle.display.proposedLoadLabel].map(normalize),
   )
 
-  for (const mention of normalized.match(loadMentionPattern) ?? []) {
+  for (const mention of exerciseNameMasked.match(loadMentionPattern) ?? []) {
     if (!authorizedLoadLabels.has(mention)) {
       return {
         ok: false,
@@ -60,9 +119,9 @@ function validateNumericContexts(
     }
   }
 
-  // V2 intentionally permits numbers only inside exact required identity strings or exact
-  // display labels. Repetitions, RPE, ordinals, and raw grams do not authorize prose.
-  let unmasked = normalized
+  // Numbers are permitted only inside exact required identity strings or exact display
+  // labels. Repetitions, RPE, ordinals, and raw grams do not authorize prose.
+  let unmasked = exerciseNameMasked
   for (const literal of [
     bundle.display.currentLoadLabel,
     bundle.display.proposedLoadLabel,
@@ -123,6 +182,9 @@ export function validateExplanationProse(
     return { ok: false, detail: `Prose must include rule version ${ruleVersion}.` }
   }
 
+  const exerciseNameSafety = validateExerciseNameSafety(bundle)
+  if (!exerciseNameSafety.ok) return exerciseNameSafety
+
   const kind = bundle.decision.kind
   if (kind === 'increase') {
     if (!normalized.includes(bundle.display.currentLoadLabel)) {
@@ -158,14 +220,18 @@ export function validateExplanationProse(
     }
   }
 
+  // The canonical paragraph places the exact structured exercise label beside fixed
+  // prose. Scan that label independently above, then mask it here so legitimate labels
+  // such as "Push Press" or "Olympic Lift" cannot form cross-boundary advice matches.
+  const policyText = replaceAllLiteral(normalized, normalize(bundle.display.exerciseName))
   for (const pattern of diagnosisPatterns) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(policyText)) {
       return { ok: false, detail: 'Prose contains prohibited diagnostic language.' }
     }
   }
 
   for (const pattern of forwardAdvicePatterns) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(policyText)) {
       return {
         ok: false,
         detail: 'Prose contains prohibited forward advice or safety-bypass language.',

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { InlineStatus, PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
@@ -14,6 +15,7 @@ import {
 } from '@/modules/training/application/workouts'
 import styles from '../history.module.css'
 import { FutureLoadExplanationControl } from './future-load-explanation-control'
+import { PostCompletionSafetyCorrection } from './post-completion-safety-correction'
 import { PostCompletionSafetyReportForm } from './post-completion-safety-report-form'
 
 export const dynamic = 'force-dynamic'
@@ -41,6 +43,9 @@ export default async function SessionHistoryPage({
     exercise.sets.filter((set) => set.correction),
   )
   const feedbackCorrection = session.feedback?.correction ?? null
+  const exerciseNames = new Map(
+    session.exercises.map((exercise) => [exercise.exerciseCode, exercise.exerciseName]),
+  )
 
   return (
     <ProductFrame current="history">
@@ -67,7 +72,7 @@ export default async function SessionHistoryPage({
         ) : null}
 
         {feedbackCorrection ? (
-          <section className={styles.correction} aria-labelledby="correction-heading">
+          <PostCompletionSafetyCorrection sessionId={session.id}>
             <h2 id="correction-heading">Post-completion safety correction</h2>
             <dl className={styles.correctionFacts}>
               <div>
@@ -107,10 +112,11 @@ export default async function SessionHistoryPage({
             ) : null}
             <p>
               Every affected adjustment and descendant program revision is permanently
-              invalidated. The original workout remains completed; no replacement load is
-              invented.
+              invalidated. This report created a safety hold;{' '}
+              <Link href="/today">review its current status on Today</Link>. The original
+              workout remains completed; no replacement load is invented.
             </p>
-          </section>
+          </PostCompletionSafetyCorrection>
         ) : (
           <PostCompletionSafetyReportForm sessionId={session.id} />
         )}
@@ -165,10 +171,12 @@ export default async function SessionHistoryPage({
                 key={decision.id}
               >
                 <div className={styles.adjustmentFacts}>
-                  <strong>{decision.exerciseCode}</strong>
+                  <strong>
+                    {exerciseNames.get(decision.exerciseCode) ?? decision.exerciseCode}
+                  </strong>
                   <span>
                     {decision.invalidatedAt
-                      ? 'Invalidated original decision'
+                      ? `Original ${decision.decision} decision — invalidated`
                       : decision.decision}
                     : {formatLoad(decision.currentLoadGrams, units)} →{' '}
                     {formatLoad(decision.nextLoadGrams, units)}
@@ -189,7 +197,13 @@ export default async function SessionHistoryPage({
                 <FutureLoadExplanationControl
                   sessionId={session.id}
                   decisionId={decision.id}
-                  disabled={decision.invalidatedAt !== null}
+                  disabledReason={
+                    decision.invalidatedAt
+                      ? 'decision-invalidated'
+                      : !session.contentEligibility.eligible
+                        ? 'content-revoked'
+                        : undefined
+                  }
                 />
               </li>
             ))}

@@ -77,8 +77,10 @@ export default async function SettingsPage() {
         <section className={styles.section}>
           <h2>Data export</h2>
           <p>
-            Download a versioned JSON archive with category hashes, provenance, and
-            explicit omissions. Passwords, tokens, and sessions are never included.
+            Download a versioned JSON archive of your training facts, stored decisions,
+            and saved plain-language explanations, with category hashes, provenance, and
+            explicit omissions. Passwords, verification tokens, and sign-in sessions are
+            never included.
           </p>
           <a className={styles.linkButton} href="/api/export">
             Create data export
@@ -93,8 +95,8 @@ export default async function SettingsPage() {
           </h2>
           <p>
             {actor.role === 'owner'
-              ? 'Preview and permanently remove your trainee profile and training history while preserving installation ownership, your login, and every other local user.'
-              : 'Preview and permanently remove only your account, training data, and subject-linked audit history. Other local users remain unchanged.'}
+              ? 'Preview and permanently remove your trainee profile, training history, and saved explanations while preserving installation ownership, your login, and every other local user.'
+              : 'Preview and permanently remove only your account, training data, saved explanations, and subject-linked audit history. Other local users remain unchanged.'}
           </p>
           <Link
             className={styles.dangerLink}

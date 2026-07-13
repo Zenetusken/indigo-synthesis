@@ -38,9 +38,9 @@ export type LiveProbeReport = {
 /** Nearest-rank percentile for sorted ascending samples. */
 export function percentileMs(samplesMs: readonly number[], p: number): number | null {
   if (samplesMs.length === 0) return null
-  if (p <= 0) return samplesMs[0] ?? null
-  if (p >= 100) return samplesMs[samplesMs.length - 1] ?? null
   const sorted = [...samplesMs].sort((a, b) => a - b)
+  if (p <= 0) return sorted[0] ?? null
+  if (p >= 100) return sorted[sorted.length - 1] ?? null
   const rank = Math.ceil((p / 100) * sorted.length) - 1
   return sorted[Math.max(0, Math.min(sorted.length - 1, rank))] ?? null
 }

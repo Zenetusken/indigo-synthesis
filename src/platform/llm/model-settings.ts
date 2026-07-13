@@ -11,18 +11,15 @@ const sha256Schema = z
   .string()
   .regex(/^[a-f0-9]{64}$/, 'expectedSha256 must be a lowercase hex SHA-256 digest')
 
-const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+export const MODEL_SETTINGS_LOOPBACK_ENDPOINT_PATTERN =
+  '^https?://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#]*)?$'
+export const MODEL_SETTINGS_WEIGHTS_PATH_PATTERN = '^(?!/)(?!.*\\.\\.)(?!.*\\\\).+$'
+
+const loopbackEndpointPattern = new RegExp(MODEL_SETTINGS_LOOPBACK_ENDPOINT_PATTERN)
+const weightsPathPattern = new RegExp(MODEL_SETTINGS_WEIGHTS_PATH_PATTERN)
 
 function isLoopbackHttpEndpoint(value: string): boolean {
-  try {
-    const url = new URL(value)
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      loopbackHosts.has(url.hostname)
-    )
-  } catch {
-    return false
-  }
+  return loopbackEndpointPattern.test(value)
 }
 
 export const modelSettingsSchema = z
@@ -45,7 +42,7 @@ export const modelSettingsSchema = z
         .string()
         .min(1)
         .refine(
-          (path) => !path.includes('..') && !path.startsWith('/') && !path.includes('\\'),
+          (path) => weightsPathPattern.test(path),
           'weightsRelativePath must be a relative path without traversal',
         ),
       expectedSha256: sha256Schema,

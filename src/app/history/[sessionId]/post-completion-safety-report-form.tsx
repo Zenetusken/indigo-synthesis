@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useActionState, useEffect, useRef, useState } from 'react'
 import { SubmitButton } from '@/components'
 import styles from '../history.module.css'
@@ -7,7 +8,11 @@ import {
   type PostCompletionSafetyReportState,
   reportPostCompletionSafetyIssueAction,
 } from './actions'
-import { announceLatePainReported } from './late-pain-client-state'
+import {
+  announceLatePainReported,
+  clearLatePainSubmissionPending,
+  markLatePainSubmissionPending,
+} from './late-pain-client-state'
 
 const initialPostCompletionSafetyReportState: PostCompletionSafetyReportState = {
   errorCode: null,
@@ -43,17 +48,19 @@ export function PostCompletionSafetyReportForm({ sessionId }: { sessionId: strin
 
   useEffect(() => {
     if (state.errorCode || state.success) resultRef.current?.focus()
+    if (state.errorCode) clearLatePainSubmissionPending(sessionId)
     if (state.success) announceLatePainReported(sessionId)
   }, [sessionId, state])
 
   return (
     <section className={styles.safetyReport} aria-labelledby="history-safety-heading">
+      <span className={styles.safetyLabel}>Late safety report</span>
       <h2 id="history-safety-heading">Report a post-completion safety issue</h2>
       <p>
         Use this only for pain or a safety issue from this workout that was not reported
         before completion. Indigo will retain the original completion fact, append this
-        correction, and invalidate affected future progression. It does not diagnose or
-        clear symptoms.
+        correction, create a safety hold that stops training until it is resolved, and
+        invalidate affected future progression. It does not diagnose or clear symptoms.
       </p>
 
       {state.errorCode ? (
@@ -66,12 +73,20 @@ export function PostCompletionSafetyReportForm({ sessionId }: { sessionId: strin
       ) : null}
       {state.success ? (
         <div className={styles.reportSuccess} ref={resultRef} role="status" tabIndex={-1}>
-          Safety correction recorded and affected progression invalidated.
+          <strong>Safety report recorded.</strong>
+          <span>
+            A safety hold now stops training, and affected progression was invalidated.{' '}
+            <Link href="/today">Review current safety status on Today</Link>.
+          </span>
         </div>
       ) : null}
 
       {!state.success ? (
-        <form action={action} className={styles.reportForm}>
+        <form
+          action={action}
+          className={styles.reportForm}
+          onSubmit={() => markLatePainSubmissionPending(sessionId)}
+        >
           <input type="hidden" name="sessionId" value={sessionId} />
           <input type="hidden" name="commandId" value={commandId} />
           <label>

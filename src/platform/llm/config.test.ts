@@ -20,6 +20,23 @@ describe('parseLlmConfig', () => {
     })
   })
 
+  it('treats an exactly empty mode as the disabled default', () => {
+    expect(
+      parseLlmConfig({
+        INDIGO_LLM_MODE: '',
+        INDIGO_LLM_MODEL_ID: '',
+        INDIGO_LLM_ENDPOINT: 'https://models.example/v1',
+      }),
+    ).toMatchObject({
+      mode: 'disabled',
+      modelId: null,
+      endpointOverride: null,
+    })
+    expect(() => parseLlmConfig({ INDIGO_LLM_MODE: ' ' })).toThrow(
+      InvalidLlmConfigurationError,
+    )
+  })
+
   it('treats disabled mode as an isolation boundary from unused runtime settings', () => {
     expect(
       parseLlmConfig({
