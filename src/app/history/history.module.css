@@ -193,8 +193,45 @@
 .adjustmentList li {
   border-block-end: 1px solid var(--hairline);
   display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+.adjustmentFacts {
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-3) 0;
+}
+
+.explanation {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+}
+
+.explanationBody {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 40rem;
+}
+
+.explanationLabel {
+  color: var(--steel);
+  font: 600 0.8rem / 1.4 var(--font-data);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.explanationProse {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.explanationMeta,
+.explanationUnavailable {
+  color: var(--steel);
+  font: 500 0.85rem / 1.45 var(--font-data);
+  margin: 0;
 }
 
 @media (max-width: 38rem) {

@@ -13,6 +13,7 @@ import {
   getWorkoutSession,
 } from '@/modules/training/application/workouts'
 import styles from '../history.module.css'
+import { FutureLoadExplanationControl } from './future-load-explanation-control'
 import { PostCompletionSafetyReportForm } from './post-completion-safety-report-form'
 
 export const dynamic = 'force-dynamic'
@@ -160,26 +161,34 @@ export default async function SessionHistoryPage({
                 }
                 key={decision.id}
               >
-                <strong>{decision.exerciseCode}</strong>
-                <span>
-                  {decision.invalidatedAt
-                    ? 'Invalidated original decision'
-                    : decision.decision}
-                  : {formatLoad(decision.currentLoadGrams, units)} →{' '}
-                  {formatLoad(decision.nextLoadGrams, units)}
-                </span>
-                <code>
-                  {decision.reasonCode} · rule {decision.ruleVersion}
-                </code>
-                {decision.invalidatedAt ? (
-                  <small>
-                    No longer active · invalidated{' '}
-                    {formatDateTimeInTimezone(decision.invalidatedAt, timezone)}
-                    {decision.invalidationReason
-                      ? ` · ${decision.invalidationReason}`
-                      : ''}
-                  </small>
-                ) : null}
+                <div className={styles.adjustmentFacts}>
+                  <strong>{decision.exerciseCode}</strong>
+                  <span>
+                    {decision.invalidatedAt
+                      ? 'Invalidated original decision'
+                      : decision.decision}
+                    : {formatLoad(decision.currentLoadGrams, units)} →{' '}
+                    {formatLoad(decision.nextLoadGrams, units)}
+                  </span>
+                  <code>
+                    {decision.reasonCode} · rule {decision.ruleVersion}
+                  </code>
+                  {decision.invalidatedAt ? (
+                    <small>
+                      No longer active · invalidated{' '}
+                      {formatDateTimeInTimezone(decision.invalidatedAt, timezone)}
+                      {decision.invalidationReason
+                        ? ` · ${decision.invalidationReason}`
+                        : ''}
+                    </small>
+                  ) : null}
+                </div>
+                {decision.invalidatedAt ? null : (
+                  <FutureLoadExplanationControl
+                    sessionId={session.id}
+                    decisionId={decision.id}
+                  />
+                )}
               </li>
             ))}
           </ul>

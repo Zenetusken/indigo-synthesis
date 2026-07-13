@@ -138,12 +138,12 @@ not evidence that the documented boundaries already exist.
 
 ## Application FactBundle wiring (codes path)
 
-Training application can map a completed session’s stored future-load decisions into
-contract FactBundles via `getFutureLoadFactBundlesForSession` (query enrichment + pure
-mapper over session snapshots). History remains **codes-only**; no trainee prose UI.
-Unit + integration validation cover the mapper. Operator dry-run:
-`pnpm llm:dry-run-synthesize` (disposable DB → FactBundles → live GPU synthesize). LLM
-generation stays optional and disabled by default in the product process.
+Training application maps completed sessions into contract FactBundles via
+`getFutureLoadFactBundlesForSession`. History always shows decision codes and loads.
+Optional on-demand plain-language explanation uses `explainFutureLoadDecision` + a
+History server action (“Explain in plain language”): inferred only, never blocks first
+paint, degrades when `INDIGO_LLM_MODE=disabled` or GPU/local server is not ready. Operator
+dry-run: `pnpm llm:dry-run-synthesize`. Product process still defaults LLM off.
 
 ## Optional local grounded explanation (infra slice)
 

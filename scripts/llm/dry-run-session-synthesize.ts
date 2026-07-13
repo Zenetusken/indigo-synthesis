@@ -51,7 +51,9 @@ async function main(): Promise<void> {
   const timeoutMs = Number(process.env.INDIGO_LLM_TIMEOUT_MS ?? '60000')
 
   process.env.INDIGO_CONTENT_MODE = 'development'
-  process.env.NODE_ENV = process.env.NODE_ENV ?? 'test'
+  if (!process.env.NODE_ENV) {
+    Reflect.set(process.env, 'NODE_ENV', 'test')
+  }
   process.env.INDIGO_LLM_MODE = 'local'
   process.env.INDIGO_LLM_MODEL_ID = modelId
   process.env.INDIGO_LLM_ENDPOINT = endpoint
