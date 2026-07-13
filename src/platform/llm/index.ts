@@ -62,6 +62,11 @@ export type {
   LanguageModelPort,
 } from './ports'
 export { FUTURE_LOAD_PROMPT_VERSION } from './prompts/future-load.v1'
+export {
+  formatLlmPreflightReport,
+  type LlmPreflightReport,
+  runLlmPreflight,
+} from './runtime/preflight'
 export type {
   ExplanationGenerationRequest,
   ExplanationGenerationResult,

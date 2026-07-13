@@ -70,10 +70,16 @@ async function main(): Promise<void> {
     const endpoint = process.env.INDIGO_LLM_ENDPOINT ?? 'http://127.0.0.1:8080/v1'
     const modelId = process.env.INDIGO_LLM_MODEL_ID ?? 'qwen3.5-9b-q4_k_m'
     const digest = process.env.INDIGO_LLM_MODEL_SHA256
+    // CPU inference for 9B often exceeds the product interactive 3s cap; live
+    // calibration may raise this via INDIGO_LLM_TIMEOUT_MS (ms).
+    const timeoutMs = process.env.INDIGO_LLM_TIMEOUT_MS
+      ? Number(process.env.INDIGO_LLM_TIMEOUT_MS)
+      : 120_000
     live = await runLiveProbe({
       endpoint,
       modelId,
       modelContentDigest: digest,
+      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120_000,
     })
     if (!asJson) {
       console.log('')

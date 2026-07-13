@@ -155,14 +155,19 @@ language models.
   ([LLM_MEASUREMENT_PROTOCOL.md](architecture/LLM_MEASUREMENT_PROTOCOL.md));
 - pure `buildFutureLoadFactBundle` from persisted decision fields (caller supplies
   `formatLoad` labels);
-- operator guide in `llm/README.md`.
+- operator guide in `llm/README.md`;
+- host preflight (`pnpm llm:preflight`), serve/load/download scripts, and runtime/GPU
+  runbook ([LLM_RUNTIME_AND_GPU.md](architecture/LLM_RUNTIME_AND_GPU.md));
+- first live calibration on this host (CPU `llama-server` + Qwen3.5-9B Q4_K_M): offline
+  28/28 and live **availableRate=1.0** on eligible golden cases (invalidated case correctly
+  unavailable). GPU CUDA still blocked until NVIDIA module/userspace versions match after
+  reboot.
 
-**Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations,
-weight download automation, or any methodology authority. History continues to show
-structured reason codes only. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
-**coaching** remains deferred. No live GGUF is required in CI; live probe is operator
-calibration only. Product UI waits until offline metrics stay green and live runs are
-recorded per the measurement protocol.
+**Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations, or
+any methodology authority. History continues to show structured reason codes only.
+`INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML **coaching** remains deferred. CI does
+not require GGUF weights; live probe is operator calibration. Product UI waits on
+protocol gates plus a healthy post-reboot GPU path if CUDA is desired.
 
 ## Production-release blockers
 

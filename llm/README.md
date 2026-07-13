@@ -18,6 +18,25 @@ Hot-swap: install another pack under `models/`, place matching weights, set
 `INDIGO_LLM_MODEL_ID` to that pack’s `modelId`. Application code does not hard-code a
 vendor model.
 
+## Coherent host stack (RAM + GPU + server)
+
+See [LLM_RUNTIME_AND_GPU.md](../docs/architecture/LLM_RUNTIME_AND_GPU.md).
+
+```sh
+pnpm llm:preflight          # RAM, NVIDIA status, weights, loopback /v1/models
+pnpm llm:download-qwen35    # Q4_K_M → llm/weights/
+pnpm llm:serve              # LM Studio (lms) or llama-server on loopback
+pnpm llm:load               # load a model into the server
+pnpm llm:validate-baseline  # offline contract gate
+```
+
+Default OpenAI-compatible endpoint for packs: **`http://127.0.0.1:1234/v1`** (LM Studio).
+Override with `INDIGO_LLM_ENDPOINT` if you use another port.
+
+**GPU:** If `nvidia-smi` reports driver/library mismatch, **reboot** so the loaded kernel
+module matches installed `nvidia-utils` / DKMS. CUDA offload will not work until then;
+CPU-only inference may still work via LM Studio.
+
 ## First packs
 
 | modelId | Quant | Source |

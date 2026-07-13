@@ -14,15 +14,15 @@
   },
   "artifacts": {
     "weightsRelativePath": "qwen3.5-9b-q4_k_m.gguf",
-    "expectedSha256": null,
+    "expectedSha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
     "approxSizeBytes": 5680000000
   },
   "runtime": {
     "adapter": "openai-compatible-loopback",
     "defaultEndpoint": "http://127.0.0.1:8080/v1",
     "servedModelName": "qwen3.5-9b-q4_k_m",
-    "recommendedServer": "llama-server",
-    "minLlamaCppNote": "Requires recent llama.cpp with qwen35 architecture support"
+    "recommendedServer": "lms-or-llama-server",
+    "minLlamaCppNote": "Loopback OpenAI API (LM Studio default :1234 or llama-server). Qwen3.5 needs a recent runtime with qwen35 support. GPU requires matching NVIDIA kernel+userspace (see pnpm llm:preflight)."
   },
   "chat": {
     "enableThinking": false,

@@ -143,9 +143,13 @@ describe('architecture boundaries', () => {
       /(?:url\(\s*["']?\s*|@import\s+(?:url\(\s*)?["']?)https?:\/\//
     const remoteStylesheetLinkPattern =
       /<link\b(?=[^>]*\brel\s*=\s*["']stylesheet["'])[^>]*\bhref\s*=\s*(?:["']|\{\s*["'])\s*https?:\/\//
-    /** Sole allowed LLM loopback client; must keep assertLoopbackEndpoint guards. */
+    /**
+     * Allowed LLM loopback HTTP clients only. Completions adapter must keep
+     * assertLoopbackEndpoint; preflight only hits configured loopback endpoints.
+     */
     const loopbackLlmClientAllowlist = new Set([
       'src/platform/llm/adapters/openai-compatible-loopback.ts',
+      'src/platform/llm/runtime/preflight.ts',
     ])
     const runtimeFiles = [
       ...filesMatching(sourceRoot, /\.(?:[cm]?[jt]sx?|css)$/),
