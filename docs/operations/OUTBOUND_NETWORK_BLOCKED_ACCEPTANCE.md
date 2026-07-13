@@ -1,6 +1,7 @@
 # Outbound-network-blocked acceptance
 
-Status: exercised opt-in harness; final clean-commit evidence pending
+Status: complete for code commit `7c7ea334d4c88d9279abe574031881a23a15f32c`;
+rerun after any product/runtime or default-suite change
 
 The core browser journey must work when the application cannot reach the public network.
 The ordinary source guard and browser request observer remain useful regression checks,
@@ -26,17 +27,18 @@ use `sudo`, `iptables`, `nftables`, Docker networking, or persistent host config
 The default suite keeps `INDIGO_LLM_MODE=disabled`; optional local language generation is
 not part of the core acceptance boundary.
 
-## Evidence state at this checkpoint
+## Retained evidence at this checkpoint
 
-The harness has completed successfully against the preceding 15-test default Playwright
-tree: the namespace had only loopback, no IPv4/IPv6 default route, a public-IP connection
-failed with `ENETUNREACH`, PostgreSQL was available only through the private bridge, and
-all 15 browser tests passed. The access/recovery slice adds four default cases, bringing
-the checked-in selection to 19. A final 19/19 run from the clean commit must replace this
-development checkpoint before the result is retained as release evidence.
+The complete 19-test default Playwright selection passed from clean committed product
+tree `7c7ea334d4c88d9279abe574031881a23a15f32c`: the namespace had only loopback, no
+IPv4/IPv6 default route, a public-IP connection failed, PostgreSQL was available only
+through the private bridge, and the boundary was rechecked after the suite. The retained
+[2026-07-13 acceptance record](evidence/2026-07-13-outbound-network-blocked.md) identifies
+the tested commit, environment, command, result, and proof limits.
 
-This distinction is intentional: a working isolation harness proves the mechanism, while
-the recorded commit and complete test selection prove which product tree was accepted.
+The recorded commit and complete test selection define which product tree was accepted.
+Any later product/runtime change or default Playwright addition invalidates currency and
+requires a new run; an evidence-only child commit does not change the tested tree.
 
 ## Prerequisites
 
@@ -68,7 +70,8 @@ A passing record must retain the command output showing all of the following:
 
 Record the commit SHA, UTC time, kernel, Node/pnpm/Playwright/PostgreSQL versions, and the
 complete test result alongside that output. A run from an uncommitted tree is useful while
-developing but is not retained release evidence.
+developing but is not retained release evidence. The current retained record is linked
+above.
 
 ## Failure interpretation
 

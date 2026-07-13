@@ -393,8 +393,10 @@ retains the cleared singleton installation record and prior non-personal tombsto
 See [the self-hosting contract](SELF_HOSTING_CONTRACT.md).
 
 The outbound-network acceptance runner executes the application and browser in a Linux
-namespace with only loopback and a private PostgreSQL bridge. It has passed the preceding
-15-test default tree; final current-commit evidence requires the complete 19-test rerun.
+namespace with only loopback and a private PostgreSQL bridge. The complete 19-test default
+tree passed from clean committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`; later product/runtime or default-suite
+changes require a new retained run.
 
 ## Architecture acceptance
 

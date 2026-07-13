@@ -102,7 +102,7 @@ Account security follow-on, not unfinished J7–J9 work.
 
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
-| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and an exercised Linux namespace runner that exposes only loopback plus a private PostgreSQL socket bridge | Rerun and retain the complete current 19-test default browser suite from a clean commit in the outbound-network-denied runner; keep deployment ingress and cold-install evidence separate |
+| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and retained 19/19 proof from a clean committed tree in a Linux namespace exposing only loopback plus a private PostgreSQL socket bridge | Rerun after any product/runtime or default-suite change; keep deployment ingress and cold-install evidence separate |
 | Database integrity | Seventeen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, HMAC-keyed recovery admission state, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
@@ -123,12 +123,13 @@ INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 
 At this documentation checkpoint, the established static, unit/domain/architecture,
 database-integration, upgrade, PostgreSQL-preflight, and LLM-disabled build gates are
-green, and focused checks for the new access/recovery slice are green. The default
-Playwright selection now contains **19** tests: the prior 15-test suite and the four new
-J7/J8/J9 cases have each passed in their applicable full or focused runs; the final
-combined 19/19 clean-commit rerun is still pending. Fresh migration/preflight now covers
-all 17 ledger entries and 28 required integrity triggers. Playwright recreates a guarded
-disposable PostgreSQL database and does not mock application APIs.
+green. The complete default Playwright selection contains **19** tests and passed 19/19
+from clean committed product tree `7c7ea334d4c88d9279abe574031881a23a15f32c` inside
+the outbound-network-denied runner. The retained
+[acceptance record](operations/evidence/2026-07-13-outbound-network-blocked.md) covers the
+prior suite plus all J7/J8/J9 cases. Fresh migration/preflight covers all 17 ledger
+entries and 28 required integrity triggers. Playwright recreates a guarded disposable
+PostgreSQL database and does not mock application APIs.
 
 `pnpm validate` covers static checks, unit/domain tests, and the production-mode build.
 Integration and browser tests remain explicit because they require PostgreSQL and the E2E
@@ -240,17 +241,12 @@ LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 1. Close Methodology Gate 0 with named, independent human reviewers and a rights matrix.
 2. Replace the development fixture with a reviewed methodology/template release and
    approved deterministic golden examples; do not relabel the fixture.
-3. Rerun the current 19-test Product Spec acceptance suite from the final clean commit
-   with outbound network blocked and preserve it together with fresh-database, restart,
-   authorization, idempotency, safety, export, and deletion evidence as one release
-   record. The network-denied runner has already passed the preceding 15-test tree; that
-   development checkpoint is not final-SHA release evidence.
-4. Complete independent WCAG 2.2 AA/manual screen-reader review and representative
+3. Complete independent WCAG 2.2 AA/manual screen-reader review and representative
    physical-device validation; the targeted automated browser checks are not a
    conformance claim.
-5. Extend architecture enforcement to schema/table ownership and either implement the
+4. Extend architecture enforcement to schema/table ownership and either implement the
    intended public module gateways or accept a narrower boundary in an ADR.
-6. Obtain independent product/security/privacy review; document and exercise the
+5. Obtain independent product/security/privacy review; document and exercise the
    operator's HTTPS deployment; and have a second person cold-install and restore from an
    encrypted off-host backup. The repository now supplies and has exercised the guarded
    PostgreSQL backup/restore procedure, but it cannot prove an operator's retention,

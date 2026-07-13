@@ -11,12 +11,12 @@ the slice uses a generic product schema and a clean-room `0.0.1-development` fix
 That fixture is visibly unreviewed and configuration rejects it in production.
 
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
-reviewed content and golden examples, a final-clean-commit retention run through the
-outbound-network-denied browser harness, independent WCAG/screen-reader and
-physical-device review, schema/table-ownership enforcement, and independent
-product/security/privacy review. Targeted automated accessibility/mobile checks already
-pass; they are not a conformance claim. Current traceability and debt are recorded in
-[MVP_STATUS.md](MVP_STATUS.md).
+reviewed content and golden examples, independent WCAG/screen-reader and physical-device
+review, schema/table-ownership enforcement, and independent product/security/privacy
+review. The committed 19-test tree has retained outbound-network-denied proof; that proof
+must be rerun after relevant code or default-suite changes. Targeted automated
+accessibility/mobile checks already pass; they are not a conformance claim. Current
+traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
 
 The distinction is deliberate: the technical workflow exists, while every exercise,
 volume, load, rest, progression, population, safety, evidence, and rights decision in a
@@ -44,11 +44,12 @@ Implemented checkpoint:
   minimization/cardinality, and the non-amplifying owner-recovery throttle.
 
 Gate status: the baseline J7–J9 engineering slice and its specified hardening are
-implemented. The current default Playwright selection contains 19 tests; the four new
-access/recovery cases are green in focused runs, and the final combined clean-commit run
-remains part of branch closure. The separately named Account security follow-on—session
-management plus a security-events view and sign-in-failure auditing—remains future work.
-Neither result closes Gate 0 or substitutes for independent security/privacy review.
+implemented. The complete 19-test default Playwright selection, including all four new
+access/recovery cases, passed from committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c` with outbound network denied. The separately
+named Account security follow-on—session management plus a security-events view and
+sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
+for independent security/privacy review.
 
 ## Gate 0 — Product truth
 
@@ -92,9 +93,9 @@ Gate:
 
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
 configuration validation, local assets, and executable module-boundary guards are
-implemented. A no-default-route namespace runner has passed the preceding 15-test
-browser tree; the final current 19-test clean-commit record and schema/table-ownership
-enforcement remain open release evidence.
+implemented. A no-default-route namespace runner has passed the complete 19-test tree
+from a clean product commit; schema/table-ownership enforcement remains open release
+work.
 
 ## Phase 2 — First vertical slice
 

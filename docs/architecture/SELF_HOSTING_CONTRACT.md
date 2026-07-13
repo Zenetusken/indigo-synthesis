@@ -49,9 +49,11 @@ resolved, avoiding a spoofable or globally shared rate-limit bucket.
 After installation, the complete core journey is designed to work with outbound network
 access blocked. Source guards and browser request observation cover the normal suite. A
 checked-in Linux namespace runner additionally removes every non-loopback interface and
-default route while exposing PostgreSQL through a private Unix-socket bridge. That runner
-has passed the preceding 15-test default tree; retaining a rerun of the current 19-test
-suite from the final clean commit remains the open release-evidence step.
+default route while exposing PostgreSQL through a private Unix-socket bridge. The complete
+19-test default tree passed from clean committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`; the retained record identifies the exact
+environment and proof limits. Any later product/runtime or default-suite change requires
+a new run.
 
 Therefore:
 
@@ -201,10 +203,11 @@ without need.
 The first release gate includes a test environment where outbound network is denied and
 only the application, PostgreSQL, and optional media directory are available.
 
-`scripts/e2e/run-network-denied.sh` now supplies that runtime boundary and has passed the
-preceding 15-test default tree. The current branch adds four access/recovery cases, so the
-final release record still requires a clean-commit 19/19 rerun. See the
+`scripts/e2e/run-network-denied.sh` supplies that runtime boundary and passed the complete
+19-test default tree from committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`. See the
 [acceptance runbook](../operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md) and
+[retained evidence](../operations/evidence/2026-07-13-outbound-network-blocked.md), plus
 [MVP status](../MVP_STATUS.md). Independent methodology, security/privacy, WCAG,
 physical-device, cold-install, HTTPS-ingress, and off-host-retention gates remain
 separate.

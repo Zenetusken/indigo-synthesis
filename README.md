@@ -142,8 +142,10 @@ disposable database; the second runs the default browser suite in a Linux namesp
 no non-loopback interface or default route. Read
 [`docs/operations/BACKUP_RESTORE.md`](docs/operations/BACKUP_RESTORE.md) and
 [`docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md`](docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md)
-before using them. Neither substitutes for encrypted off-host retention, a second-person
-cold restore, or independent security/accessibility review.
+before using them. The current committed 19-test isolation proof is retained in
+[`docs/operations/evidence/2026-07-13-outbound-network-blocked.md`](docs/operations/evidence/2026-07-13-outbound-network-blocked.md).
+Neither substitutes for encrypted off-host retention, a second-person cold restore, or
+independent security/accessibility review.
 
 Before the first browser run, install the pinned Playwright Chromium build and create the
 ignored local E2E configuration from the checked-in template:
