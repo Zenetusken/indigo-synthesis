@@ -1,4 +1,13 @@
-import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -262,23 +271,62 @@ describe('runtime attestation', () => {
       '4096',
     ]
 
-    expect(runtimeCommandMatchesPolicy(command, policy)).toBe(true)
-    expect(runtimeCommandMatchesPolicy([...command.slice(0, -1), '8192'], policy)).toBe(
-      false,
-    )
-    expect(runtimeCommandMatchesPolicy([...command, '--ctx-size', '8192'], policy)).toBe(
-      false,
-    )
+    await expect(runtimeCommandMatchesPolicy(command, policy)).resolves.toBe(true)
+    await expect(
+      runtimeCommandMatchesPolicy([...command.slice(0, -1), '8192'], policy),
+    ).resolves.toBe(false)
+    await expect(
+      runtimeCommandMatchesPolicy([...command, '--ctx-size', '8192'], policy),
+    ).resolves.toBe(false)
     for (const contextLookalike of ['04096', '+4096', '4096.0', '4.096e3']) {
-      expect(
+      await expect(
         runtimeCommandMatchesPolicy([...command.slice(0, -1), contextLookalike], policy),
-      ).toBe(false)
+      ).resolves.toBe(false)
     }
     const gpuLayersIndex = command.indexOf('all')
     for (const gpuLayersLookalike of ['-2', 'ALL', 'all ']) {
       const lookalikeCommand = [...command]
       lookalikeCommand[gpuLayersIndex] = gpuLayersLookalike
-      expect(runtimeCommandMatchesPolicy(lookalikeCommand, policy)).toBe(false)
+      await expect(runtimeCommandMatchesPolicy(lookalikeCommand, policy)).resolves.toBe(
+        false,
+      )
     }
+  })
+
+  it('matches a symlinked command path by canonical weights identity', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'indigo-command-symlink-'))
+    temporaryDirectories.push(directory)
+    const weightsPath = join(directory, 'qwen.gguf')
+    const logicalWeightsPath = join(directory, 'mounted-qwen.gguf')
+    await writeFile(weightsPath, 'weights')
+    await symlink(weightsPath, logicalWeightsPath)
+
+    await expect(
+      runtimeCommandMatchesPolicy(
+        [
+          'llama-server',
+          '--model',
+          logicalWeightsPath,
+          '--alias',
+          'qwen3.5-9b-q4_k_m',
+          '--n-gpu-layers',
+          'all',
+          '--host',
+          '127.0.0.1',
+          '--port',
+          '8080',
+          '-c',
+          '4096',
+        ],
+        {
+          weightsRealpath: await realpath(weightsPath),
+          servedModelName: 'qwen3.5-9b-q4_k_m',
+          gpuLayers: -2,
+          host: '127.0.0.1',
+          port: '8080',
+          contextTokens: 4096,
+        },
+      ),
+    ).resolves.toBe(true)
   })
 })

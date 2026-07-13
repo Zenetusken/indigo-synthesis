@@ -53,7 +53,7 @@ export type LlmMeasurementSnapshot = {
 }
 
 function rate(passed: number, total: number): number {
-  if (total === 0) return 1
+  if (total === 0) return 0
   return passed / total
 }
 

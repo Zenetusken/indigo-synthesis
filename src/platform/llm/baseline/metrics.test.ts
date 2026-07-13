@@ -16,6 +16,14 @@ describe('percentileMs', () => {
     expect(percentileMs([1700], 50)).toBe(1700)
     expect(percentileMs([1700], 95)).toBe(1700)
   })
+
+  it('sorts before resolving minimum and maximum boundary percentiles', () => {
+    const samples = [1000, 100, 500]
+    expect(percentileMs(samples, 0)).toBe(100)
+    expect(percentileMs(samples, -1)).toBe(100)
+    expect(percentileMs(samples, 100)).toBe(1000)
+    expect(percentileMs(samples, 101)).toBe(1000)
+  })
 })
 
 describe('buildMeasurementSnapshot live latency', () => {
@@ -94,5 +102,24 @@ describe('buildMeasurementSnapshot live latency', () => {
     expect(snapshot.product?.e2eOk).toBe(true)
     expect(formatMeasurementSummary(snapshot)).toContain('live.latencyMs.p50=1500')
     expect(formatMeasurementSummary(snapshot)).toContain('product.suite=test:e2e:llm')
+  })
+
+  it('never reports perfect pass rates for missing validation categories', () => {
+    const snapshot = buildMeasurementSnapshot({
+      offline: {
+        ...offline,
+        checks: [],
+        passed: 0,
+        failed: 0,
+      },
+      offlineDurationMs: 1,
+      live: null,
+    })
+
+    expect(snapshot.offline).toMatchObject({
+      validationAcceptPassRate: 0,
+      validationRejectPassRate: 0,
+      synthesizeAvailablePassRate: 0,
+    })
   })
 })

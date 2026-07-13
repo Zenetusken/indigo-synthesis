@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { defineConfig, devices } from '@playwright/test'
+import { pinE2eAdministrationUrl } from './test/e2e/support/reset-target'
+import { liveLlmE2eSuiteSelection } from './test/e2e/support/suite-selection'
 import {
   e2eApplicationUrl,
   e2eNextDistDir,
@@ -26,6 +28,7 @@ process.env[e2eSupervisorTokenEnvironment] = supervisorToken
 if (!databaseUrl || !authSecret) {
   throw new Error('E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET are required.')
 }
+pinE2eAdministrationUrl(databaseUrl)
 
 const llmServerEnv = {
   INDIGO_LLM_MODE: 'local',
@@ -45,7 +48,7 @@ Object.assign(process.env, llmServerEnv)
 
 export default defineConfig({
   testDir: './test/e2e',
-  testMatch: '**/llm-live.spec.ts',
+  ...liveLlmE2eSuiteSelection,
   fullyParallel: false,
   workers: 1,
   retries: 0,

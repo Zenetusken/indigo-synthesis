@@ -164,7 +164,7 @@ function commandOption(
   return index >= 0 ? (command[index + 1] ?? null) : null
 }
 
-export function runtimeCommandMatchesPolicy(
+export async function runtimeCommandMatchesPolicy(
   command: readonly string[],
   policy: {
     readonly weightsRealpath: string
@@ -174,12 +174,19 @@ export function runtimeCommandMatchesPolicy(
     readonly port: string
     readonly contextTokens: number
   },
-): boolean {
+): Promise<boolean> {
   const commandWeights = commandOption(command, '--model', '-m')
   const commandGpuLayers = commandOption(command, '--n-gpu-layers', '-ngl')
   const commandContextTokens = commandOption(command, '--ctx-size', '-c')
+  if (!commandWeights) return false
+  let commandWeightsRealpath: string
+  try {
+    commandWeightsRealpath = await realpath(commandWeights)
+  } catch {
+    return false
+  }
   return (
-    commandWeights === policy.weightsRealpath &&
+    commandWeightsRealpath === policy.weightsRealpath &&
     commandOption(command, '--alias', '-a') === policy.servedModelName &&
     policy.gpuLayers === -2 &&
     commandGpuLayers === 'all' &&
@@ -355,14 +362,14 @@ export async function verifyRuntimeAttestation(
       .filter(Boolean)
     const attestedEndpoint = new URL(attestation.endpoint)
     if (
-      !runtimeCommandMatchesPolicy(command, {
+      !(await runtimeCommandMatchesPolicy(command, {
         weightsRealpath: attestation.weights.realpath,
         servedModelName: attestation.servedModelName,
         gpuLayers: attestation.gpuLayers,
         host: attestedEndpoint.hostname,
         port: attestedEndpoint.port || '80',
         contextTokens: options.expectedContextTokens,
-      })
+      }))
     ) {
       return {
         state: 'invalid',

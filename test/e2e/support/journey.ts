@@ -3,7 +3,15 @@ import { Client } from 'pg'
 import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import { validateLocalE2eResetTarget } from '@/platform/db/e2e-reset-guard'
 import { e2eApplicationDataResetTableOrder } from './application-data-reset'
+import { e2eAdministrationUrlEnvironment } from './reset-target'
+
+// Test modules rebind DATABASE_URL to the disposable target for server-side helpers.
+// Capture the administration URL first so the destructive primitive can revalidate the
+// original admin/target pair immediately before connecting.
+const e2eAdministrationUrl =
+  process.env[e2eAdministrationUrlEnvironment] ?? process.env.DATABASE_URL
 
 /**
  * Shared J1–J4 helpers for Playwright journeys.
@@ -20,7 +28,26 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const overflow = await page.evaluate(() => {
+    const viewportWidth = document.documentElement.clientWidth
+    return Array.from(document.body.querySelectorAll<HTMLElement>('*'))
+      .map((element) => {
+        const bounds = element.getBoundingClientRect()
+        return {
+          element: `${element.tagName.toLowerCase()}.${element.className}`,
+          left: Math.round(bounds.left),
+          right: Math.round(bounds.right),
+        }
+      })
+      .filter(({ left, right }) => left < -1 || right > viewportWidth + 1)
+      .slice(0, 10)
+  })
+  expect(overflow, 'elements extending beyond the document viewport').toEqual([])
+}
+
 export function bindE2eProcessEnv(): void {
+  validateLocalE2eResetTarget(e2eAdministrationUrl, process.env.E2E_DATABASE_URL)
   process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
   process.env.BETTER_AUTH_SECRET = process.env.E2E_BETTER_AUTH_SECRET
   resetServerConfigForTests()
@@ -35,6 +62,7 @@ export async function databaseClient(): Promise<Client> {
 }
 
 export async function clearApplicationData(): Promise<void> {
+  validateLocalE2eResetTarget(e2eAdministrationUrl, process.env.E2E_DATABASE_URL)
   const client = await databaseClient()
   try {
     // Keep the live Next server up between tests without taking TRUNCATE's

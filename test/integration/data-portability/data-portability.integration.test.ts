@@ -784,6 +784,49 @@ describe('subject export and exact instance reset', () => {
     ).toMatchObject({ status: 'paused' })
   })
 
+  it('retains cached prose when development content is non-revoked but ineligible', async () => {
+    const previousMode = process.env.INDIGO_CONTENT_MODE
+    process.env.INDIGO_CONTENT_MODE = 'reviewed'
+    resetServerConfigForTests()
+    try {
+      const archive = await createDataExport(actor)
+      const completed = archive.sessions.find(
+        (session) => session.id === completedSessionId,
+      )
+
+      expect(completed?.prescriptionProvenance).toMatchObject({
+        available: true,
+        contentStatus: {
+          eligibility: {
+            eligible: false,
+            code: 'content.development-forbidden-in-production',
+          },
+          revocations: [],
+        },
+      })
+      expect(completed?.adjustments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: completedDecisionId,
+            explanations: [
+              expect.objectContaining({
+                id: cachedExplanationId,
+                sessionId: completedSessionId,
+                decisionId: completedDecisionId,
+                ...cachedExplanation,
+                createdAt: cachedExplanationCreatedAt,
+              }),
+            ],
+          }),
+        ]),
+      )
+    } finally {
+      if (previousMode === undefined) delete process.env.INDIGO_CONTENT_MODE
+      else process.env.INDIGO_CONTENT_MODE = previousMode
+      resetServerConfigForTests()
+    }
+  })
+
   it('redacts content revocation actor identities from member exports', async () => {
     const memberProgramId = newUuidV7()
     const memberRevisionId = newUuidV7()

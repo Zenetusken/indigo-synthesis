@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { defineConfig, devices } from '@playwright/test'
+import { pinE2eAdministrationUrl } from './test/e2e/support/reset-target'
+import { defaultE2eSuiteSelection } from './test/e2e/support/suite-selection'
 import {
   e2eApplicationUrl,
   e2eNextDistDir,
@@ -17,12 +19,12 @@ process.env[e2eSupervisorTokenEnvironment] = supervisorToken
 if (!databaseUrl || !authSecret) {
   throw new Error('E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET are required.')
 }
+pinE2eAdministrationUrl(databaseUrl)
 
 export default defineConfig({
   testDir: './test/e2e',
-  testMatch: '**/*.spec.ts',
   // Live GPU/LLM suite is opt-in via playwright.llm.config.ts (`pnpm test:e2e:llm`).
-  testIgnore: ['**/llm-live.spec.ts'],
+  ...defaultE2eSuiteSelection,
   fullyParallel: false,
   workers: 1,
   retries: 0,

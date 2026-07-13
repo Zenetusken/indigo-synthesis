@@ -3,11 +3,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { assertLoopbackEndpoint } from '../adapters/openai-compatible-loopback'
 import { getLlmConfig, type LlmRuntimeConfig } from '../config'
 import { loadModelRegistry } from '../model-registry'
 import type { ModelSettings } from '../model-settings'
 import { type VerifiedRuntimeIdentity, verifyRuntimeAttestation } from './attestation'
+import { assertLoopbackEndpoint, fetchLoopback } from './loopback-fetch'
 
 const execFileAsync = promisify(execFile)
 const GIBIBYTE = 1024 * 1024 * 1024
@@ -240,10 +240,11 @@ export async function probeEndpoint(
   const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2_000)
   let responseReceived = false
   try {
-    const response = await (options?.fetchImpl ?? fetch)(modelsUrl, {
-      redirect: 'error',
-      signal: controller.signal,
-    })
+    const response = await fetchLoopback(
+      modelsUrl,
+      { signal: controller.signal },
+      options?.fetchImpl,
+    )
     responseReceived = true
     if (response.redirected || (response.status >= 300 && response.status < 400)) {
       return {
@@ -363,10 +364,7 @@ async function probeRuntimeProps(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 2_000)
   try {
-    const response = await fetch(endpointUrl, {
-      redirect: 'error',
-      signal: controller.signal,
-    })
+    const response = await fetchLoopback(endpointUrl, { signal: controller.signal })
     if (
       response.redirected ||
       (response.status >= 300 && response.status < 400) ||

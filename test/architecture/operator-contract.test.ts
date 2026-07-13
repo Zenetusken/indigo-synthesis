@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -5,6 +6,10 @@ import { getTableName, isTable } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import * as databaseSchema from '@/platform/db/schema'
 import { e2eApplicationDataResetTableOrder } from '../e2e/support/application-data-reset'
+import {
+  defaultE2eSuiteSelection,
+  liveLlmE2eSuiteSelection,
+} from '../e2e/support/suite-selection'
 
 const projectRoot = process.cwd()
 
@@ -66,12 +71,84 @@ describe('clean-clone operator contract', () => {
     expect(e2eRunner).toContain('@playwright/test/cli.js')
     expect(e2eRunner).toContain('playwright.llm.config.ts')
 
-    const playwrightConfig = readFileSync(
-      resolve(projectRoot, 'playwright.config.ts'),
+    expect(defaultE2eSuiteSelection).toEqual({
+      testMatch: '**/*.spec.ts',
+      testIgnore: ['**/llm-live.spec.ts'],
+    })
+    expect(liveLlmE2eSuiteSelection).toEqual({
+      testMatch: '**/llm-live.spec.ts',
+    })
+
+    for (const configName of ['playwright.config.ts', 'playwright.llm.config.ts']) {
+      const config = readFileSync(resolve(projectRoot, configName), 'utf8')
+      expect(config).toContain('pinE2eAdministrationUrl')
+    }
+    const resetTarget = readFileSync(
+      resolve(projectRoot, 'test/e2e/support/reset-target.ts'),
       'utf8',
     )
-    expect(playwrightConfig).toContain('llm-live.spec.ts')
-    expect(playwrightConfig).toMatch(/testIgnore/)
+    expect(resetTarget).toContain('validateLocalE2eResetTarget')
+    expect(resetTarget).toContain('INDIGO_E2E_ADMINISTRATION_DATABASE_URL')
+    const journey = readFileSync(
+      resolve(projectRoot, 'test/e2e/support/journey.ts'),
+      'utf8',
+    )
+    expect(journey).toMatch(
+      /clearApplicationData[\s\S]*validateLocalE2eResetTarget[\s\S]*databaseClient/,
+    )
+
+    const playwrightCli = resolve(projectRoot, 'node_modules/@playwright/test/cli.js')
+    const safeEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      DATABASE_URL: 'postgresql://indigo:local@127.0.0.1:55432/postgres',
+      E2E_DATABASE_URL: 'postgresql://indigo:local@127.0.0.1:55432/indigo_contract_e2e',
+      E2E_BETTER_AUTH_SECRET: 'contract-only-secret',
+    }
+    delete safeEnvironment.INDIGO_E2E_ADMINISTRATION_DATABASE_URL
+
+    const defaultList = execFileSync(
+      process.execPath,
+      [playwrightCli, 'test', '--list'],
+      { cwd: projectRoot, encoding: 'utf8', env: safeEnvironment },
+    )
+    const defaultTests = defaultList
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /\.spec\.ts:\d+:\d+\s+›/.test(line))
+    expect(defaultTests.length).toBeGreaterThan(0)
+    expect(defaultTests.every((line) => !line.includes('llm-live.spec.ts'))).toBe(true)
+
+    const liveList = execFileSync(
+      process.execPath,
+      [playwrightCli, 'test', '--list', '-c', 'playwright.llm.config.ts'],
+      { cwd: projectRoot, encoding: 'utf8', env: safeEnvironment },
+    )
+    const liveTests = liveList
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /\.spec\.ts:\d+:\d+\s+›/.test(line))
+    expect(liveTests.length).toBeGreaterThan(0)
+    expect(liveTests.every((line) => line.includes('llm-live.spec.ts'))).toBe(true)
+
+    for (const configName of [undefined, 'playwright.llm.config.ts']) {
+      const configArguments = configName ? ['-c', configName] : []
+      const unsafeList = spawnSync(
+        process.execPath,
+        [playwrightCli, 'test', '--list', ...configArguments],
+        {
+          cwd: projectRoot,
+          encoding: 'utf8',
+          env: {
+            ...safeEnvironment,
+            E2E_DATABASE_URL: 'postgresql://indigo:local@127.0.0.1:55432/valuable',
+          },
+        },
+      )
+      expect(unsafeList.status).not.toBe(0)
+      expect(`${unsafeList.stdout}${unsafeList.stderr}`).toContain(
+        'E2E_DATABASE_URL database must match indigo_<name>_e2e',
+      )
+    }
   })
 
   it('keeps every application table in the production-aligned E2E clear order', () => {

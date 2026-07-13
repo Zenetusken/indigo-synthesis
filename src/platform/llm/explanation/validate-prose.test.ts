@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { canonicalFutureLoadExplanation } from './canonical-prose'
 import type { ExplanationFactBundle } from './fact-bundle'
 import { EXPLANATION_VALIDATOR_VERSION, validateExplanationProse } from './validate-prose'
 
@@ -75,11 +76,84 @@ const validProse = [
 
 describe('validateExplanationProse', () => {
   it('pins the fail-closed validator version', () => {
-    expect(EXPLANATION_VALIDATOR_VERSION).toBe('future-load-validator.v3')
+    expect(EXPLANATION_VALIDATOR_VERSION).toBe('future-load-validator.v4')
   })
 
   it('accepts grounded increase prose', () => {
     expect(validateExplanationProse(validProse, sampleBundle())).toEqual({ ok: true })
+  })
+
+  it.each([
+    'Push Press',
+    '5x5 Squat',
+    'One-Arm Row',
+    '45-degree leg press',
+    'Half-kneeling landmine press',
+    'Quarter squat',
+    'Double-overhand deadlift',
+    '25 kg Plate Carry',
+    '100 lb Dumbbell Row',
+    'Exercise Bike',
+    'Push/Pull Sled',
+    'Pull/Push Sled',
+    'Lift/Carry Complex',
+  ])('accepts exact canonical prose for the legitimate name %s', (exerciseName) => {
+    const bundle = sampleBundle({
+      display: { ...sampleBundle().display, exerciseName },
+    })
+    const prose = canonicalFutureLoadExplanation(bundle)
+    expect(prose).not.toBeNull()
+    expect(validateExplanationProse(prose ?? '', bundle)).toEqual({ ok: true })
+  })
+
+  it('does not combine an action word in the exercise name with pain-block prose', () => {
+    const bundle = sampleBundle({
+      decision: {
+        ...sampleBundle().decision,
+        kind: 'blocked',
+        currentLoadGrams: 100_000,
+        proposedLoadGrams: 100_000,
+        painReported: true,
+      },
+      grounding: {
+        ...sampleBundle().grounding,
+        reasonCode: 'development.adjustment.pain-block',
+      },
+      display: {
+        currentLoadLabel: '100 kg',
+        proposedLoadLabel: '100 kg',
+        exerciseName: 'Olympic Lift',
+      },
+    })
+    const prose = canonicalFutureLoadExplanation(bundle)
+    expect(prose).not.toBeNull()
+    expect(validateExplanationProse(prose ?? '', bundle)).toEqual({ ok: true })
+  })
+
+  it.each([
+    'You should continue training through pain',
+    'Injury diagnosis drill',
+    'Push through pain',
+    'Please continue training',
+    'Squat. Continue training',
+    'Lift now',
+    'Push carefully',
+    'Lift safely',
+    'Push yourself',
+    'Push hard',
+    'Squat: Continue training',
+    'Squat — Continue training',
+    'Squat\nContinue training',
+    'Squat; Continue training',
+    'Squat / Continue training',
+    'Squat: Proceed with training',
+  ])('rejects unsafe language embedded in the exercise name: %s', (exerciseName) => {
+    const bundle = sampleBundle({
+      display: { ...sampleBundle().display, exerciseName },
+    })
+    const prose = canonicalFutureLoadExplanation(bundle)
+    expect(prose).not.toBeNull()
+    expect(validateExplanationProse(prose ?? '', bundle).ok).toBe(false)
   })
 
   it('rejects missing reason code', () => {
