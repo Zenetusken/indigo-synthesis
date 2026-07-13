@@ -2,7 +2,10 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { InlineStatus, PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { formatDateTimeInTimezone } from '@/modules/athletes/domain/time'
+import {
+  formatCalendarDate,
+  formatDateTimeInTimezone,
+} from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
 import { requireActor } from '@/modules/identity/server/actor'
 import {
@@ -39,7 +42,7 @@ export default async function SessionHistoryPage({
     <ProductFrame current="history">
       <div className={styles.content}>
         <PageHeading
-          eyebrow={`${session.plannedWorkout.scheduledDate} · Session ${session.plannedWorkout.slotCode}`}
+          eyebrow={`${formatCalendarDate(session.plannedWorkout.scheduledDate)} · Session ${session.plannedWorkout.slotCode}`}
           title="Workout completed."
           description={`Started ${formatDateTimeInTimezone(session.startedAt, timezone)} · Completed ${session.completedAt ? formatDateTimeInTimezone(session.completedAt, timezone) : 'Unavailable'}`}
         />

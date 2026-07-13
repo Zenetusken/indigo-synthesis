@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState, useTransition } from 'react'
-import { formatTimeInTimezone } from '@/modules/athletes/domain/time'
+import { ActionButton } from '@/components'
+import { formatCalendarDate, formatTimeInTimezone } from '@/modules/athletes/domain/time'
 import {
   type DisplayUnits,
   displayLoadValue,
@@ -13,6 +14,7 @@ import type {
   WorkoutSessionView,
   WorkoutSetView,
 } from '@/modules/training/application/workouts'
+import { pluralize } from '@/platform/format/plural'
 import {
   abandonWorkoutAction,
   completeSetAction,
@@ -211,9 +213,9 @@ function SetForm({
         attests them.
       </small>
       <div className={styles.setActions}>
-        <button className={styles.primaryButton} type="submit" disabled={isPending}>
+        <ActionButton variant="primary" type="submit" busy={isPending}>
           {isPending ? 'Saving…' : 'Complete set'}
-        </button>
+        </ActionButton>
       </div>
     </form>
   )
@@ -242,9 +244,9 @@ function SkipForm({ sessionId, set }: { sessionId: string; set: WorkoutSetView }
           disabled={isPending}
         />
       </label>
-      <button className={styles.secondaryButton} type="submit" disabled={isPending}>
+      <ActionButton variant="secondary" type="submit" busy={isPending}>
         Skip set
-      </button>
+      </ActionButton>
     </form>
   )
 }
@@ -305,9 +307,9 @@ function SubstitutionProposalForm({
         <p id={`substitution-help-${sessionExerciseId}`}>
           Enter the exercise name or catalog code you want considered.
         </p>
-        <button className={styles.secondaryButton} type="submit" disabled={isPending}>
+        <ActionButton variant="secondary" type="submit" busy={isPending}>
           {isPending ? 'Checking proposal…' : 'Propose substitute'}
-        </button>
+        </ActionButton>
       </form>
     </section>
   )
@@ -338,9 +340,9 @@ function CompleteWorkoutForm({ sessionId }: { sessionId: string }) {
           />{' '}
           I confirm that I am not reporting pain or a safety issue from this session.
         </label>
-        <button className={styles.primaryButton} type="submit" disabled={isPending}>
+        <ActionButton variant="primary" type="submit" busy={isPending}>
           {isPending ? 'Completing…' : 'Complete workout'}
-        </button>
+        </ActionButton>
       </form>
     </section>
   )
@@ -377,9 +379,9 @@ function ReportPainForm({ sessionId }: { sessionId: string }) {
             disabled={isPending}
           />
         </label>
-        <button className={styles.dangerButton} type="submit" disabled={isPending}>
+        <ActionButton variant="danger" type="submit" busy={isPending}>
           {isPending ? 'Reporting…' : 'Stop and report issue'}
-        </button>
+        </ActionButton>
       </form>
     </section>
   )
@@ -406,13 +408,9 @@ function PauseResumeForm({
           <FormError code={pause.errorCode} alertRef={pause.alertRef} />
         ) : null}
         <input type="hidden" name="sessionId" value={sessionId} />
-        <button
-          className={styles.secondaryButton}
-          type="submit"
-          disabled={pause.isPending}
-        >
+        <ActionButton variant="secondary" type="submit" busy={pause.isPending}>
           {pause.isPending ? 'Pausing…' : 'Pause workout'}
-        </button>
+        </ActionButton>
       </form>
     )
   }
@@ -424,14 +422,14 @@ function PauseResumeForm({
           <FormError code={resume.errorCode} alertRef={resume.alertRef} />
         ) : null}
         <input type="hidden" name="sessionId" value={sessionId} />
-        <button
+        <ActionButton
           id="resume-workout"
-          className={styles.primaryButton}
+          variant="primary"
           type="submit"
-          disabled={resume.isPending}
+          busy={resume.isPending}
         >
           {resume.isPending ? 'Resuming…' : 'Resume workout'}
-        </button>
+        </ActionButton>
       </form>
     )
   }
@@ -484,13 +482,9 @@ function AbandonPanel({ sessionId }: { sessionId: string }) {
 
   if (!isRevealed) {
     return (
-      <button
-        type="button"
-        className={styles.dangerButton}
-        onClick={() => setIsRevealed(true)}
-      >
+      <ActionButton variant="danger" onClick={() => setIsRevealed(true)}>
         Abandon workout
-      </button>
+      </ActionButton>
     )
   }
 
@@ -528,17 +522,12 @@ function AbandonPanel({ sessionId }: { sessionId: string }) {
           I understand that this product does not assess or clear symptoms.
         </label>
         <div className={styles.abandonActions}>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={close}
-            disabled={isPending}
-          >
+          <ActionButton variant="secondary" onClick={close} disabled={isPending}>
             Cancel
-          </button>
-          <button className={styles.dangerButton} type="submit" disabled={isPending}>
+          </ActionButton>
+          <ActionButton variant="danger" type="submit" busy={isPending}>
             {isPending ? 'Abandoning…' : 'Confirm abandon'}
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>
@@ -577,7 +566,7 @@ export function WorkoutClient({
         <header className={styles.heading}>
           <h1>{session.plannedWorkout.name}</h1>
           <p>
-            {session.plannedWorkout.scheduledDate} · Started{' '}
+            {formatCalendarDate(session.plannedWorkout.scheduledDate)} · Started{' '}
             {formatTimeInTimezone(session.startedAt, timezone)} ·{' '}
             <span aria-atomic="true" aria-live="polite" role="status">
               Draft saved · revision {session.optimisticVersion}
@@ -658,7 +647,11 @@ export function WorkoutClient({
                   <span>Prior comparable performance</span>
                   {exercise.priorComparablePerformance ? (
                     <strong>
-                      {exercise.priorComparablePerformance.sets.length} performed sets ·{' '}
+                      {pluralize(
+                        exercise.priorComparablePerformance.sets.length,
+                        'performed set',
+                      )}{' '}
+                      ·{' '}
                       {formatLoad(
                         exercise.priorComparablePerformance.sets[0]?.loadGrams ?? null,
                         units,
@@ -779,8 +772,8 @@ export function WorkoutClient({
         <footer className={styles.dock}>
           <strong>
             {session.progressionInvalidated
-              ? `Session blocked · ${pendingSets.length} unresolved sets`
-              : `${pendingSets.length} unresolved sets`}
+              ? `Session blocked · ${pluralize(pendingSets.length, 'unresolved set')}`
+              : pluralize(pendingSets.length, 'unresolved set')}
           </strong>
           <div className={styles.dockActions}>
             {!session.progressionInvalidated ? (

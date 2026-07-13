@@ -3,8 +3,9 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { formatTimeInTimezone } from '@/modules/athletes/domain/time'
+import { formatCalendarDate, formatTimeInTimezone } from '@/modules/athletes/domain/time'
 import { requireActor } from '@/modules/identity/server/actor'
+import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getCompletedSessions } from '@/modules/training/application/workouts'
 import styles from './history.module.css'
 
@@ -20,7 +21,7 @@ export default async function HistoryPage() {
   if (!profile) redirect('/setup')
 
   return (
-    <ProductFrame current="history">
+    <ProductFrame current="history" accountActions={<SignOutButton />}>
       <div className={styles.content}>
         <PageHeading
           eyebrow="History"
@@ -38,7 +39,9 @@ export default async function HistoryPage() {
             {sessions.map((session) => (
               <li key={session.id}>
                 <Link href={`/history/${session.id}` as Route}>
-                  <span className={styles.date}>{session.scheduledDate}</span>
+                  <span className={styles.date}>
+                    {formatCalendarDate(session.scheduledDate)}
+                  </span>
                   <strong>{session.plannedName}</strong>
                   <span className={styles.meta}>
                     Completed{' '}

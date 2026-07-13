@@ -44,6 +44,7 @@
     --hairline: #c8d0da;
     --hairline-strong: #929eac;
     --focus: #1b63d9;
+    --focus-ring: 0 0 0 3px color-mix(in srgb, var(--focus) 45%, transparent);
     --font-display: "Saira Variable", "Arial Narrow", sans-serif;
     --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
     --font-data: "IBM Plex Mono", ui-monospace, monospace;
@@ -83,6 +84,25 @@
 
   a {
     color: inherit;
+  }
+
+  /* Default section-heading faces. Hero/panel headings set their own size via a
+     class selector, which wins on specificity; this only styles otherwise-bare
+     h2/h3 so section labels read consistently and an h3 never outranks its h2. */
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-stretch: condensed;
+    line-height: 1.12;
+  }
+
+  h2 {
+    font-size: var(--text-2xl);
+    letter-spacing: -0.01em;
+  }
+
+  h3 {
+    font-size: var(--text-xl);
   }
 
   :focus-visible {

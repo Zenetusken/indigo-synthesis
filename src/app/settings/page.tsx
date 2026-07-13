@@ -5,6 +5,7 @@ import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { requireActor } from '@/modules/identity/server/actor'
 import { listLocalUsersAsOwner } from '@/modules/identity/server/local-users'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
+import { pluralize } from '@/platform/format/plural'
 import { LocalUserForm } from './local-user-form'
 import styles from './settings.module.css'
 
@@ -49,7 +50,7 @@ export default async function SettingsPage() {
           <h2>Training context</h2>
           <p>
             {profile
-              ? `${profile.profile.units} · ${profile.profile.timezone} · ${profile.days.length} training days`
+              ? `${profile.profile.units} · ${profile.profile.timezone} · ${pluralize(profile.days.length, 'training day')}`
               : 'No confirmed profile.'}
           </p>
         </section>

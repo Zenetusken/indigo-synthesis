@@ -1,12 +1,23 @@
 import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
-import { Disclosure, InlineStatus, PageHeading, ProductFrame } from '@/components'
+import {
+  Disclosure,
+  InlineStatus,
+  PageHeading,
+  ProductFrame,
+  SubmitButton,
+} from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { formatIsoDateInTimezone } from '@/modules/athletes/domain/time'
+import {
+  formatCalendarDate,
+  formatIsoDateInTimezone,
+} from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
 import { requireActor } from '@/modules/identity/server/actor'
+import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getProgramOverview } from '@/modules/programs/application/programs'
 import { getServerConfig } from '@/platform/config/server'
+import { pluralize } from '@/platform/format/plural'
 import { activateProgramAction, generateProgramAction } from './actions'
 import styles from './program.module.css'
 
@@ -62,7 +73,7 @@ export default async function ProgramPage({
   const isDevelopmentMode = getServerConfig().contentMode === 'development'
 
   return (
-    <ProductFrame current="program">
+    <ProductFrame current="program" accountActions={<SignOutButton />}>
       <div className={styles.content}>
         <PageHeading
           eyebrow="Program sheet"
@@ -126,9 +137,9 @@ export default async function ProgramPage({
                     <span>Program start date</span>
                     <input name="asOfDate" type="date" defaultValue={today} required />
                   </label>
-                  <button className={styles.primaryButton} type="submit">
+                  <SubmitButton variant="primary" pendingLabel="Creating…">
                     Create development program
-                  </button>
+                  </SubmitButton>
                 </form>
               </>
             ) : (
@@ -145,16 +156,16 @@ export default async function ProgramPage({
               <div>
                 <h2>Two-cycle A/B/C fixture</h2>
                 <p>
-                  Revision {overview.revisionNumber} · {overview.workouts.length}{' '}
-                  scheduled workouts
+                  Revision {overview.revisionNumber} ·{' '}
+                  {pluralize(overview.workouts.length, 'scheduled workout')}
                 </p>
               </div>
               {overview.revisionStatus === 'draft' && isDevelopmentMode ? (
                 <form action={activateProgramAction}>
                   <input type="hidden" name="revisionId" value={overview.revisionId} />
-                  <button className={styles.primaryButton} type="submit">
+                  <SubmitButton variant="primary" pendingLabel="Activating…">
                     Activate development program
-                  </button>
+                  </SubmitButton>
                 </form>
               ) : overview.revisionStatus === 'active' && isDevelopmentMode ? (
                 <InlineStatus tone="success">Active revision</InlineStatus>
@@ -170,7 +181,7 @@ export default async function ProgramPage({
                 <li className={styles.workout} key={workout.id}>
                   <div className={styles.workoutMeta}>
                     <strong>Session {workout.slotCode}</strong>
-                    <span>{workout.scheduledDate}</span>
+                    <span>{formatCalendarDate(workout.scheduledDate)}</span>
                   </div>
                   <ol className={styles.exercises}>
                     {workout.exercises.map((exercise) => {
