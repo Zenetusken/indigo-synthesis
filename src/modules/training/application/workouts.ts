@@ -37,6 +37,10 @@ import {
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
 import {
+  createPostgresFutureLoadExplanationCache,
+  type FutureLoadExplanationCachePort,
+} from '@/modules/training/application/future-load-explanation-cache'
+import {
   commandReceiptMatches,
   type TrainingCommandRequest,
   trainingCommandRequestHash,
@@ -1532,18 +1536,27 @@ export async function setSessionPaused(
   })
 }
 
-export async function reportPain(rawInput: {
-  readonly userId: string
-  readonly sessionId: string
-  readonly commandId: string
-  readonly details: string
-}): Promise<void> {
+export async function reportPain(
+  rawInput: {
+    readonly userId: string
+    readonly sessionId: string
+    readonly commandId: string
+    readonly details: string
+  },
+  deps?: {
+    readonly explanationCache?: FutureLoadExplanationCachePort
+    /** Integration-only ordering hook; production composition never supplies this. */
+    readonly testHooks?: {
+      readonly afterSafetyStateWritten?: () => Promise<void>
+    }
+  },
+): Promise<void> {
   const input = {
     userId: rawInput.userId,
     ...parseWorkoutCommand(reportPainCommandSchema, rawInput),
   }
 
-  await getDb().transaction(async (transaction) => {
+  const shouldPurgeExplanationCache = await getDb().transaction(async (transaction) => {
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
     )
@@ -1566,7 +1579,9 @@ export async function reportPain(rawInput: {
       targetId: input.sessionId,
       payload: { details: input.details },
     } satisfies TrainingCommandRequest
-    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) {
+      return session.status === 'completed'
+    }
     if (!['active', 'paused', 'completed'].includes(session.status))
       throw new WorkoutCommandError(
         'session.not-reportable',
@@ -1585,9 +1600,12 @@ export async function reportPain(rawInput: {
       )
       .for('update')
       .limit(1)
-    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) {
+      return session.status === 'completed'
+    }
 
     const now = new Date()
+    const wasCompleted = session.status === 'completed'
     if (session.status === 'active') {
       await transaction
         .update(workoutSessions)
@@ -1659,8 +1677,7 @@ export async function reportPain(rawInput: {
       entityType: 'workout-session',
       entityId: input.sessionId,
       metadata: {
-        action:
-          session.status === 'completed' ? 'post-completion-hold' : 'paused-and-held',
+        action: wasCompleted ? 'post-completion-hold' : 'paused-and-held',
         coalescedWithExistingHold: Boolean(existingHold),
         correctionId,
         invalidatedDecisionCount: invalidation?.decisionIds.length ?? 0,
@@ -1668,20 +1685,40 @@ export async function reportPain(rawInput: {
         pausedAffectedSessionCount: invalidation?.pausedSessionIds.length ?? 0,
       },
     })
+
+    await deps?.testHooks?.afterSafetyStateWritten?.()
+
+    return wasCompleted
   })
+
+  // Presentation cleanup is deliberately post-commit and fail-soft. The authoritative
+  // correction, invalidation, hold, receipt, and audit never depend on cache availability.
+  if (shouldPurgeExplanationCache) {
+    const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
+    try {
+      await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+    } catch {
+      // Authoritative safety state is already committed; cleanup must remain fail-soft.
+    }
+  }
 }
 
-export async function correctPerformedSet(rawInput: {
-  readonly userId: string
-  readonly sessionId: string
-  readonly setId: string
-  readonly commandId: string
-  readonly reason: string
-  readonly actualLoadGrams: number
-  readonly actualRepetitions: number
-  readonly rpe: number | null
-  readonly note: string | null
-}): Promise<void> {
+export async function correctPerformedSet(
+  rawInput: {
+    readonly userId: string
+    readonly sessionId: string
+    readonly setId: string
+    readonly commandId: string
+    readonly reason: string
+    readonly actualLoadGrams: number
+    readonly actualRepetitions: number
+    readonly rpe: number | null
+    readonly note: string | null
+  },
+  deps?: {
+    readonly explanationCache?: FutureLoadExplanationCachePort
+  },
+): Promise<void> {
   const input = {
     userId: rawInput.userId,
     ...parseWorkoutCommand(correctPerformedSetCommandSchema, rawInput),
@@ -1789,6 +1826,13 @@ export async function correctPerformedSet(rawInput: {
       },
     })
   })
+
+  const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
+  try {
+    await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+  } catch {
+    // The append-only correction and recursive invalidations are already committed.
+  }
 }
 
 export async function resolveSafetyHold(rawInput: {
@@ -2486,6 +2530,38 @@ export async function getCompletedSessions(userId: string) {
   )
 }
 
+export type FutureLoadDecisionKind = 'increase' | 'hold' | 'unavailable'
+
+/** Typed future-load decision with train-time exercise name and revision provenance. */
+export type FutureLoadDecisionView = {
+  readonly id: string
+  readonly sessionId: string
+  readonly exerciseCode: string
+  readonly exerciseName: string
+  readonly decision: FutureLoadDecisionKind
+  readonly currentLoadGrams: number | null
+  readonly nextLoadGrams: number | null
+  readonly reasonCode: string
+  readonly ruleVersion: string
+  readonly engineVersion: string
+  readonly methodologyId: string
+  readonly methodologyVersion: string
+  readonly methodologyReviewStatus: string
+  readonly templateReviewStatus: string
+  readonly invalidatedAt: Date | null
+  readonly invalidationCorrectionId: string | null
+  readonly invalidationCorrectionKind: string | null
+  readonly invalidationReason: string | null
+}
+
+function asFutureLoadDecisionKind(value: string): FutureLoadDecisionKind {
+  if (value === 'increase' || value === 'hold' || value === 'unavailable') {
+    return value
+  }
+  // Fail closed to unavailable rather than inventing an increase.
+  return 'unavailable'
+}
+
 export async function getSessionAdjustments(userId: string, sessionId: string) {
   const [owned] = await getDb()
     .select({
@@ -2515,26 +2591,121 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
   if (!contentEligibility.eligible && contentEligibility.code !== 'content.revoked') {
     return null
   }
-  return (
-    getDb()
-      .select({
-        ...getTableColumns(adjustmentDecisions),
-        invalidatedAt: adjustmentDecisionInvalidations.createdAt,
-        invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
-        invalidationReason: trainingFactCorrections.reason,
-      })
-      .from(adjustmentDecisions)
-      .leftJoin(
-        adjustmentDecisionInvalidations,
-        eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
-      )
-      .leftJoin(
-        trainingFactCorrections,
-        eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
-      )
-      .where(eq(adjustmentDecisions.sessionId, sessionId))
-      // Present decisions in the order they were produced during completion (which
-      // follows the workout's exercise order), with a stable code tiebreak.
-      .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
-  )
+  return getDb()
+    .select({
+      ...getTableColumns(adjustmentDecisions),
+      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationCorrectionKind: trainingFactCorrections.correctionKind,
+      invalidationReason: trainingFactCorrections.reason,
+    })
+    .from(adjustmentDecisions)
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
+    .where(eq(adjustmentDecisions.sessionId, sessionId))
+    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+}
+
+/**
+ * Completed-session future-load decisions with snapshot exercise names and
+ * program-revision provenance for FactBundle construction.
+ */
+export async function getSessionFutureLoadDecisions(
+  userId: string,
+  sessionId: string,
+): Promise<readonly FutureLoadDecisionView[] | null> {
+  const db = getDb()
+  const [owned] = await db
+    .select({
+      id: workoutSessions.id,
+      engineVersion: programRevisions.engineVersion,
+      methodologyId: programRevisions.methodologyId,
+      methodologyVersion: programRevisions.methodologyVersion,
+      methodologyReviewStatus: programRevisions.methodologyReviewStatus,
+      templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
+    })
+    .from(workoutSessions)
+    .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
+    .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+    .where(
+      and(
+        eq(workoutSessions.id, sessionId),
+        eq(workoutSessions.userId, userId),
+        eq(workoutSessions.status, 'completed'),
+      ),
+    )
+    .limit(1)
+  if (!owned) return null
+  const contentEligibility = evaluatePersistedContentEligibility({
+    contentMode: getServerConfig().contentMode,
+    methodologyStatus: owned.methodologyReviewStatus,
+    templateStatus: owned.templateReviewStatus,
+    revoked: owned.contentRevoked,
+  })
+  if (!contentEligibility.eligible) {
+    return null
+  }
+
+  const rows = await db
+    .select({
+      id: adjustmentDecisions.id,
+      sessionId: adjustmentDecisions.sessionId,
+      exerciseCode: adjustmentDecisions.exerciseCode,
+      decision: adjustmentDecisions.decision,
+      currentLoadGrams: adjustmentDecisions.currentLoadGrams,
+      nextLoadGrams: adjustmentDecisions.nextLoadGrams,
+      reasonCode: adjustmentDecisions.reasonCode,
+      ruleVersion: adjustmentDecisions.ruleVersion,
+      exerciseName: sessionExercises.exerciseName,
+      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationCorrectionKind: trainingFactCorrections.correctionKind,
+      invalidationReason: trainingFactCorrections.reason,
+    })
+    .from(adjustmentDecisions)
+    .leftJoin(
+      sessionExercises,
+      and(
+        eq(sessionExercises.sessionId, adjustmentDecisions.sessionId),
+        eq(sessionExercises.exerciseCode, adjustmentDecisions.exerciseCode),
+      ),
+    )
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
+    .where(eq(adjustmentDecisions.sessionId, sessionId))
+    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.sessionId,
+    exerciseCode: row.exerciseCode,
+    exerciseName: row.exerciseName ?? row.exerciseCode,
+    decision: asFutureLoadDecisionKind(row.decision),
+    currentLoadGrams: row.currentLoadGrams,
+    nextLoadGrams: row.nextLoadGrams,
+    reasonCode: row.reasonCode,
+    ruleVersion: row.ruleVersion,
+    engineVersion: owned.engineVersion,
+    methodologyId: owned.methodologyId,
+    methodologyVersion: owned.methodologyVersion,
+    methodologyReviewStatus: owned.methodologyReviewStatus,
+    templateReviewStatus: owned.templateReviewStatus,
+    invalidatedAt: row.invalidatedAt,
+    invalidationCorrectionId: row.invalidationCorrectionId,
+    invalidationCorrectionKind: row.invalidationCorrectionKind,
+    invalidationReason: row.invalidationReason,
+  }))
 }

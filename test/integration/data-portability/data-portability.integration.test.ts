@@ -37,6 +37,7 @@ import {
   contentReleaseRevocations,
   deletionTombstones,
   exercisePrescriptions,
+  futureLoadExplanationCache,
   installationState,
   performedSetCorrections,
   performedSets,
@@ -73,6 +74,22 @@ const activeSessionId = newUuidV7()
 const completedSessionId = newUuidV7()
 const resolvedHoldId = newUuidV7()
 const resolvedHoldResolutionId = newUuidV7()
+const completedDecisionId = newUuidV7()
+const cachedExplanationId = newUuidV7()
+const cachedExplanationCreatedAt = new Date('2026-07-10T12:31:00.000Z')
+const cachedExplanation = {
+  prose:
+    'The next load increases from 60 kg to 62.5 kg because all completed work remained within the development RPE boundary.',
+  modelId: 'unsloth/Qwen3.5-9B-GGUF@3885219#Qwen3.5-9B-Q4_K_M.gguf',
+  modelContentDigest: 'a'.repeat(64),
+  servedModelName: 'indigo-qwen3.5-9b-q4-k-m',
+  runtimeId: 'llama.cpp@99f3dc3:pid:123:start:456',
+  runtimeAttestationDigest: 'b'.repeat(64),
+  promptVersion: 'future-load.v3',
+  validatorVersion: 'future-load.v3',
+  factBundleHash: 'c'.repeat(64),
+  generateDurationMs: 842,
+} as const
 
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let actor: AuthenticatedActor
@@ -381,7 +398,7 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           createdAt: new Date('2026-07-10T12:30:00.000Z'),
         })
         await transaction.insert(adjustmentDecisions).values({
-          id: newUuidV7(),
+          id: completedDecisionId,
           sessionId: fixture.sessionId,
           appliedRevisionId: secondRevisionId,
           exerciseCode: 'development.back-squat',
@@ -390,6 +407,15 @@ async function seedOwnedProductHistory(userId: string): Promise<void> {
           nextLoadGrams: 62_500,
           reasonCode: 'all-sets-within-rpe-bound',
           ruleVersion: 'development-adjustment-v1',
+        })
+        await transaction.insert(futureLoadExplanationCache).values({
+          id: cachedExplanationId,
+          userId,
+          sessionId: fixture.sessionId,
+          decisionId: completedDecisionId,
+          cacheKey: 'd'.repeat(64),
+          ...cachedExplanation,
+          createdAt: cachedExplanationCreatedAt,
         })
         await transaction.insert(trainingCommandReceipts).values({
           commandId: 'complete-completed',
@@ -658,10 +684,20 @@ describe('subject export and exact instance reset', () => {
       },
     })
     expect(completed?.adjustments[0]).toMatchObject({
+      id: completedDecisionId,
       appliedRevisionId: secondRevisionId,
       ruleVersion: 'development-adjustment-v1',
       reasonCode: 'all-sets-within-rpe-bound',
       invalidation: null,
+      explanations: [
+        {
+          id: cachedExplanationId,
+          sessionId: completedSessionId,
+          decisionId: completedDecisionId,
+          ...cachedExplanation,
+          createdAt: cachedExplanationCreatedAt,
+        },
+      ],
     })
     expect(completed?.feedback).toMatchObject({
       original: { painReported: false, details: null },
@@ -682,7 +718,7 @@ describe('subject export and exact instance reset', () => {
         }),
       ]),
     )
-    expect(archive.manifest.schemaVersion).toBe('1.4.0-development')
+    expect(archive.manifest.schemaVersion).toBe('1.5.0-development')
     expect(archive.profile.safetyHolds).toEqual([
       expect.objectContaining({
         id: resolvedHoldId,
@@ -988,6 +1024,7 @@ describe('subject export and exact instance reset', () => {
       performedSetCorrections: 1,
       adjustmentDecisionInvalidations: 1,
       programRevisionInvalidations: 1,
+      futureLoadExplanationCache: 1,
     })
   })
 
@@ -1313,7 +1350,7 @@ describe('subject export and exact instance reset', () => {
     })
 
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(32)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(33)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
@@ -1344,6 +1381,7 @@ describe('subject export and exact instance reset', () => {
       adjustmentDecisionInvalidations: 1,
       programRevisionInvalidations: 1,
       contentReleaseRevocations: 1,
+      futureLoadExplanationCache: 1,
       auditEvents: 5,
       deletionPlans: 1,
     })
@@ -1426,6 +1464,7 @@ describe('subject export and exact instance reset', () => {
         (SELECT count(*) FROM adjustment_decision_invalidation) +
         (SELECT count(*) FROM program_revision_invalidation) +
         (SELECT count(*) FROM content_release_revocation) +
+        (SELECT count(*) FROM future_load_explanation_cache) +
         (SELECT count(*) FROM destructive_reauthentication_state) +
         (SELECT count(*) FROM audit_event) +
         (SELECT count(*) FROM deletion_plan)

@@ -18,7 +18,8 @@ Deferred means intentionally absent—not forgotten and not partially scaffolded
 | Payments/subscriptions | No validated commercial product yet | Product/market decision and completed core journey |
 | Wearables/HRV/biometrics | Product cannot honestly measure/infer them today | Device integration, consent, validation, and allowed-decision policy |
 | Video/form analysis | Media, ML, privacy, safety, and accuracy burden | Licensed media model, evaluation set, safety review, and clear non-diagnostic scope |
-| LLM/ML coaching | No clean dataset or evaluation; deterministic rules suffice | Consented dataset, baseline, failure taxonomy, offline/self-host model strategy, and measurable benefit |
+| LLM/ML coaching (decision-making, instruments, opaque scores) | No clean dataset or evaluation; deterministic rules suffice; product truth forbids calling rules AI | Consented dataset, baseline, failure taxonomy, offline/self-host model strategy, measurable benefit, and a separate ADR that does not weaken methodology purity |
+| Optional local grounded explanation **Program page** | History on-demand Explain + PG prose cache exist (default LLM off). Program surface not built | Cache hit/miss measured on History; Program Explain reuses the same use case without blocking program review |
 | Native mobile apps | Web/mobile-first experience not yet validated | Browser limits demonstrably block a core workflow |
 | Multi-instance/HA/multi-region | No availability or scale evidence | Measured load/SLO and operational ownership |
 | Coach marketplace/teams | Different actor, auth, billing, and privacy model | Validated coach/client workflow and authorization model |

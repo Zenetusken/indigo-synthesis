@@ -106,6 +106,13 @@
       "when": 1783900595027,
       "tag": "0014_content_revocation_actor_unlink_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1783924039486,
+      "tag": "0015_future_load_explanation_cache",
+      "breakpoints": true
     }
   ]
 }

@@ -43,6 +43,7 @@ date are stored with the rule.
 | Neurotype-specific nutrition and supplement doses | Prohibited in core product | Excluded from automated behavior and copy |
 | Extreme eccentric, ballistic, drop-catch, or max-effort methods | Expert-gated/deferred | Require rights, safety tier, eligibility, and qualified review |
 | AI-powered program generation | Prohibited description for deterministic rules | Call it a reviewed program rule or methodology release |
+| Optional local plain-language paraphrase of a persisted reason code | Inferred presentation only (design accepted; not shipped) | Never a decision source; label as inferred; always show reason code and ruleset version; see [explanation generation contract](../architecture/EXPLANATION_GENERATION_CONTRACT.md) |
 
 ## Scientific baseline
 

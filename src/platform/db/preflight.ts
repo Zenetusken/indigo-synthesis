@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm'
+import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { getServerConfig } from '@/platform/config/server'
 import { getDb } from './client'
 
@@ -8,16 +9,20 @@ export type DatabasePreflight = {
   readonly migrationLedgerPresent: boolean
   readonly migrationLedgerCanonical: boolean
   readonly appliedMigrationCount: number
+  readonly committedMigrationCount: number
+  readonly appliedCommittedMigrationCount: number
+  readonly latestCommittedMigrationApplied: boolean
   readonly bootstrapTriggerPresent: boolean
   readonly workoutSnapshotColumnsPresent: boolean
   readonly safetyHoldIntegrityPresent: boolean
   readonly trainingCorrectionIntegrityPresent: boolean
   readonly contentRevocationIntegrityPresent: boolean
+  readonly llmCacheContractPresent: boolean
   readonly integrityTriggerCount: number
   readonly ineligibleContentRevisionCount: number
 }
 
-export const expectedMigrationCount = 15
+export const expectedMigrationCount = 16
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -167,6 +172,8 @@ const requiredIntegrityTriggers = [
 
 export async function inspectDatabase(): Promise<DatabasePreflight> {
   const db = getDb()
+  const committedMigrations = readMigrationFiles({ migrationsFolder: './drizzle' })
+  const committedHashes = committedMigrations.map((migration) => migration.hash)
   const [
     versionResult,
     migrationResult,
@@ -175,6 +182,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     safetyHoldResult,
     trainingCorrectionResult,
     contentRevocationResult,
+    llmCacheResult,
     integrityResult,
   ] = await Promise.all([
     db.execute<{ version: string; versionNumber: string }>(sql`
@@ -477,6 +485,56 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
               LIKE '%Content release revocations are append-only.%'
         ) AS present
     `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        (
+          SELECT count(*) = 16
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'future_load_explanation_cache'
+            AND column_name IN (
+              'id', 'user_id', 'session_id', 'decision_id', 'cache_key', 'prose',
+              'model_id', 'model_content_digest', 'served_model_name', 'runtime_id',
+              'runtime_attestation_digest', 'prompt_version', 'validator_version',
+              'fact_bundle_hash', 'generate_duration_ms', 'created_at'
+            )
+        )
+        AND to_regclass('public.future_load_explanation_cache_session_idx') IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.future_load_explanation_cache_key_uidx'
+          )
+            AND indrelid = to_regclass('public.future_load_explanation_cache')
+            AND indisunique AND indisvalid AND indisready
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.future_load_explanation_cache_decision_uidx'
+          )
+            AND indrelid = to_regclass('public.future_load_explanation_cache')
+            AND indisunique AND indisvalid AND indisready
+        )
+        AND (
+          SELECT count(*) = 5
+          FROM pg_constraint
+          WHERE conrelid = to_regclass('public.future_load_explanation_cache')
+            AND convalidated
+            AND (
+              (conname IN (
+                'future_load_explanation_cache_session_user_fk',
+                'future_load_explanation_cache_decision_session_fk'
+              ) AND contype = 'f')
+              OR (conname IN (
+                'future_load_explanation_cache_hashes_check',
+                'future_load_explanation_cache_identity_check',
+                'future_load_explanation_cache_duration_check'
+              ) AND contype = 'c')
+            )
+        )
+        AS present
+    `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
@@ -515,6 +573,34 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     : undefined
   const appliedMigrationCount = Number(migrationLedgerState?.count ?? 0)
   const migrationLedgerCanonical = migrationLedgerState?.canonical ?? false
+  const appliedCommittedMigrationCount = migrationLedgerPresent
+    ? Number(
+        (
+          await db.execute<{ count: number }>(sql`
+            SELECT count(DISTINCT hash)::int AS count
+            FROM drizzle.__drizzle_migrations
+            WHERE hash IN (${sql.join(
+              committedHashes.map((hash) => sql`${hash}`),
+              sql`, `,
+            )})
+          `)
+        ).rows[0]?.count ?? 0,
+      )
+    : 0
+  const latestCommittedMigration = committedMigrations.at(-1)
+  const latestCommittedMigrationApplied =
+    migrationLedgerPresent && latestCommittedMigration
+      ? Boolean(
+          (
+            await db.execute<{ present: boolean }>(sql`
+              SELECT EXISTS (
+                SELECT 1 FROM drizzle.__drizzle_migrations
+                WHERE hash = ${latestCommittedMigration.hash}
+              ) AS present
+            `)
+          ).rows[0]?.present,
+        )
+      : false
   const contentRevocationIntegrityPresent =
     contentRevocationResult.rows[0]?.present ?? false
   const contentResult = await db.execute<{ count: number }>(sql`
@@ -530,12 +616,16 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     migrationLedgerPresent,
     migrationLedgerCanonical,
     appliedMigrationCount,
+    committedMigrationCount: committedMigrations.length,
+    appliedCommittedMigrationCount,
+    latestCommittedMigrationApplied,
     bootstrapTriggerPresent: triggerResult.rows[0]?.present ?? false,
     workoutSnapshotColumnsPresent: columnsResult.rows[0]?.present ?? false,
     safetyHoldIntegrityPresent: safetyHoldResult.rows[0]?.present ?? false,
     trainingCorrectionIntegrityPresent:
       trainingCorrectionResult.rows[0]?.present ?? false,
     contentRevocationIntegrityPresent,
+    llmCacheContractPresent: llmCacheResult.rows[0]?.present ?? false,
     integrityTriggerCount: integrityResult.rows[0]?.count ?? 0,
     ineligibleContentRevisionCount: contentResult.rows[0]?.count ?? 0,
   }
@@ -549,9 +639,12 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   if (!result.migrationLedgerCanonical) {
     failures.push('program-ordinal migration ledger provenance is not canonical')
   }
-  if (result.appliedMigrationCount !== expectedMigrationCount) {
+  if (
+    !result.latestCommittedMigrationApplied ||
+    result.appliedCommittedMigrationCount !== result.committedMigrationCount
+  ) {
     failures.push(
-      `expected ${expectedMigrationCount} applied migrations, found ${result.appliedMigrationCount}`,
+      `current committed migrations are incomplete (${result.appliedCommittedMigrationCount}/${result.committedMigrationCount} current hashes present; ${result.appliedMigrationCount} total historical rows)`,
     )
   }
   if (!result.bootstrapTriggerPresent) {
@@ -572,6 +665,11 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   }
   if (!result.contentRevocationIntegrityPresent) {
     failures.push('content release revocation structures are absent')
+  }
+  if (!result.llmCacheContractPresent) {
+    failures.push(
+      'latest explanation-cache ownership, provenance, constraint, or index contract is absent',
+    )
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {
     failures.push(

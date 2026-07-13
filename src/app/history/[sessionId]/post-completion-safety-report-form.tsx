@@ -7,6 +7,7 @@ import {
   type PostCompletionSafetyReportState,
   reportPostCompletionSafetyIssueAction,
 } from './actions'
+import { announceLatePainReported } from './late-pain-client-state'
 
 const initialPostCompletionSafetyReportState: PostCompletionSafetyReportState = {
   errorCode: null,
@@ -42,7 +43,8 @@ export function PostCompletionSafetyReportForm({ sessionId }: { sessionId: strin
 
   useEffect(() => {
     if (state.errorCode || state.success) resultRef.current?.focus()
-  }, [state])
+    if (state.success) announceLatePainReported(sessionId)
+  }, [sessionId, state])
 
   return (
     <section className={styles.safetyReport} aria-labelledby="history-safety-heading">

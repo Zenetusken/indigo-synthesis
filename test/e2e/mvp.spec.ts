@@ -1,137 +1,44 @@
 import { expect, type Page, test } from '@playwright/test'
-import { Client } from 'pg'
 import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
-import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import {
+  bindE2eProcessEnv,
+  bootstrapAndSignIn,
+  clearApplicationData,
+  completeSetup,
+  databaseClient,
+  generateAndActivate,
+  e2eOwner as owner,
+  todayIso,
+} from './support/journey'
 import {
   readE2eSupervisorState,
   restartE2eApplication,
 } from './support/supervisor-client'
 
+const cachedExplanationFixture = {
+  id: '01900000-0000-7000-8000-000000000101',
+  prose:
+    'The next load increases because the completed sets stayed within the development RPE boundary.',
+  modelId: 'unsloth/Qwen3.5-9B-GGUF@3885219#Qwen3.5-9B-Q4_K_M.gguf',
+  modelContentDigest: 'a'.repeat(64),
+  servedModelName: 'indigo-qwen3.5-9b-q4-k-m',
+  runtimeId: 'llama.cpp@99f3dc3:pid:123:start:456',
+  runtimeAttestationDigest: 'b'.repeat(64),
+  promptVersion: 'future-load.v3',
+  validatorVersion: 'future-load.v3',
+  factBundleHash: 'c'.repeat(64),
+  generateDurationMs: 842,
+  createdAt: '2026-07-10T12:31:00.000Z',
+} as const
+
 // Server-side modules read DATABASE_URL and BETTER_AUTH_SECRET; the E2E harness
-// exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET. Point
-// the test process at the same database and secret before any server-side import
-// resolves its configuration.
-process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
-process.env.BETTER_AUTH_SECRET = process.env.E2E_BETTER_AUTH_SECRET
-resetServerConfigForTests()
-
-const owner = {
-  name: 'E2E Owner',
-  email: 'owner@example.test',
-  password: 'correct-horse-battery-staple',
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-async function databaseClient(): Promise<Client> {
-  const connectionString = process.env.E2E_DATABASE_URL
-  if (!connectionString) throw new Error('E2E_DATABASE_URL is required.')
-  const client = new Client({ connectionString })
-  await client.connect()
-  return client
-}
-
-async function clearApplicationData(): Promise<void> {
-  const client = await databaseClient()
-  try {
-    await client.query(
-      'TRUNCATE TABLE deletion_tombstone, installation_state, "user" CASCADE',
-    )
-  } finally {
-    await client.end()
-  }
-}
-
-async function bootstrapAndSignIn(page: Page): Promise<void> {
-  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
-  await closeDb()
-
-  await page.goto('/')
-  await expect(
-    page.getByRole('heading', { name: 'Initialize this instance.' }),
-  ).toBeVisible()
-  await page.getByLabel('Host-issued bootstrap code').fill(issued.code)
-  await page.getByLabel('Name').fill(owner.name)
-  await page.getByLabel('Local sign-in email').fill(owner.email)
-  await page.locator('input[name="password"]').fill(owner.password)
-  await page.getByLabel('Confirm password').fill(owner.password)
-  await page.getByRole('button', { name: 'Create owner account' }).click()
-
-  await expect(page).toHaveURL(/\/sign-in\?created=1/)
-  await page.getByLabel('Email').fill(owner.email)
-  await page.getByLabel('Password').fill(owner.password)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page).toHaveURL(/\/setup$/)
-}
-
-async function completeSetup(
-  page: Page,
-  restriction: 'none' | 'present' | 'uncertain' = 'none',
-  units: 'metric' | 'imperial' = 'metric',
-): Promise<void> {
-  await page.getByLabel('Display units').selectOption(units)
-  await page.getByLabel('IANA timezone').fill('UTC')
-  await page.getByLabel('I confirm that I am at least 18 years old.').check()
-  await page
-    .getByLabel(
-      'I confirm that I already know how to perform the listed exercises safely.',
-    )
-    .check()
-
-  const weekdayInputs = page.locator('input[name="weekdays"]')
-  for (let index = 0; index < (await weekdayInputs.count()); index += 1) {
-    const input = weekdayInputs.nth(index)
-    if (await input.isChecked()) await input.uncheck()
-  }
-  const currentDay = new Date().getUTCDay()
-  const chosenDays = [currentDay, (currentDay + 2) % 7, (currentDay + 4) % 7]
-  for (const day of chosenDays) {
-    await page.locator(`input[name="weekdays"][value="${day}"]`).check()
-  }
-
-  await page
-    .getByLabel(
-      restriction === 'none'
-        ? 'No current restriction or uncertainty'
-        : restriction === 'present'
-          ? 'Yes, I have a current restriction'
-          : 'I am uncertain',
-    )
-    .check()
-  if (restriction !== 'none') {
-    await page
-      .getByLabel('Trainee-reported context (required for “yes” or “uncertain”)')
-      .fill('User-reported test restriction')
-  }
-
-  const startingLoads = page.locator('input[name^="load-"]')
-  for (let index = 0; index < (await startingLoads.count()); index += 1) {
-    await startingLoads.nth(index).fill('60')
-  }
-
-  await page.getByRole('button', { name: 'Save setup and review program' }).click()
-  await expect(page).toHaveURL(/\/program$/)
-}
-
-async function generateAndActivate(page: Page): Promise<void> {
-  await page.getByLabel('Program start date').fill(todayIso())
-  await page.getByRole('button', { name: 'Create development program' }).click()
-  await expect(
-    page.getByRole('heading', { name: 'Two-cycle A/B/C fixture' }),
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'Activate development program' }).click()
-  await expect(page).toHaveURL(/\/today$/)
-  await expect(
-    page.getByRole('heading', { name: /Session [ABC] is scheduled/ }),
-  ).toBeVisible()
-}
+// exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET.
+bindE2eProcessEnv()
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => {
@@ -149,6 +56,50 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
       .slice(0, 10)
   })
   expect(overflow, 'elements extending beyond the document viewport').toEqual([])
+}
+
+/** Codes-first History contract for future-load decisions (LLM may be off). */
+async function expectFutureLoadHistoryCodes(page: Page): Promise<void> {
+  await expect(page.getByRole('heading', { name: 'Future-load decisions' })).toBeVisible()
+  await expect(
+    page.getByText(
+      'Development policy only. These deterministic outputs are not human-reviewed',
+    ),
+  ).toBeVisible()
+  // At least one stored decision with reason code + rule version label.
+  const reasonCodes = page
+    .locator('code')
+    .filter({ hasText: /development\.adjustment\./ })
+  await expect(reasonCodes.first()).toBeVisible()
+  await expect(reasonCodes.first()).toContainText('rule')
+  await expect(
+    page.getByRole('button', { name: 'Explain in plain language' }).first(),
+  ).toBeVisible()
+}
+
+/**
+ * E2E default webServer does not enable INDIGO_LLM_MODE=local, so Explain must
+ * degrade honestly while leaving rule codes visible.
+ */
+async function expectExplainDegradesWhenLlmDisabled(page: Page): Promise<void> {
+  const explain = page.getByRole('button', { name: 'Explain in plain language' }).first()
+  await explain.click()
+  await expect(
+    page.getByText('Plain-language explanations are off on this instance', {
+      exact: false,
+    }),
+  ).toBeVisible({ timeout: 15_000 })
+  await expect(
+    page.getByText('The rule codes above still apply', { exact: false }),
+  ).toBeVisible()
+  // Codes remain authoritative after the soft failure.
+  await expect(
+    page
+      .locator('code')
+      .filter({ hasText: /development\.adjustment\./ })
+      .first(),
+  ).toBeVisible()
+  await expect(page.getByText('Inferred paraphrase of the stored rule')).toHaveCount(0)
 }
 
 test.beforeEach(async () => {
@@ -211,6 +162,8 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await expect(page).toHaveURL(/\/history\//)
   await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
   await expect(page.getByText('Persisted immutable completion facts')).toBeVisible()
+  await expectFutureLoadHistoryCodes(page)
+  await expectExplainDegradesWhenLlmDisabled(page)
 
   await page.goto('/today')
   await expect(
@@ -218,6 +171,9 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   ).toBeVisible()
 
   const revisionClient = await databaseClient()
+  let cachedExplanationOwner:
+    | { readonly decisionId: string; readonly sessionId: string }
+    | undefined
   try {
     const revisions = await revisionClient.query<{
       revision_number: number
@@ -249,6 +205,46 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     ])
     expect(completedTarget.rows[0]?.target_load_grams).toBe(60_000)
     expect(futureTarget.rows[0]?.target_load_grams).toBe(61_000)
+
+    const cached = await revisionClient.query<{
+      decision_id: string
+      session_id: string
+    }>(
+      `INSERT INTO future_load_explanation_cache (
+         id, user_id, session_id, decision_id, cache_key, prose, model_id,
+         model_content_digest, served_model_name, runtime_id,
+         runtime_attestation_digest, prompt_version, validator_version,
+         fact_bundle_hash, generate_duration_ms, created_at
+       )
+       SELECT $1, ws.user_id, ws.id, ad.id, $2, $3, $4, $5, $6, $7, $8,
+              $9, $10, $11, $12, $13
+       FROM adjustment_decision ad
+       JOIN workout_session ws ON ws.id = ad.session_id
+       ORDER BY ad.created_at, ad.id
+       LIMIT 1
+       RETURNING decision_id, session_id`,
+      [
+        cachedExplanationFixture.id,
+        'd'.repeat(64),
+        cachedExplanationFixture.prose,
+        cachedExplanationFixture.modelId,
+        cachedExplanationFixture.modelContentDigest,
+        cachedExplanationFixture.servedModelName,
+        cachedExplanationFixture.runtimeId,
+        cachedExplanationFixture.runtimeAttestationDigest,
+        cachedExplanationFixture.promptVersion,
+        cachedExplanationFixture.validatorVersion,
+        cachedExplanationFixture.factBundleHash,
+        cachedExplanationFixture.generateDurationMs,
+        cachedExplanationFixture.createdAt,
+      ],
+    )
+    const cachedRow = cached.rows[0]
+    if (!cachedRow) throw new Error('Could not seed the E2E explanation cache fixture.')
+    cachedExplanationOwner = {
+      decisionId: cachedRow.decision_id,
+      sessionId: cachedRow.session_id,
+    }
   } finally {
     await revisionClient.end()
   }
@@ -259,13 +255,28 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   const archive = (await exportResponse.json()) as {
     manifest: { schemaVersion: string; omissions: unknown[] }
     programs: { revisions: unknown[] }[]
-    sessions: unknown[]
+    sessions: {
+      id: string
+      adjustments: {
+        id: string
+        explanations: (typeof cachedExplanationFixture)[]
+      }[]
+    }[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.4.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.5.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)
   expect(archive.sessions).toHaveLength(1)
+  expect(cachedExplanationOwner).toBeDefined()
+  const exportedOwner = archive.sessions
+    .find((session) => session.id === cachedExplanationOwner?.sessionId)
+    ?.adjustments.find(
+      (adjustment) => adjustment.id === cachedExplanationOwner?.decisionId,
+    )
+  expect(exportedOwner?.explanations).toEqual([
+    expect.objectContaining(cachedExplanationFixture),
+  ])
   expect(JSON.stringify(archive)).not.toContain('correct-horse-battery-staple')
 
   await page.goto('/settings')
@@ -280,6 +291,9 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await expect(
     page.getByRole('heading', { name: 'Exact rows in this preview' }),
   ).toBeVisible()
+  await expect(
+    page.getByText('Future load explanation cache').locator('..'),
+  ).toContainText('1')
   await page.getByLabel('Current owner password').fill(owner.password)
   await page.getByLabel('Type RESET').fill('RESET')
   await page
@@ -298,8 +312,12 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     const tombstones = await client.query<{ count: string }>(
       'SELECT count(*) FROM deletion_tombstone',
     )
+    const cachedExplanations = await client.query<{ count: string }>(
+      'SELECT count(*) FROM future_load_explanation_cache',
+    )
     expect(Number(users.rows[0]?.count)).toBe(0)
     expect(Number(tombstones.rows[0]?.count)).toBe(1)
+    expect(Number(cachedExplanations.rows[0]?.count)).toBe(0)
   } finally {
     await client.end()
   }

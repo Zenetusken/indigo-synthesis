@@ -3,6 +3,7 @@ import { Client } from 'pg'
 import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import { clearApplicationData } from './support/journey'
 import { restartE2eApplication } from './support/supervisor-client'
 
 process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
@@ -31,17 +32,6 @@ async function databaseClient(): Promise<Client> {
   const client = new Client({ connectionString })
   await client.connect()
   return client
-}
-
-async function clearApplicationData(): Promise<void> {
-  const client = await databaseClient()
-  try {
-    await client.query(
-      'TRUNCATE TABLE deletion_tombstone, installation_state, "user" CASCADE',
-    )
-  } finally {
-    await client.end()
-  }
 }
 
 async function bootstrapAndSignIn(page: Page): Promise<void> {

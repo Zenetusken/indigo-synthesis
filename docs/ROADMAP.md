@@ -112,13 +112,21 @@ Only after Phase 2:
 - schedule-aware weekly adherence;
 - audited correction of completed sets;
 - program revision history and comparison; and
-- clearer explanation/source inspection.
+- clearer explanation/source inspection (optional host-local grounded prose per
+  [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md), only after the
+  [explanation generation contract](architecture/EXPLANATION_GENERATION_CONTRACT.md)
+  implementation sequence—not model-led coaching).
 
 Gate:
 
 - every value traces to completed source data;
 - no duplicate aggregate truth;
 - performance measurements justify any read model.
+
+Checkpoint: append-only correction of completed sets and completion feedback, recursive
+decision/revision invalidation, factual History correction provenance, and optional
+host-local explanations are implemented. Exercise-specific aggregates, e1RM/PR/volume/
+adherence definitions, and program comparison remain open, so Phase 3 is not closed.
 
 ## Phase 4 — Small private beta
 

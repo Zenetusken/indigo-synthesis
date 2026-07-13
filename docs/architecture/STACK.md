@@ -97,7 +97,8 @@ Tailwind and a broad UI kit are rejected for the foundation, not prohibited fore
 - Server components fetch initial read models.
 - Server actions/application commands perform mutations.
 - No Zustand or TanStack Query until a measured interaction need is documented.
-- No cache until profiling identifies an expensive repeatable query.
+- No general-purpose client/query cache. The one narrow exception is the measured,
+  provenance-keyed PostgreSQL cache for validated History explanation prose.
 
 ## Deliberately absent
 
@@ -110,10 +111,19 @@ Tailwind and a broad UI kit are rejected for the foundation, not prohibited fore
 - WebSockets
 - service mesh
 - SaaS analytics/monitoring
-- model/AI SDK
+- cloud/vendor model SDK
 - remote font/CDN dependency
 - PWA/offline synchronization package
 - native mobile framework
 - Docker and CI/CD configuration
 
 Each requires its own measured need, entry criterion, and ADR.
+
+Optional local language generation for **grounded explanation prose only** is implemented
+on completed-session History. Platform infrastructure lives under `src/platform/llm`;
+the current supported product profile is one exact-artifact Qwen3.5-9B Q4_K_M pack plus
+a pinned/attested CUDA llama.cpp runtime. `INDIGO_LLM_MODE=disabled` remains the default,
+there is no cloud model SDK, and deterministic codes remain authoritative. See
+[ADR 0006](adr/0006-optional-local-grounded-language.md), the
+[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md), and
+[llm/README.md](../../llm/README.md).

@@ -1,4 +1,4 @@
-import { asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import {
   type CanonicalValue,
   canonicalSha256,
@@ -15,6 +15,7 @@ import {
   auditEvents,
   contentReleaseRevocations,
   exercisePrescriptions,
+  futureLoadExplanationCache,
   performedSetCorrections,
   performedSets,
   plannedWorkouts,
@@ -35,7 +36,7 @@ import {
   workoutSessions,
 } from '@/platform/db/schema'
 
-export const exportSchemaVersion = '1.4.0-development'
+export const exportSchemaVersion = '1.5.0-development'
 
 function canonical(value: unknown): CanonicalValue {
   return JSON.parse(JSON.stringify(value)) as CanonicalValue
@@ -261,6 +262,40 @@ export async function createDataExport(actor: {
               .orderBy(
                 asc(adjustmentDecisions.sessionId),
                 asc(adjustmentDecisions.exerciseCode),
+              )
+      const explanationRows =
+        sessionIds.length === 0
+          ? []
+          : await transaction
+              .select({
+                id: futureLoadExplanationCache.id,
+                sessionId: futureLoadExplanationCache.sessionId,
+                decisionId: futureLoadExplanationCache.decisionId,
+                prose: futureLoadExplanationCache.prose,
+                modelId: futureLoadExplanationCache.modelId,
+                modelContentDigest: futureLoadExplanationCache.modelContentDigest,
+                servedModelName: futureLoadExplanationCache.servedModelName,
+                runtimeId: futureLoadExplanationCache.runtimeId,
+                runtimeAttestationDigest:
+                  futureLoadExplanationCache.runtimeAttestationDigest,
+                promptVersion: futureLoadExplanationCache.promptVersion,
+                validatorVersion: futureLoadExplanationCache.validatorVersion,
+                factBundleHash: futureLoadExplanationCache.factBundleHash,
+                generateDurationMs: futureLoadExplanationCache.generateDurationMs,
+                createdAt: futureLoadExplanationCache.createdAt,
+              })
+              .from(futureLoadExplanationCache)
+              .where(
+                and(
+                  eq(futureLoadExplanationCache.userId, actor.userId),
+                  inArray(futureLoadExplanationCache.sessionId, sessionIds),
+                ),
+              )
+              .orderBy(
+                asc(futureLoadExplanationCache.sessionId),
+                asc(futureLoadExplanationCache.decisionId),
+                asc(futureLoadExplanationCache.createdAt),
+                asc(futureLoadExplanationCache.id),
               )
 
       const correctionRows =
@@ -573,6 +608,9 @@ export async function createDataExport(actor: {
                         correction: correctionAttribution(invalidation.correctionId),
                       }
                     : null,
+                  explanations: explanationRows.filter(
+                    (explanation) => explanation.decisionId === adjustment.id,
+                  ),
                 }
               }),
             corrections: correctionRows.filter(
@@ -597,6 +635,8 @@ export async function createDataExport(actor: {
             'loadProvenance and repetitionsProvenance distinguish copied targets from trainee edits; explicitlyConfirmed and confirmedAt record attestation.',
           adjustment:
             'Each adjustment records the source session, rule version, reason code, prior load, proposed load, applied revision, and permanent correction-attributed invalidation when present.',
+          explanation:
+            'Each cached validated explanation is nested under its owning adjustment and retains model, artifact, served-model, runtime, prompt, validator, FactBundle, generation-duration, and creation provenance.',
           correction:
             'Original feedback and resolved-set facts are retained. Ordered, actor-attributed corrections expose a separate effective projection without rewriting history.',
           contentRevocation:

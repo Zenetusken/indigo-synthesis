@@ -9,7 +9,9 @@
       "!!next-env.d.ts",
       "!!coverage",
       "!!playwright-report",
-      "!!test-results"
+      "!!test-results",
+      "!!tmp",
+      "!!drizzle/meta"
     ]
   },
   "formatter": {

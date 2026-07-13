@@ -143,6 +143,14 @@ describe('architecture boundaries', () => {
       /(?:url\(\s*["']?\s*|@import\s+(?:url\(\s*)?["']?)https?:\/\//
     const remoteStylesheetLinkPattern =
       /<link\b(?=[^>]*\brel\s*=\s*["']stylesheet["'])[^>]*\bhref\s*=\s*(?:["']|\{\s*["'])\s*https?:\/\//
+    /**
+     * Allowed LLM loopback HTTP clients only. Completions adapter must keep
+     * assertLoopbackEndpoint; preflight only hits configured loopback endpoints.
+     */
+    const loopbackLlmClientAllowlist = new Set([
+      'src/platform/llm/adapters/openai-compatible-loopback.ts',
+      'src/platform/llm/runtime/preflight.ts',
+    ])
     const runtimeFiles = [
       ...filesMatching(sourceRoot, /\.(?:[cm]?[jt]sx?|css)$/),
       ...filesMatching(resolve(process.cwd(), 'scripts'), /\.(?:[cm]?[jt]sx?|css)$/),
@@ -154,6 +162,7 @@ describe('architecture boundaries', () => {
     const violations = runtimeFiles
       .filter((path) => !path.endsWith('.test.ts') && !path.endsWith('.test.tsx'))
       .filter((path) => {
+        if (loopbackLlmClientAllowlist.has(projectPath(path))) return false
         const source = readFileSync(path, 'utf8')
         return (
           outboundClientPattern.test(source) ||
@@ -165,6 +174,17 @@ describe('architecture boundaries', () => {
       .map(projectPath)
 
     expect(violations).toEqual([])
+  })
+
+  it('keeps the loopback LLM client host-restricted', () => {
+    const clientPath = resolve(
+      sourceRoot,
+      'platform/llm/adapters/openai-compatible-loopback.ts',
+    )
+    const source = readFileSync(clientPath, 'utf8')
+    expect(source).toContain('assertLoopbackEndpoint')
+    expect(source).toContain('127.0.0.1')
+    expect(source).toMatch(/LOOPBACK_HOSTS|loopback/)
   })
 
   it('keeps the module dependency graph acyclic', () => {

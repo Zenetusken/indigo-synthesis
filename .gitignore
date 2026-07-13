@@ -13,3 +13,11 @@ test-results/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# Optional local model weights (operator-installed; never commit binaries)
+*.gguf
+llm/weights/**
+!llm/weights/.gitkeep
+
+# Operator LLM measurement archives (product-path multi-run)
+tmp/

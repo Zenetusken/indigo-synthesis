@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "modelId": "qwen3.5-9b-q4_k_m",
+  "displayName": "Qwen3.5 9B (Q4_K_M)",
+  "family": "qwen3.5",
+  "parameterCountLabel": "9B",
+  "format": "gguf",
+  "quantization": "Q4_K_M",
+  "source": {
+    "huggingfaceRepo": "unsloth/Qwen3.5-9B-GGUF",
+    "huggingfaceFileGlob": "*Q4_K_M*.gguf",
+    "baseModel": "Qwen/Qwen3.5-9B",
+    "notes": "Operator must verify license and file digest after download. Default pack for grounded explanation."
+  },
+  "artifacts": {
+    "weightsRelativePath": "qwen3.5-9b-q4_k_m.gguf",
+    "expectedSha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "approxSizeBytes": 5680000000
+  },
+  "runtime": {
+    "adapter": "openai-compatible-loopback",
+    "defaultEndpoint": "http://127.0.0.1:8080/v1",
+    "servedModelName": "qwen3.5-9b-q4_k_m",
+    "recommendedServer": "pinned-llama.cpp-cuda",
+    "minLlamaCppNote": "Use the repository-pinned CUDA llama-server through pnpm llm:serve. Product readiness requires a matching runtime attestation and exact served model identity."
+  },
+  "chat": {
+    "enableThinking": false,
+    "systemPromptProfile": "grounded-explanation"
+  },
+  "sampling": {
+    "temperature": 0.3,
+    "topP": 0.8,
+    "topK": 20,
+    "minP": 0.0,
+    "presencePenalty": 0.0,
+    "repetitionPenalty": 1.0,
+    "maxTokens": 256
+  },
+  "limits": {
+    "timeoutMs": 3000,
+    "maxContextTokens": 4096
+  },
+  "capabilities": {
+    "tasks": ["grounded-explanation"],
+    "multimodal": false
+  }
+}
