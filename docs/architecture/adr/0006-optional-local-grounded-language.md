@@ -1,7 +1,7 @@
 # ADR 0006: Optional local language model for grounded explanation only
 
-- Status: accepted; **History on-demand Explain implemented** (default LLM off; GPU-local
-  optional). Prose **cache + invalidation** still open (contract §14.6).
+- Status: accepted; History on-demand Explain + PG prose cache implemented (default LLM
+  off; GPU-local optional). Program-page Explain still open.
 - Date: 2026-07-12
 - Supplements: [ADR 0003](0003-deterministic-methodology.md), [ADR 0004](0004-self-hosted-online-first.md)
 - Contract: [Explanation generation contract](../EXPLANATION_GENERATION_CONTRACT.md)

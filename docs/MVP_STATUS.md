@@ -186,9 +186,14 @@ language models.
 - LLM-off e2e pin in `pnpm test:e2e`; GPU-on pin in `pnpm test:e2e:llm`;
 - operator multi-run archive: `pnpm llm:archive-product-path` (writes `tmp/llm-runs/`).
 
-**Still open:** prose **cache** / migration (contract §7), Program-page Explain, any
-methodology authority change. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
-**coaching** remains deferred. CI does not require GGUF weights.
+**Prose cache (implemented):** PostgreSQL `future_load_explanation_cache` stores only
+validation-passing available prose, keyed by contract `explanationCacheKey`. Cache hits
+skip model preflight/synthesize; History UI labels them `cached`. Cascades with user,
+session, and decision deletion. Not part of the immutable training ledger.
+
+**Still open:** Program-page Explain, decision.invalidated FactBundle wiring for active
+correction invalidation, any methodology authority change. `INDIGO_LLM_MODE` defaults to
+`disabled`. LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 
 ## Production-release blockers
 

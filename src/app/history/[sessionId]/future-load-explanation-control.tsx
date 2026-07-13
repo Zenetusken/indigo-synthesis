@@ -66,7 +66,8 @@ export function FutureLoadExplanationControl(props: {
             </p>
             <p className={styles.explanationProse}>{result.prose}</p>
             <p className={styles.explanationMeta}>
-              Local model {result.modelId} · {result.durationMs} ms · rules still
+              Local model {result.modelId}
+              {result.fromCache ? ' · cached' : ''} · {result.durationMs} ms · rules still
               authoritative
             </p>
           </>

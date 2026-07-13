@@ -1,6 +1,11 @@
 import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
+  createPostgresFutureLoadExplanationCache,
+  type FutureLoadExplanationCachePort,
+} from '@/modules/training/application/future-load-explanation-cache'
+import {
   composeLlmStack,
+  explanationCacheKey,
   FUTURE_LOAD_PROMPT_VERSION,
   getLlmConfig,
   type LlmComposition,
@@ -26,6 +31,10 @@ export type FutureLoadExplanationResult =
       readonly factBundleHash: string
       readonly durationMs: number
       readonly inferred: true
+      /** True when prose was served from PostgreSQL cache without calling the model. */
+      readonly fromCache: boolean
+      /** Original synthesize wall time when known (cache row or this miss). */
+      readonly generateDurationMs: number
     }
   | {
       readonly status: 'unavailable'
@@ -39,6 +48,7 @@ export type ExplainFutureLoadDecisionDeps = {
   readonly getConfig?: () => LlmRuntimeConfig
   readonly compose?: (config: LlmRuntimeConfig) => LlmComposition
   readonly preflight?: (config: LlmRuntimeConfig) => Promise<LlmPreflightReport>
+  readonly cache?: FutureLoadExplanationCachePort | null
   /** Interactive budget for History (ms). Defaults to config override or 8000. */
   readonly interactiveTimeoutMs?: number
 }
@@ -48,6 +58,7 @@ const defaultInteractiveTimeoutMs = 8_000
 /**
  * On-demand plain-language explanation for one stored future-load decision.
  * Never invents a decision; codes path remains authoritative when this is unavailable.
+ * Successful validation-passing prose may be cached by contract cache key.
  */
 export async function explainFutureLoadDecision(input: {
   readonly userId: string
@@ -61,6 +72,10 @@ export async function explainFutureLoadDecision(input: {
   const getConfig = input.deps?.getConfig ?? getLlmConfig
   const compose = input.deps?.compose ?? composeLlmStack
   const preflight = input.deps?.preflight ?? runLlmPreflight
+  const cache =
+    input.deps?.cache === undefined
+      ? createPostgresFutureLoadExplanationCache()
+      : input.deps.cache
 
   const bundlesResult = await getBundles(input.userId, input.sessionId)
   if (bundlesResult.status !== 'available') {
@@ -107,6 +122,61 @@ export async function explainFutureLoadDecision(input: {
     }
   }
 
+  // Need model identity for cache key before preflight so hits skip GPU readiness.
+  const stack = compose(config)
+  const modelId = stack.activeSettings?.modelId ?? config.modelId
+  const modelContentDigest =
+    config.modelSha256Override ??
+    stack.activeSettings?.artifacts.expectedSha256 ??
+    'unverified'
+
+  if (!modelId || !stack.explanationGenerator) {
+    // Still require readiness when we cannot compose a generator.
+    const readiness = await preflight(config)
+    if (!readiness.readyForLocalInference) {
+      return {
+        status: 'unavailable',
+        reason: 'llm-not-ready',
+        detail:
+          readiness.blockers[0] ??
+          'Local model is not available right now; stored rule codes still apply.',
+        durationMs: elapsed(),
+      }
+    }
+    return {
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: 'Explanation generator is not composed for the current configuration.',
+      durationMs: elapsed(),
+    }
+  }
+
+  const cacheKey = explanationCacheKey({
+    decisionId: input.decisionId,
+    promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+    modelId,
+    modelContentDigest,
+    factBundleHash: item.factBundleHash,
+  })
+
+  if (cache) {
+    const hit = await cache.getByCacheKey(cacheKey)
+    if (hit) {
+      return {
+        status: 'available',
+        prose: hit.prose,
+        modelId: hit.modelId,
+        modelContentDigest: hit.modelContentDigest,
+        promptVersion: hit.promptVersion,
+        factBundleHash: hit.factBundleHash,
+        durationMs: elapsed(),
+        inferred: true,
+        fromCache: true,
+        generateDurationMs: hit.generateDurationMs,
+      }
+    }
+  }
+
   const readiness = await preflight(config)
   if (!readiness.readyForLocalInference) {
     return {
@@ -119,26 +189,18 @@ export async function explainFutureLoadDecision(input: {
     }
   }
 
-  const stack = compose(config)
-  if (!stack.explanationGenerator) {
-    return {
-      status: 'unavailable',
-      reason: 'llm-not-ready',
-      detail: 'Explanation generator is not composed for the current configuration.',
-      durationMs: elapsed(),
-    }
-  }
-
   const timeoutMs =
     input.deps?.interactiveTimeoutMs ??
     config.timeoutMsOverride ??
     defaultInteractiveTimeoutMs
 
+  const synthesisStarted = performance.now()
   const synthesis = await stack.explanationGenerator.synthesize({
     factBundle: item.factBundle,
     promptVersion: FUTURE_LOAD_PROMPT_VERSION,
     timeoutMs,
   })
+  const generateDurationMs = Math.round(performance.now() - synthesisStarted)
 
   if (synthesis.status !== 'available') {
     return {
@@ -147,6 +209,21 @@ export async function explainFutureLoadDecision(input: {
       detail: `${synthesis.reason}${synthesis.detail ? `: ${synthesis.detail}` : ''}`,
       durationMs: elapsed(),
     }
+  }
+
+  if (cache) {
+    await cache.put({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      decisionId: input.decisionId,
+      cacheKey,
+      prose: synthesis.prose,
+      modelId: synthesis.modelId,
+      modelContentDigest: synthesis.modelContentDigest,
+      promptVersion: synthesis.promptVersion,
+      factBundleHash: synthesis.factBundleHash,
+      generateDurationMs,
+    })
   }
 
   return {
@@ -158,5 +235,7 @@ export async function explainFutureLoadDecision(input: {
     factBundleHash: synthesis.factBundleHash,
     durationMs: elapsed(),
     inferred: true,
+    fromCache: false,
+    generateDurationMs,
   }
 }

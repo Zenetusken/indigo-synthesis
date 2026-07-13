@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { explainFutureLoadDecision } from '@/modules/training/application/future-load-explanation'
+import { createMemoryFutureLoadExplanationCache } from '@/modules/training/application/future-load-explanation-cache'
 import type { FutureLoadFactBundlesResult } from '@/modules/training/application/future-load-fact-bundle'
 import type { LlmComposition, LlmRuntimeConfig } from '@/platform/llm'
 import { FUTURE_LOAD_PROMPT_VERSION } from '@/platform/llm'
@@ -115,6 +116,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
+        cache: null,
         getBundles: async () => sampleBundleResult(),
         getConfig: disabledConfig,
         compose: () =>
@@ -147,6 +149,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId: 'missing',
       deps: {
+        cache: null,
         getBundles: async () => sampleBundleResult(),
         getConfig: disabledConfig,
       },
@@ -160,6 +163,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
+        cache: null,
         getBundles: async () => ({
           status: 'available',
           bundles: [],
@@ -181,12 +185,13 @@ describe('explainFutureLoadDecision', () => {
     })
   })
 
-  it('returns llm-not-ready when preflight fails', async () => {
+  it('returns llm-not-ready when preflight fails on a cache miss', async () => {
     const result = await explainFutureLoadDecision({
       userId,
       sessionId,
       decisionId,
       deps: {
+        cache: null,
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>
@@ -194,9 +199,27 @@ describe('explainFutureLoadDecision', () => {
             readyForLocalInference: false,
             blockers: ['GPU required but not ready'],
           }) as never,
-        compose: () => {
-          throw new Error('compose should not run')
-        },
+        compose: () =>
+          ({
+            config: localConfig(),
+            registry: null,
+            activeSettings: {
+              modelId: 'qwen3.5-9b-q4_k_m',
+              artifacts: { expectedSha256: 'b'.repeat(64) },
+            },
+            languageModel: {
+              complete: async () => ({
+                status: 'unavailable',
+                reason: 'disabled',
+                detail: null,
+              }),
+            },
+            explanationGenerator: {
+              synthesize: async () => {
+                throw new Error('should not synthesize')
+              },
+            },
+          }) as unknown as LlmComposition,
       },
     })
     expect(result).toMatchObject({
@@ -214,6 +237,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
+        cache: null,
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>
@@ -225,7 +249,10 @@ describe('explainFutureLoadDecision', () => {
           ({
             config: localConfig(),
             registry: null,
-            activeSettings: { modelId: 'qwen3.5-9b-q4_k_m' },
+            activeSettings: {
+              modelId: 'qwen3.5-9b-q4_k_m',
+              artifacts: { expectedSha256: 'b'.repeat(64) },
+            },
             languageModel: {
               complete: async () => ({
                 status: 'unavailable',
@@ -255,10 +282,72 @@ describe('explainFutureLoadDecision', () => {
       prose,
       modelId: 'qwen3.5-9b-q4_k_m',
       promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      fromCache: false,
     })
     if (result.status === 'available') {
       expect(result.durationMs).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  it('serves a second request from cache without synthesizing again', async () => {
+    const prose =
+      'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.'
+    const synthesize = vi.fn(async () => ({
+      status: 'available' as const,
+      prose,
+      modelId: 'qwen3.5-9b-q4_k_m',
+      modelContentDigest: 'b'.repeat(64),
+      runtimeId: 'fake',
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      factBundleHash: 'a'.repeat(64),
+      generatedAt: '2026-07-13T00:00:00.000Z',
+    }))
+    const preflight = vi.fn(async () => ({
+      readyForLocalInference: true,
+      blockers: [],
+    }))
+    const cache = createMemoryFutureLoadExplanationCache()
+    const deps = {
+      cache,
+      getBundles: async () => sampleBundleResult(),
+      getConfig: localConfig,
+      preflight: preflight as never,
+      compose: () =>
+        ({
+          config: localConfig(),
+          registry: null,
+          activeSettings: {
+            modelId: 'qwen3.5-9b-q4_k_m',
+            artifacts: { expectedSha256: 'b'.repeat(64) },
+          },
+          languageModel: {
+            complete: async () => ({
+              status: 'unavailable',
+              reason: 'disabled',
+              detail: null,
+            }),
+          },
+          explanationGenerator: { synthesize },
+        }) as unknown as LlmComposition,
+    }
+
+    const first = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps,
+    })
+    const second = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps,
+    })
+
+    expect(first).toMatchObject({ status: 'available', fromCache: false, prose })
+    expect(second).toMatchObject({ status: 'available', fromCache: true, prose })
+    expect(synthesize).toHaveBeenCalledTimes(1)
+    expect(preflight).toHaveBeenCalledTimes(1)
   })
 
   it('maps synthesis failure without inventing prose', async () => {
@@ -267,6 +356,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
+        cache: null,
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>
@@ -278,7 +368,10 @@ describe('explainFutureLoadDecision', () => {
           ({
             config: localConfig(),
             registry: null,
-            activeSettings: null,
+            activeSettings: {
+              modelId: 'qwen3.5-9b-q4_k_m',
+              artifacts: { expectedSha256: 'b'.repeat(64) },
+            },
             languageModel: {
               complete: async () => ({
                 status: 'unavailable',

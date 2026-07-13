@@ -133,6 +133,11 @@ test.describe('live GPU History explanations', () => {
       expect(proseText).toMatch(/61(?:\s*kg)?/)
     }
 
+    // Re-explain the same decision: should hit prose cache (no second model wait).
+    await explain.click()
+    await expect(decisionItem.getByText(/· cached/)).toBeVisible({ timeout: 15_000 })
+    await expect(reasonCodes.first()).toBeVisible()
+
     // Second decision (when present): codes stay visible whether prose succeeds or soft-fails.
     const explainButtons = page.getByRole('button', {
       name: 'Explain in plain language',

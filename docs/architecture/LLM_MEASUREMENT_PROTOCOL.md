@@ -113,4 +113,4 @@ with `RUNS=3`) before considering cache or broader enablement experiments.
 4. ~~Application FactBundle wiring from completed sessions~~ (`getFutureLoadFactBundlesForSession`)
 5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
 6. ~~Product-path multi-run discipline + live latency metrics (H9/H10)~~ (`pnpm llm:archive-product-path`)
-7. Cache only after multi-run product path is archived and invalidation rules are defined
+7. ~~Explanation prose cache~~ (`future_load_explanation_cache`; validation-passing only; subject cascade)

@@ -853,6 +853,37 @@ export const programRevisionInvalidations = pgTable(
   ],
 )
 
+/** Optional grounded explanation prose; never part of the authoritative training ledger. */
+export const futureLoadExplanationCache = pgTable(
+  'future_load_explanation_cache',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => workoutSessions.id, { onDelete: 'cascade' }),
+    decisionId: text('decision_id')
+      .notNull()
+      .references(() => adjustmentDecisions.id, { onDelete: 'cascade' }),
+    cacheKey: text('cache_key').notNull(),
+    prose: text('prose').notNull(),
+    modelId: text('model_id').notNull(),
+    modelContentDigest: text('model_content_digest').notNull(),
+    promptVersion: text('prompt_version').notNull(),
+    factBundleHash: text('fact_bundle_hash').notNull(),
+    /** Wall time of the original successful synthesize (ms); not cache-hit time. */
+    generateDurationMs: integer('generate_duration_ms').notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex('future_load_explanation_cache_key_uidx').on(table.cacheKey),
+    index('future_load_explanation_cache_user_idx').on(table.userId),
+    index('future_load_explanation_cache_decision_idx').on(table.decisionId),
+  ],
+)
+
 export const auditEvents = pgTable(
   'audit_event',
   {
