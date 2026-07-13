@@ -47,9 +47,11 @@ resolved, avoiding a spoofable or globally shared rate-limit bucket.
 ## No mandatory outbound network
 
 After installation, the complete core journey is designed to work with outbound network
-access blocked. Source guards and browser request observation cover the current
-implementation, while the retained end-to-end proof in a network-denied environment
-remains an open release gate.
+access blocked. Source guards and browser request observation cover the normal suite. A
+checked-in Linux namespace runner additionally removes every non-loopback interface and
+default route while exposing PostgreSQL through a private Unix-socket bridge. That runner
+has passed the preceding 15-test default tree; retaining a rerun of the current 19-test
+suite from the final clean commit remains the open release-evidence step.
 
 Therefore:
 
@@ -97,12 +99,13 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 16 current committed migration
+`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 17 current committed migration
 hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
 enforcement, current snapshot/revision and correction/invalidation structures,
-append-only content-release revocations, the explanation-cache contract, and all 28
-required enabled trigger/table/function bindings. `pnpm start` runs this preflight before
-starting the production server. Both
+append-only content-release revocations, the access/recovery persistence and HMAC-keyed
+admission contract, the explanation-cache contract, and all 28 required enabled
+trigger/table/function bindings. `pnpm start` runs this preflight before starting the
+production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.
@@ -120,13 +123,24 @@ Development content is never a production fallback: a production process rejects
 - Database user insertion requires an explicit transaction-local `bootstrap-owner` or
   `owner-admin` creation mode. Missing and unknown modes fail closed.
 - Public signup remains off after bootstrap.
-- The owner can directly create local users with an initial password that is shared out
-  of band. No invitation or email-delivery flow exists.
-- The current slice has no SMTP or browser password-reset adapter. If the only owner is
-  locked out, a host-local administrative command with database access may issue an
-  expiring one-use recovery code. Redemption revokes existing sessions and records a
-  redacted audit event. Member self-service reset and optional SMTP remain future work.
-- Core auth does not expose refresh tokens to browser JavaScript.
+- The owner can create local users only after current-password reauthentication; the
+  initial password is shared out of band. No invitation or email-delivery flow exists.
+- A reauthenticated owner may issue an expiring, one-use reset code for a non-owner
+  account. The trainee redeems it through `/reset` and chooses the final password. The
+  owner account cannot be a member-reset target.
+- If the only owner is locked out, a host-local administrative command with database
+  access issues an expiring, one-use recovery code. Redemption is available through
+  protected CLI files or `/recover`; the latter is never a browser-only recovery path
+  because issuance remains host-anchored.
+- Both recovery flows replace the credential, revoke every affected PostgreSQL session,
+  and append a redacted audit event. Web recovery uses HMAC-keyed fixed-window admission,
+  minimized client-address audit data, and bounded cleanup; raw identifiers and secrets
+  do not enter throttle or audit rows.
+- Session reads disable cookie caching. Core credential auth exposes no bearer, JWT, or
+  refresh-token path to browser JavaScript, so database session revocation takes effect
+  on the next request.
+- The current slice has no SMTP/self-service email reset, public signup, role mutation,
+  standalone session-management UI, or security-events view.
 
 ## Data ownership
 
@@ -144,9 +158,12 @@ order inside one serializable transaction; Identity is last. Subject deletion re
 non-personal completion tombstone. Instance reset also retains the cleared singleton
 installation record and any earlier non-personal tombstones, then appends its own
 tombstone. Tombstones contain only event metadata, aggregate row counts, schema version,
-and a completion digest. Subject deletion and instance reset are tested; supported
-backup/restore procedures remain operator responsibility and an open pre-beta release
-gate.
+and a completion digest. Subject deletion and instance reset are tested. A guarded
+manual PostgreSQL backup/restore procedure and disposable-database drill now exercise
+logical archive, full schema wipe/restore, exact marker recovery, append-only trigger
+behavior, and startup preflight. Operators still own encryption, off-host retention,
+runtime-secret custody, deployment-specific restore practice, recovery objectives, and
+any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
 
 ## Privacy and telemetry
 
@@ -184,6 +201,10 @@ without need.
 The first release gate includes a test environment where outbound network is denied and
 only the application, PostgreSQL, and optional media directory are available.
 
-This remains an open release proof. The implementation has no mandatory runtime cloud
-adapter, but the complete browser journey has not yet been retained from an
-outbound-network-denied environment. See [MVP status](../MVP_STATUS.md).
+`scripts/e2e/run-network-denied.sh` now supplies that runtime boundary and has passed the
+preceding 15-test default tree. The current branch adds four access/recovery cases, so the
+final release record still requires a clean-commit 19/19 rerun. See the
+[acceptance runbook](../operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md) and
+[MVP status](../MVP_STATUS.md). Independent methodology, security/privacy, WCAG,
+physical-device, cold-install, HTTPS-ingress, and off-host-retention gates remain
+separate.

@@ -11,11 +11,12 @@ the slice uses a generic product schema and a clean-room `0.0.1-development` fix
 That fixture is visibly unreviewed and configuration rejects it in production.
 
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
-reviewed content and golden examples, an outbound-network-blocked browser run,
-independent WCAG/screen-reader and physical-device review, schema/table-ownership
-enforcement, and independent product/security review. Targeted automated
-accessibility/mobile checks already pass; they are not a conformance claim. Current
-traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
+reviewed content and golden examples, a final-clean-commit retention run through the
+outbound-network-denied browser harness, independent WCAG/screen-reader and
+physical-device review, schema/table-ownership enforcement, and independent
+product/security/privacy review. Targeted automated accessibility/mobile checks already
+pass; they are not a conformance claim. Current traceability and debt are recorded in
+[MVP_STATUS.md](MVP_STATUS.md).
 
 The distinction is deliberate: the technical workflow exists, while every exercise,
 volume, load, rest, progression, population, safety, evidence, and rights decision in a
@@ -28,29 +29,26 @@ account-security and cold-start slice. It may be implemented independently of me
 review, but it does not close Gate 0 or expand the J1–J6 Release 1 acceptance gate by
 implication.
 
-Current checkpoint:
+Implemented checkpoint:
 
-- host-issued owner recovery with CLI redemption, session revocation, and audit is live;
-- owner-created trainee accounts are live; and
-- trainee credential recovery, web owner-recovery redemption, and locked-out sign-in
-  orientation are specified but not implemented.
+- J7 owner-mediated trainee reset is live with reauthentication, expiring one-use codes,
+  digest-only storage, fixed-window admission, non-destructive code backoff, credential
+  serialization, session revocation, and redacted audit;
+- J8 keeps host-only issuance and CLI redemption as the root-of-trust escape path while
+  adding the hardened `/recover` web redemption surface;
+- J9 gives each locked-out persona a concrete next action without public signup or
+  account-existence disclosure;
+- a cause-neutral session-ended sign-in path safely returns a revoked mid-workout
+  browser to its exact persisted workout; and
+- unmocked browser/database proof covers data preservation, session revocation, audit
+  minimization/cardinality, and the non-amplifying owner-recovery throttle.
 
-Deliver:
-
-1. owner-mediated, expiring one-use trainee reset codes with target-scoped credential
-   locking, bounded abuse controls, and session revocation;
-2. a hardened web redemption path for host-issued owner recovery while preserving CLI
-   redemption as the host-trust escape path;
-3. uniform, non-enumerating sign-in/reset/recovery failures and explicit next actions for
-   trainee, owner, and no-account visitors;
-4. fresh owner reauthentication for credential-lifecycle administration; and
-5. unmocked browser/database proof that recovery preserves the subject's training data and
-   revokes affected sessions.
-
-Gate: the end-goal invariants, journey budgets, audit requirements, accessibility checks,
-and operational proof in the access/recovery specification pass. Until then, existing CLI
-owner recovery is shipped infrastructure, while J7 and J9 plus the web portion of J8 remain
-an open product slice.
+Gate status: the baseline J7–J9 engineering slice and its specified hardening are
+implemented. The current default Playwright selection contains 19 tests; the four new
+access/recovery cases are green in focused runs, and the final combined clean-commit run
+remains part of branch closure. The separately named Account security follow-on—session
+management plus a security-events view and sign-in-failure auditing—remains future work.
+Neither result closes Gate 0 or substitutes for independent security/privacy review.
 
 ## Gate 0 — Product truth
 
@@ -94,8 +92,9 @@ Gate:
 
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
 configuration validation, local assets, and executable module-boundary guards are
-implemented. The release evidence still needs the outbound-network-blocked run and
-schema/table-ownership enforcement.
+implemented. A no-default-route namespace runner has passed the preceding 15-test
+browser tree; the final current 19-test clean-commit record and schema/table-ownership
+enforcement remain open release evidence.
 
 ## Phase 2 — First vertical slice
 
@@ -181,6 +180,12 @@ Success measures:
 - weekly return to the prescribed plan;
 - explanation comprehension; and
 - successful export/restore.
+
+Checkpoint: a guarded PostgreSQL logical backup/restore runbook and disposable-instance
+drill are implemented and exercised, including restored preflight and append-only trigger
+proof. Phase 4 still requires the second-person cold install, encrypted off-host
+retention/restore exercise, deployment-specific secret custody, and any future media
+boundary; repository-local technical proof cannot stand in for those operator checks.
 
 Screen time, notification opens, points, and social engagement are not success measures.
 

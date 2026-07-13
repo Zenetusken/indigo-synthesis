@@ -359,8 +359,9 @@ Rules:
   `fetch` references used for injectable test signatures remain allowed.
 - Core config remains valid with inference unset.
 - Inference-disabled operation remains compatible with the required
-  outbound-network-denied release proof; retaining that full browser run is still an open
-  product-release gate.
+  outbound-network-denied release proof. The namespace runner has passed the preceding
+  15-test default tree with inference disabled; the current 19-test clean-commit rerun is
+  still required for the final product-release record.
 - Adapters are swappable behind `ExplanationGenerationPort` (different engines/formats
   are infrastructure choices, not domain changes).
 - Implemented optional config surface (the listed model/runtime values are the current

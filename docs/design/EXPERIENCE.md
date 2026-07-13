@@ -34,8 +34,8 @@ Current primary navigation:
 Current secondary navigation:
 
 - **Settings** — account facts, read-only training context, owner-created local users,
-  subject export/deletion, and owner-only instance reset. Profile/unit editing and
-  appearance controls are not built.
+  owner-mediated per-trainee reset-code issuance, subject export/deletion, and owner-only
+  instance reset. Profile/unit editing and appearance controls are not built.
 
 No empty Community, Nutrition, Recovery, or Profile destination occupies navigation.
 
@@ -94,6 +94,25 @@ or an opaque generator.
 No carousel, body-composition demand, mandatory photo, long assessment, or feature tour
 blocks the first program.
 
+### Locked-out access and recovery
+
+Current engineering slice:
+
+- On a claimed instance, sign-in keeps the credential form primary and places recovery
+  orientation in one collapsed **Can't sign in?** disclosure. The wordmark and current
+  content-mode label appear before credential entry.
+- A locked-out trainee asks the owner out of band. In Settings, the owner opens the
+  target-specific **Issue password reset code for {name}** control, sees that reissue
+  invalidates any earlier unused code, re-enters the owner password, and hands over the
+  one-use code. The trainee follows **Use a trainee reset code**, chooses a new password,
+  and returns to sign-in after all old sessions are revoked.
+- A locked-out owner uses host access to issue a recovery code, then follows **Use a
+  host-issued owner recovery code** or redeems through the host CLI. The CLI path remains
+  the unthrottled recovery escape path.
+- A visitor without an account is told that only the owner creates local accounts and
+  that public signup is unavailable. On an unclaimed instance, sign-in and both recovery
+  routes redirect to bootstrap.
+
 ### Returning use
 
 Open Today → Resume active session or review today's prescription → Start
@@ -119,6 +138,11 @@ Current engineering slice:
    changing the prescription because no reviewed substitution release is installed.
 8. Persist each material mutation, announce saved/conflict/error truthfully, and complete
    only after every set is performed or explicitly skipped.
+9. If the session ends before a workout request, redirect through a cause-neutral sign-in
+   notice with only a canonical `/workouts/<UUIDv7>` return path. After sign-in, recheck
+   that the new actor owns the session, restore all committed set/pause state, and show
+   the next unresolved set. Do not replay the denied command or claim unsaved fields were
+   persisted.
 
 Release-target additions include reviewed authored technique/guidance, approved
 substitution, the separately planned audited completed-set correction entry, and any

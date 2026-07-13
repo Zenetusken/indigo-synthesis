@@ -14,7 +14,8 @@ documents. It does not weaken the requirements in
 The engineering MVP proves that the product shape can work coherently: a self-hosted
 instance can bootstrap a local owner, create a trainee, instantiate a deterministic
 technical program, conduct and persist a workout, show history and a future revision,
-export the subject's data, delete a member subject, and reset the instance.
+export the subject's data, delete a member subject, reset the instance, recover owner or
+trainee credentials, and resume committed workout state after sign-in.
 
 The technical program is `0.0.1-development`. Its exercise selection, volume, loads,
 rest periods, safety framing, and progression values are unreviewed test inputs. The UI
@@ -46,46 +47,63 @@ record. No software test can substitute for that approval.
 
 | Journey | Live implementation | Current proof | Release qualification |
 | --- | --- | --- | --- |
-| J1 — Bootstrap and sign in | Host-issued one-use bootstrap capability, explicit database creation modes, atomic owner credential/installation claim, Better Auth sessions with credential-lifecycle serialization, owner-created local users, and host-local one-use recovery | `identity.integration.test.ts`, `owner-recovery.integration.test.ts`, and the browser journey | Bootstrap issuance and recovery are intentionally host-administrative rather than public reset flows |
+| J1 — Bootstrap and sign in | Host-issued one-use bootstrap capability, explicit database creation modes, atomic owner credential/installation claim, Better Auth sessions with credential-lifecycle serialization, reauthenticated owner-created local users, owner-mediated member reset, and host-issued owner recovery through CLI or web redemption | `identity.integration.test.ts`, the recovery integration suites, and the J1/J7/J8/J9 browser journeys | Bootstrap and owner-recovery issuance remain host-administrative; public signup, email reset, and browser-only owner recovery remain absent |
 | J2 — Set up a trainee | Units, IANA timezone, goal, experience, three training days, session duration, equipment, starting loads, age/technique attestations, and limitation context | Browser journey plus unit conversion tests | Initial setup is immutable in the current UI; a reviewed profile-change/revision workflow is still future work |
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
-| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after live-source abandonment or completed-source durable invalidation plus abandonment of any already-active affected descendant session; exact PostgreSQL resume | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session |
+| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after live-source abandonment or completed-source durable invalidation plus abandonment of any already-active affected descendant session; exact PostgreSQL resume; and cause-neutral sign-in return reconstructed only from a UUIDv7 workout identifier and reauthorized after sign-in when the session is absent | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, J7 mid-workout session-revocation case, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session, and unsaved browser fields are not claimed as persisted |
 | J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set correction ledger/projection; feedback-correction entry from History; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression; trainee completed-set correction entry, richer progress aggregates, and comparison remain later Phase 3 work |
-| J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones | Main and cross-user browser journeys plus portability integration tests | Export is subject-scoped; database/media backup and restore remain operator responsibilities |
+| J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones; and a guarded PostgreSQL backup/restore procedure with an exercised disposable-database drill | Main and cross-user browser journeys, portability integration tests, and the retained backup/restore drill record | Export is subject-scoped; operators still own encrypted off-host retention, deployment-specific restore practice, runtime-secret custody, and any future media boundary |
 
 The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
 `test/integration/`, and `test/e2e/*.spec.ts`. Application APIs are not mocked in the
 browser journeys.
 
-## Access and recovery (specified 2026-07-12; partially implemented)
+## Access and recovery (implemented 2026-07-13)
 
-A UI/UX audit surfaced a cold-start dead end: a locked-out visitor on a claimed
-instance has no path forward. The response is
-[Access and recovery](product/ACCESS_AND_RECOVERY_SPEC.md) (journeys J7–J9,
-review-hardened), which reconciles to the live repository as:
+A UI/UX audit surfaced a cold-start dead end on claimed instances. The review-hardened
+[Access and recovery](product/ACCESS_AND_RECOVERY_SPEC.md) contract now maps to the live
+repository as follows:
 
-- **Owner recovery — implemented, not surfaced.** `owner-recovery.ts` and
-  `scripts/identity/recover-owner.ts` provide host-issued one-use recovery with session
-  revocation and audit, but no product-surface entry point (web redeem `/recover`) yet
-  exists.
-- **Trainee credential reset (J7) — specified, not implemented.** No `member-reset`
-  domain, route, or migration exists today; trainees currently have no reset path.
-- **Cold-start orientation (J9) — specified, not implemented.** Sign-in offers no
-  next action for the locked-out.
-- **Account/profile separation (P1–P7) — a forward-compatibility direction**, not code:
-  training data still keys on `userId` (`athlete_profile.userId` is the primary key),
-  and cross-account isolation is application-layer only (no RLS).
+- **Trainee credential reset (J7).** A reauthenticated owner issues a one-use,
+  digest-only code from Settings; `/reset` lets the trainee choose the replacement
+  password. Redemption revokes that account's sessions, preserves training data, and
+  writes one redacted audit event.
+- **Owner recovery (web J8 plus CLI escape path).** Host-only issuance is unchanged.
+  The owner can redeem through protected CLI files or `/recover`; both replace the
+  credential, revoke sessions, and audit the channel without recording secrets. The web
+  path is not a browser-only recovery mechanism because code issuance still requires
+  host access.
+- **Cold-start orientation (J9).** Claimed-instance sign-in now names concrete next
+  actions for a trainee, owner, and visitor without an account. `/reset` and `/recover`
+  redirect to bootstrap while an installation is still open.
+- **Session-ended workout continuity.** If the session is absent on the next workout
+  command/navigation—including after recovery revocation—the app redirects to sign-in
+  with a cause-neutral notice and a return path reconstructed only from a shape-restricted
+  UUIDv7 workout identifier. The workout is reauthorized after sign-in.
+  Signing in resumes the exact committed workout; the denied command is not replayed and
+  unsaved browser fields are not represented as durable.
+- **Threat controls.** Email-first and account-scoped lifecycle locks serialize sign-in,
+  creation, and recovery; their dedicated connections and both waiter queues
+  are bounded, with trusted host/account work prioritized; web admission uses HMAC-keyed
+  fixed-window buckets and bounded cleanup; member-code backoff does not consume the
+  code; session cookie caching is disabled; unsupported Better Auth identity-mutation
+  routes are blocked; and audit addresses are minimized.
+- **Account/profile separation.** P1, P2, and P4 govern these account-only journeys.
+  P3 and P5–P7 remain a single deferred multi-profile entry contract: training still
+  keys on `userId`, and cross-account isolation remains application-layer only (no RLS).
 
-Existing host-local owner recovery is covered by the current integration suite. The J7
-trainee-reset path, J9 orientation, browser owner-recovery redemption, and account/profile
-extensions remain a specified next slice rather than implemented behavior.
+Focused unit/component, architecture, disposable-PostgreSQL, and browser runs cover the
+new flows, including recovery/sign-in races, one-use and throttling behavior, audit
+cardinality, redaction, data preservation, and mid-workout return. Standalone session
+management and a security-events view with sign-in-failure auditing remain the named
+Account security follow-on, not unfinished J7–J9 work.
 
 ## Cross-cutting status
 
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
-| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, a source guard against runtime outbound clients/remote assets, and browser request observation | Run and retain the complete browser proof in an environment whose outbound network is actually denied |
-| Database integrity | Sixteen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
+| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and an exercised Linux namespace runner that exposes only loopback plus a private PostgreSQL socket bridge | Rerun and retain the complete current 19-test default browser suite from a clean commit in the outbound-network-denied runner; keep deployment ingress and cold-install evidence separate |
+| Database integrity | Seventeen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, HMAC-keyed recovery admission state, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
 | Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with live-source abandonment or completed-source durable-invalidation prerequisite, no medical-clearance implication, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
@@ -103,12 +121,14 @@ pnpm test:e2e
 INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 ```
 
-At this snapshot, Biome, TypeScript, 502 unit/domain/architecture tests, 106 database
-integration tests, dedicated upgrade proofs, the full 15/15 default Playwright suite
-including the supervised restart/replay journeys, PostgreSQL preflight/fresh migration
-across sixteen ledger entries and 28 required integrity triggers, and the explicit
-LLM-disabled production build are green. The Playwright suite runs against a freshly
-recreated PostgreSQL database with application APIs unmocked.
+At this documentation checkpoint, the established static, unit/domain/architecture,
+database-integration, upgrade, PostgreSQL-preflight, and LLM-disabled build gates are
+green, and focused checks for the new access/recovery slice are green. The default
+Playwright selection now contains **19** tests: the prior 15-test suite and the four new
+J7/J8/J9 cases have each passed in their applicable full or focused runs; the final
+combined 19/19 clean-commit rerun is still pending. Fresh migration/preflight now covers
+all 17 ledger entries and 28 required integrity triggers. Playwright recreates a guarded
+disposable PostgreSQL database and does not mock application APIs.
 
 `pnpm validate` covers static checks, unit/domain tests, and the production-mode build.
 Integration and browser tests remain explicit because they require PostgreSQL and the E2E
@@ -220,16 +240,21 @@ LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 1. Close Methodology Gate 0 with named, independent human reviewers and a rights matrix.
 2. Replace the development fixture with a reviewed methodology/template release and
    approved deterministic golden examples; do not relabel the fixture.
-3. Complete the Product Spec acceptance run with outbound network blocked and preserve
-   the fresh-database, restart, authorization, idempotency, safety, export, and deletion
-   evidence as one release record.
+3. Rerun the current 19-test Product Spec acceptance suite from the final clean commit
+   with outbound network blocked and preserve it together with fresh-database, restart,
+   authorization, idempotency, safety, export, and deletion evidence as one release
+   record. The network-denied runner has already passed the preceding 15-test tree; that
+   development checkpoint is not final-SHA release evidence.
 4. Complete independent WCAG 2.2 AA/manual screen-reader review and representative
    physical-device validation; the targeted automated browser checks are not a
    conformance claim.
 5. Extend architecture enforcement to schema/table ownership and either implement the
    intended public module gateways or accept a narrower boundary in an ADR.
-6. Obtain independent product/security review and document a supported manual
-   backup/restore and HTTPS deployment procedure before beta.
+6. Obtain independent product/security/privacy review; document and exercise the
+   operator's HTTPS deployment; and have a second person cold-install and restore from an
+   encrypted off-host backup. The repository now supplies and has exercised the guarded
+   PostgreSQL backup/restore procedure, but it cannot prove an operator's retention,
+   secret custody, media handling, or recovery-time target.
 
 Until those blockers close, the honest claim is: **working, browser- and
 database-validated engineering MVP for local development**, not reviewed coaching

@@ -111,10 +111,11 @@ journeys, invariants, hardening, and success metrics live in
    forgot their password, an owner who forgot theirs, and a person with no account —
    without revealing whether any account exists.
 
-Owner recovery (FR-006) already exists; trainee reset (J7) and cold-start orientation
-(J9) are the new additions. These access/recovery journeys are governed by the success
-metrics in [Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md), not the Release 1
-J1–J6 acceptance gate.
+The engineering MVP implements J7–J9, including both CLI and web redemption for a
+host-issued owner-recovery code and cause-neutral session-ended return to a persisted
+active workout. These access/recovery journeys are governed by the success metrics in
+[Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md), not the Release 1 J1–J6 acceptance
+gate. Their implementation does not approve methodology content or close Gate 0.
 
 ## Functional requirements
 
@@ -143,6 +144,12 @@ J1–J6 acceptance gate.
   each locked-out persona — trainee, owner, no-account — without disclosing whether any
   account exists; failure responses are uniform across cause and across whether the
   submitted account exists.
+- **FR-009** When a session is absent during an active workout—including after recovery
+  revocation—the next workout command or navigation requires sign-in, presents a
+  cause-neutral notice, and may return only to a workout path reconstructed from a
+  shape-restricted UUIDv7 session identifier and reauthorized after sign-in. Already
+  committed workout state survives; the denied command is not replayed and unsaved
+  browser fields are not represented as persisted.
 
 ### Athlete profile
 
