@@ -1,10 +1,14 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { ActionButton } from '@/components'
 import type { FutureLoadExplanationResult } from '@/modules/training/application/future-load-explanation'
 import styles from '../history.module.css'
 import { explainFutureLoadDecisionAction } from './actions'
+import {
+  eventReportsPainForSession,
+  latePainReportedEvent,
+} from './late-pain-client-state'
 
 function unavailableMessage(
   result: Extract<FutureLoadExplanationResult, { status: 'unavailable' }>,
@@ -21,7 +25,7 @@ function unavailableMessage(
     case 'decision-invalidated':
       return (
         result.detail ??
-        'This decision is no longer active for explanation. The rule codes above still apply.'
+        'This decision is no longer active for explanation. Its original code remains visible as historical evidence.'
       )
     case 'synthesis-failed':
       return 'Could not produce a grounded explanation. The rule codes above still apply.'
@@ -33,9 +37,26 @@ function unavailableMessage(
 export function FutureLoadExplanationControl(props: {
   readonly sessionId: string
   readonly decisionId: string
+  readonly disabled?: boolean
 }) {
   const [pending, startTransition] = useTransition()
   const [result, setResult] = useState<FutureLoadExplanationResult | null>(null)
+  const [latePainReported, setLatePainReported] = useState(false)
+  const disabled = props.disabled || latePainReported
+
+  useEffect(() => {
+    if (disabled) setResult(null)
+  }, [disabled])
+
+  useEffect(() => {
+    const onLatePainReported = (event: Event) => {
+      if (eventReportsPainForSession(event, props.sessionId)) {
+        setLatePainReported(true)
+      }
+    }
+    window.addEventListener(latePainReportedEvent, onLatePainReported)
+    return () => window.removeEventListener(latePainReportedEvent, onLatePainReported)
+  }, [props.sessionId])
 
   function onExplain() {
     startTransition(async () => {
@@ -53,6 +74,7 @@ export function FutureLoadExplanationControl(props: {
         type="button"
         variant="secondary"
         busy={pending}
+        disabled={disabled}
         onClick={onExplain}
         aria-describedby={`explanation-status-${props.decisionId}`}
       >
@@ -64,7 +86,7 @@ export function FutureLoadExplanationControl(props: {
         className={styles.explanationBody}
         aria-live="polite"
       >
-        {result?.status === 'available' ? (
+        {!disabled && result?.status === 'available' ? (
           <>
             <p className={styles.explanationLabel}>
               Inferred paraphrase of the stored rule (not a new decision)
@@ -77,8 +99,14 @@ export function FutureLoadExplanationControl(props: {
             </p>
           </>
         ) : null}
-        {result?.status === 'unavailable' ? (
+        {!disabled && result?.status === 'unavailable' ? (
           <p className={styles.explanationUnavailable}>{unavailableMessage(result)}</p>
+        ) : null}
+        {disabled ? (
+          <p className={styles.explanationUnavailable}>
+            Plain-language explanation unavailable because this decision is no longer
+            active. Its original code remains visible as historical evidence.
+          </p>
         ) : null}
       </div>
     </div>

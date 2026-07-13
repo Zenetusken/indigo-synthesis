@@ -8,6 +8,7 @@ import {
   completeAllSetsAtTarget,
   completeSetup,
   completeWorkoutToHistory,
+  databaseClient,
   generateAndActivate,
 } from './support/journey'
 
@@ -15,6 +16,7 @@ import {
 bindE2eProcessEnv()
 
 const expectedModelId = process.env.INDIGO_LLM_MODEL_ID ?? 'qwen3.5-9b-q4_k_m'
+const productExplainBudgetMs = 3_500
 
 /**
  * Live GPU / local LLM Playwright suite.
@@ -44,7 +46,7 @@ test.describe('live GPU History explanations', () => {
           'LLM preflight is not ready for live e2e (GPU + loopback server required).',
           `gpu=${readiness.gpu.state}`,
           `blockers=${readiness.blockers.join(' | ') || '(none)'}`,
-          'Start with: pnpm llm:preflight && pnpm llm:serve',
+          'Start with: pnpm llm:build-cuda && pnpm llm:serve; then run pnpm llm:preflight',
         ].join(' '),
       )
     }
@@ -101,6 +103,7 @@ test.describe('live GPU History explanations', () => {
       name: 'Explain in plain language',
     })
     await expect(explain).toBeVisible()
+    const explainStartedAt = performance.now()
     await explain.click()
 
     // Success path: grounded paraphrase, not a new decision.
@@ -108,7 +111,16 @@ test.describe('live GPU History explanations', () => {
       decisionItem.getByText(
         'Inferred paraphrase of the stored rule (not a new decision)',
       ),
-    ).toBeVisible({ timeout: 90_000 })
+    ).toBeVisible({ timeout: productExplainBudgetMs + 1_000 })
+    const explainDurationMs = Math.round(performance.now() - explainStartedAt)
+    expect(
+      explainDurationMs,
+      `History Explain exceeded the ${productExplainBudgetMs} ms product-path budget`,
+    ).toBeLessThanOrEqual(productExplainBudgetMs)
+    test.info().annotations.push({
+      type: 'history-explain-duration-ms',
+      description: String(explainDurationMs),
+    })
 
     await expect(decisionItem.getByText(/Local model/)).toBeVisible()
     await expect(decisionItem.getByText(new RegExp(expectedModelId))).toBeVisible()
@@ -165,6 +177,62 @@ test.describe('live GPU History explanations', () => {
         )
         .toBe(true)
       await expect(reasonCodes.first()).toBeVisible()
+    }
+
+    // Combined safety regression: live/cache prose must disappear immediately when a
+    // late pain report linearizes, while deterministic codes remain unchanged.
+    const sessionId = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1)
+    if (!sessionId) throw new Error('History URL did not contain a session id')
+    const ruleCodeBeforePain = await reasonCodes.first().innerText()
+    const beforePainClient = await databaseClient()
+    try {
+      const cached = await beforePainClient.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM future_load_explanation_cache WHERE session_id = $1',
+        [sessionId],
+      )
+      expect(cached.rows[0]?.count).toBeGreaterThan(0)
+    } finally {
+      await beforePainClient.end()
+    }
+
+    await page.getByLabel('Optional factual context').fill('Pain noticed after cooldown.')
+    await page
+      .getByRole('button', { name: 'Record issue and require safety review' })
+      .click()
+    await expect(
+      page.getByRole('heading', { name: 'Safety issue recorded' }),
+    ).toBeVisible()
+    await expect(page.getByText('An active safety hold requires review.')).toBeVisible()
+    await expect(explain).toBeDisabled()
+    await expect(
+      decisionItem.getByText(
+        'Inferred paraphrase of the stored rule (not a new decision)',
+      ),
+    ).toHaveCount(0)
+    await expect(
+      decisionItem.getByText(
+        /Plain-language explanation unavailable after the late safety report/,
+      ),
+    ).toBeVisible()
+    await expect(reasonCodes.first()).toHaveText(ruleCodeBeforePain)
+
+    const afterPainClient = await databaseClient()
+    try {
+      const state = await afterPainClient.query<{
+        pain_reported: boolean
+        cached_count: number
+      }>(
+        `SELECT sf.pain_reported,
+          (SELECT count(*)::int FROM future_load_explanation_cache fec
+            WHERE fec.session_id = ws.id) AS cached_count
+        FROM workout_session ws
+        JOIN session_feedback sf ON sf.session_id = ws.id
+        WHERE ws.id = $1`,
+        [sessionId],
+      )
+      expect(state.rows[0]).toEqual({ pain_reported: true, cached_count: 0 })
+    } finally {
+      await afterPainClient.end()
     }
   })
 })

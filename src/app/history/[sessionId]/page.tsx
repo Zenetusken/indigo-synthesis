@@ -183,12 +183,11 @@ export default async function SessionHistoryPage({
                     </small>
                   ) : null}
                 </div>
-                {decision.invalidatedAt ? null : (
-                  <FutureLoadExplanationControl
-                    sessionId={session.id}
-                    decisionId={decision.id}
-                  />
-                )}
+                <FutureLoadExplanationControl
+                  sessionId={session.id}
+                  decisionId={decision.id}
+                  disabled={decision.invalidatedAt !== null}
+                />
               </li>
             ))}
           </ul>

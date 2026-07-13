@@ -20,6 +20,7 @@ import {
   deletionTombstones,
   destructiveReauthenticationStates,
   exercisePrescriptions,
+  futureLoadExplanationCache,
   installationState,
   performedSetCorrections,
   performedSets,
@@ -80,6 +81,7 @@ export type InstanceResetCounts = {
   readonly adjustmentDecisionInvalidations: number
   readonly programRevisionInvalidations: number
   readonly contentReleaseRevocations: number
+  readonly futureLoadExplanationCache: number
   readonly auditEvents: number
   readonly deletionPlans: number
 }
@@ -119,6 +121,7 @@ export type SubjectDeletionCounts = {
   readonly performedSetCorrections: number
   readonly adjustmentDecisionInvalidations: number
   readonly programRevisionInvalidations: number
+  readonly futureLoadExplanationCache: number
   readonly auditEventsDeleted: number
   readonly auditActorReferencesRedacted: number
   readonly deletionPlans: number
@@ -228,6 +231,7 @@ async function countInstanceRows(
       (SELECT count(*)::int FROM adjustment_decision_invalidation) AS "adjustmentDecisionInvalidations",
       (SELECT count(*)::int FROM program_revision_invalidation) AS "programRevisionInvalidations",
       (SELECT count(*)::int FROM content_release_revocation) AS "contentReleaseRevocations",
+      (SELECT count(*)::int FROM future_load_explanation_cache) AS "futureLoadExplanationCache",
       (SELECT count(*)::int FROM audit_event) AS "auditEvents",
       (SELECT count(*)::int FROM deletion_plan) AS "deletionPlans"
   `)
@@ -308,6 +312,8 @@ async function countSubjectRows(
         JOIN training_fact_correction correction
           ON correction.id = invalidation.correction_id
         WHERE correction.user_id = ${userId}) AS "programRevisionInvalidations",
+      (SELECT count(*)::int FROM future_load_explanation_cache
+        WHERE user_id = ${userId}) AS "futureLoadExplanationCache",
       (SELECT count(*)::int FROM audit_event WHERE subject_user_id = ${userId}) AS "auditEventsDeleted",
       CASE WHEN ${preserveIdentity} THEN 0 ELSE
         (SELECT count(*)::int FROM audit_event
@@ -606,6 +612,9 @@ export async function executeSubjectDeletion(input: {
             .where(eq(trainingFactCorrections.userId, input.actor.userId))
 
           await transaction
+            .delete(futureLoadExplanationCache)
+            .where(eq(futureLoadExplanationCache.userId, input.actor.userId))
+          await transaction
             .delete(trainingCommandReceipts)
             .where(eq(trainingCommandReceipts.userId, input.actor.userId))
           await transaction.execute(sql`
@@ -781,6 +790,7 @@ export async function executeInstanceReset(input: {
           await transaction.delete(sessionFeedbackCorrections)
           await transaction.delete(performedSetCorrections)
           await transaction.delete(trainingFactCorrections)
+          await transaction.delete(futureLoadExplanationCache)
           await transaction.delete(trainingCommandReceipts)
           await transaction.delete(programRevisionLineage)
           await transaction.delete(safetyHoldResolutions)
