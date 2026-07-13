@@ -2486,6 +2486,37 @@ export async function getCompletedSessions(userId: string) {
   )
 }
 
+export type FutureLoadDecisionKind = 'increase' | 'hold' | 'unavailable'
+
+/** Typed future-load decision with train-time exercise name and revision provenance. */
+export type FutureLoadDecisionView = {
+  readonly id: string
+  readonly sessionId: string
+  readonly exerciseCode: string
+  readonly exerciseName: string
+  readonly decision: FutureLoadDecisionKind
+  readonly currentLoadGrams: number | null
+  readonly nextLoadGrams: number | null
+  readonly reasonCode: string
+  readonly ruleVersion: string
+  readonly engineVersion: string
+  readonly methodologyId: string
+  readonly methodologyVersion: string
+  readonly methodologyReviewStatus: string
+  readonly templateReviewStatus: string
+  readonly invalidatedAt: Date | null
+  readonly invalidationCorrectionId: string | null
+  readonly invalidationReason: string | null
+}
+
+function asFutureLoadDecisionKind(value: string): FutureLoadDecisionKind {
+  if (value === 'increase' || value === 'hold' || value === 'unavailable') {
+    return value
+  }
+  // Fail closed to unavailable rather than inventing an increase.
+  return 'unavailable'
+}
+
 export async function getSessionAdjustments(userId: string, sessionId: string) {
   const [owned] = await getDb()
     .select({
@@ -2515,26 +2546,118 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
   if (!contentEligibility.eligible && contentEligibility.code !== 'content.revoked') {
     return null
   }
-  return (
-    getDb()
-      .select({
-        ...getTableColumns(adjustmentDecisions),
-        invalidatedAt: adjustmentDecisionInvalidations.createdAt,
-        invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
-        invalidationReason: trainingFactCorrections.reason,
-      })
-      .from(adjustmentDecisions)
-      .leftJoin(
-        adjustmentDecisionInvalidations,
-        eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
-      )
-      .leftJoin(
-        trainingFactCorrections,
-        eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
-      )
-      .where(eq(adjustmentDecisions.sessionId, sessionId))
-      // Present decisions in the order they were produced during completion (which
-      // follows the workout's exercise order), with a stable code tiebreak.
-      .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
-  )
+  return getDb()
+    .select({
+      ...getTableColumns(adjustmentDecisions),
+      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationReason: trainingFactCorrections.reason,
+    })
+    .from(adjustmentDecisions)
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
+    .where(eq(adjustmentDecisions.sessionId, sessionId))
+    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+}
+
+/**
+ * Completed-session future-load decisions with snapshot exercise names and
+ * program-revision provenance for FactBundle construction.
+ */
+export async function getSessionFutureLoadDecisions(
+  userId: string,
+  sessionId: string,
+): Promise<readonly FutureLoadDecisionView[] | null> {
+  const db = getDb()
+  const [owned] = await db
+    .select({
+      id: workoutSessions.id,
+      engineVersion: programRevisions.engineVersion,
+      methodologyId: programRevisions.methodologyId,
+      methodologyVersion: programRevisions.methodologyVersion,
+      methodologyReviewStatus: programRevisions.methodologyReviewStatus,
+      templateReviewStatus: programRevisions.templateReviewStatus,
+      contentRevoked: contentRevokedForProgramRevisionSql(),
+    })
+    .from(workoutSessions)
+    .innerJoin(plannedWorkouts, eq(plannedWorkouts.id, workoutSessions.plannedWorkoutId))
+    .innerJoin(programRevisions, eq(programRevisions.id, plannedWorkouts.revisionId))
+    .where(
+      and(
+        eq(workoutSessions.id, sessionId),
+        eq(workoutSessions.userId, userId),
+        eq(workoutSessions.status, 'completed'),
+      ),
+    )
+    .limit(1)
+  if (!owned) return null
+  const contentEligibility = evaluatePersistedContentEligibility({
+    contentMode: getServerConfig().contentMode,
+    methodologyStatus: owned.methodologyReviewStatus,
+    templateStatus: owned.templateReviewStatus,
+    revoked: owned.contentRevoked,
+  })
+  if (!contentEligibility.eligible) {
+    return null
+  }
+
+  const rows = await db
+    .select({
+      id: adjustmentDecisions.id,
+      sessionId: adjustmentDecisions.sessionId,
+      exerciseCode: adjustmentDecisions.exerciseCode,
+      decision: adjustmentDecisions.decision,
+      currentLoadGrams: adjustmentDecisions.currentLoadGrams,
+      nextLoadGrams: adjustmentDecisions.nextLoadGrams,
+      reasonCode: adjustmentDecisions.reasonCode,
+      ruleVersion: adjustmentDecisions.ruleVersion,
+      exerciseName: sessionExercises.exerciseName,
+      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationReason: trainingFactCorrections.reason,
+    })
+    .from(adjustmentDecisions)
+    .leftJoin(
+      sessionExercises,
+      and(
+        eq(sessionExercises.sessionId, adjustmentDecisions.sessionId),
+        eq(sessionExercises.exerciseCode, adjustmentDecisions.exerciseCode),
+      ),
+    )
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
+    .where(eq(adjustmentDecisions.sessionId, sessionId))
+    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.sessionId,
+    exerciseCode: row.exerciseCode,
+    exerciseName: row.exerciseName ?? row.exerciseCode,
+    decision: asFutureLoadDecisionKind(row.decision),
+    currentLoadGrams: row.currentLoadGrams,
+    nextLoadGrams: row.nextLoadGrams,
+    reasonCode: row.reasonCode,
+    ruleVersion: row.ruleVersion,
+    engineVersion: owned.engineVersion,
+    methodologyId: owned.methodologyId,
+    methodologyVersion: owned.methodologyVersion,
+    methodologyReviewStatus: owned.methodologyReviewStatus,
+    templateReviewStatus: owned.templateReviewStatus,
+    invalidatedAt: row.invalidatedAt,
+    invalidationCorrectionId: row.invalidationCorrectionId,
+    invalidationReason: row.invalidationReason,
+  }))
 }

@@ -97,7 +97,8 @@ runs with the same `modelContentDigest` before considering a UI enablement exper
 ## Sequence after this protocol
 
 1. ~~Infra + offline baseline~~ (done)
-2. **Builder from persisted decisions + metrics emission** (this slice)
-3. Measured live runs on operator hardware
-4. History read-path experiment (codes always; prose only if measured local stack healthy)
-5. Cache only after prose is product-visible and invalidation rules are defined
+2. ~~Builder from persisted decisions + metrics emission~~ (done)
+3. ~~Measured live runs on operator hardware~~ (CPU then GPU availableRate=1.0 recorded)
+4. ~~Application FactBundle wiring from completed sessions~~ (`getFutureLoadFactBundlesForSession`)
+5. History read-path experiment (codes always; prose only if measured local stack healthy)
+6. Cache only after prose is product-visible and invalidation rules are defined

@@ -136,6 +136,14 @@ The target architecture describes module-owned gateways and a shared workflow
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.
 
+## Application FactBundle wiring (codes path)
+
+Training application can map a completed session’s stored future-load decisions into
+contract FactBundles via `getFutureLoadFactBundlesForSession` (query enrichment + pure
+mapper over session snapshots). History remains **codes-only**; no trainee prose UI.
+Unit + integration validation cover the mapper. LLM generation stays optional and
+disabled by default.
+
 ## Optional local grounded explanation (infra slice)
 
 [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md) and the

@@ -19,6 +19,7 @@ import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
+import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   abandonWorkout,
   completeSet,
@@ -403,6 +404,45 @@ describe('training PostgreSQL command boundary', () => {
       targetId: setId,
       resultSnapshot: { status: 'succeeded' },
     })
+  })
+
+  it('builds contract FactBundles from completed session adjustment decisions', async () => {
+    const { sessionId, setId } = await startedSession()
+    await completeSet({
+      userId: owner.id,
+      sessionId,
+      setId,
+      commandId: newUuidV7(),
+      actualLoadGrams: TEST_TARGET_LOAD_GRAMS,
+      actualRepetitions: TEST_TARGET_REPETITIONS,
+      rpe: 7,
+      note: null,
+    })
+    await completeWorkout({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      noPainAttested: true,
+    })
+
+    const result = await getFutureLoadFactBundlesForSession(owner.id, sessionId)
+    expect(result.status).toBe('available')
+    if (result.status !== 'available') return
+
+    expect(result.buildErrors).toEqual([])
+    expect(result.bundles.length).toBeGreaterThanOrEqual(1)
+    const first = result.bundles[0]
+    expect(first?.factBundleHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(first?.factBundle.decision.sessionId).toBe(sessionId)
+    expect(first?.factBundle.decision.exerciseCode).toBe(first?.decision.exerciseCode)
+    expect(first?.factBundle.grounding.reasonCode).toBe(first?.decision.reasonCode)
+    expect(first?.factBundle.grounding.ruleVersion).toBe(first?.decision.ruleVersion)
+    expect(first?.factBundle.grounding.methodologyId).toBe(
+      'development.methodology-fixture',
+    )
+    expect(first?.factBundle.decision.setFacts.length).toBeGreaterThanOrEqual(1)
+    expect(first?.factBundle.display.exerciseName).toContain('development fixture')
+    expect(first?.factBundle.constraints.developmentFixtureNoticeRequired).toBe(true)
   })
 
   it('coalesces completion replay and applies one immutable future adjustment revision', async () => {
