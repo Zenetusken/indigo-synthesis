@@ -4,7 +4,7 @@ import type { ExplanationFactBundle } from '../explanation/fact-bundle'
  * Version of the offline groundedness baseline. Bump when golden cases or acceptance
  * criteria change so operator reports stay comparable.
  */
-export const LLM_BASELINE_VERSION = '2026-07-13.2'
+export const LLM_BASELINE_VERSION = '2026-07-13.3'
 
 export type GoldenBaselineCase = {
   readonly id: string
@@ -145,6 +145,22 @@ export const GOLDEN_BASELINE_CASES: readonly GoldenBaselineCase[] = [
           developmentNotice,
         ].join(' '),
       },
+      {
+        label: 'passive-forward-advice',
+        prose: `${[
+          'Back squat future load moves from 100 kg to 102.5 kg because performed sets met the target',
+          'at acceptable effort (reason development.adjustment.increase, rule 0.0.1-development).',
+          developmentNotice,
+        ].join(' ')} It is best to continue training.`,
+      },
+      {
+        label: 'reversed-development-notice',
+        prose: [
+          'Back squat future load moves from 100 kg to 102.5 kg because performed sets met the target',
+          'at acceptable effort (reason development.adjustment.increase, rule 0.0.1-development).',
+          'This is not an unreviewed development fixture; it is human-reviewed coaching guidance.',
+        ].join(' '),
+      },
     ],
   },
   {
@@ -196,6 +212,30 @@ export const GOLDEN_BASELINE_CASES: readonly GoldenBaselineCase[] = [
           '(reason development.adjustment.rpe-above-eight, rule 0.0.1-development).',
           developmentNotice,
         ].join(' '),
+      },
+      {
+        label: 'medical-claim-tendonitis',
+        prose: `${[
+          'Bench press stays at 80 kg because reported RPE was above the policy threshold',
+          '(reason development.adjustment.rpe-above-eight, rule 0.0.1-development).',
+          developmentNotice,
+        ].join(' ')} This confirms tendonitis.`,
+      },
+      {
+        label: 'medical-claim-arthritis',
+        prose: `${[
+          'Bench press stays at 80 kg because reported RPE was above the policy threshold',
+          '(reason development.adjustment.rpe-above-eight, rule 0.0.1-development).',
+          developmentNotice,
+        ].join(' ')} This reflects arthritis.`,
+      },
+      {
+        label: 'medical-claim-impingement',
+        prose: `${[
+          'Bench press stays at 80 kg because reported RPE was above the policy threshold',
+          '(reason development.adjustment.rpe-above-eight, rule 0.0.1-development).',
+          developmentNotice,
+        ].join(' ')} This means the shoulder is impinged.`,
       },
     ],
   },

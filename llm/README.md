@@ -1,161 +1,129 @@
-# Local language model packs
+# Local language model runtime
 
-Optional host-local inference for **grounded explanation prose** only. Core product
-journeys never require a model. See
-[ADR 0006](../docs/architecture/adr/0006-optional-local-grounded-language.md) and the
-[explanation generation contract](../docs/architecture/EXPLANATION_GENERATION_CONTRACT.md).
+The optional LLM produces grounded explanation prose only. Deterministic training
+decisions, pain holds, rule codes, and core journeys never depend on inference. The
+default product mode is `disabled`.
+
+See [ADR 0006](../docs/architecture/adr/0006-optional-local-grounded-language.md), the
+[explanation contract](../docs/architecture/EXPLANATION_GENERATION_CONTRACT.md), and the
+[runtime runbook](../docs/architecture/LLM_RUNTIME_AND_GPU.md).
+
+## Committed identity
+
+The supported runtime is intentionally narrow:
+
+- model pack: `qwen3.5-9b-q4_k_m`;
+- source artifact: `unsloth/Qwen3.5-9B-GGUF` at revision
+  `3885219b6810b007914f3a7950a8d1b469d598a5`;
+- exact file: `Qwen3.5-9B-Q4_K_M.gguf`, 5,680,522,464 bytes;
+- SHA-256: `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`;
+- server: the CUDA llama.cpp commit and host-built binary/DSO closure pinned in
+  `runtime/llama-cpp.lock.json`.
+
+`models/qwen3.5-9b-q4_k_m/artifact.lock.json` is the download authority. Product packs
+must have a committed, non-null digest. `INDIGO_LLM_MODEL_SHA256` is an assertion and
+may only equal that digest; it cannot override it. The former unverified Q5 pack is not
+a supported product path.
 
 ## Layout
 
 ```text
 llm/
-  models/<modelId>/settings.json   # pack config (in git)
-  weights/                         # operator-installed artifacts (gitignored)
+  models/qwen3.5-9b-q4_k_m/
+    artifact.lock.json              # exact upstream revision/file/digest/size
+    settings.json                   # prompt/runtime/sampling contract
+  runtime/llama-cpp.lock.json       # exact source, launcher, and local DSO closure
   schema/model-settings.schema.json
+  weights/                          # operator-installed artifacts; gitignored
+tmp/llm-runtime-attestation.json    # live launcher evidence; gitignored, mode 0600
 ```
 
-Hot-swap: install another pack under `models/`, place matching weights, set
-`INDIGO_LLM_MODEL_ID` to that pack’s `modelId`. Application code does not hard-code a
-vendor model.
+The binary lock is host-specific by design: it records the supported Ada/CUDA build
+at the configured build path. A different source path or toolchain must be reviewed
+and re-pinned rather than silently treated as equivalent.
 
-## Coherent host stack (RAM + GPU + server)
+## Operator sequence
 
-See [LLM_RUNTIME_AND_GPU.md](../docs/architecture/LLM_RUNTIME_AND_GPU.md).
+Host prerequisites include Node/pnpm, Python 3, the current Hugging Face `hf` CLI, CUDA
+build tools, `nvidia-smi`, `curl`, `lsof` (used to prove listener ownership safely), and
+`flock` (used to serialize destructive E2E and calibrated archive work).
 
 ```sh
-pnpm llm:preflight          # RAM, NVIDIA status, weights, loopback /v1/models
-pnpm llm:download-qwen35    # Q4_K_M → llm/weights/
-pnpm llm:serve              # LM Studio (lms) or llama-server on loopback
-pnpm llm:load               # load a model into the server
-pnpm llm:validate-baseline  # offline contract gate (+ live when INDIGO_LLM_LIVE=1)
-pnpm test:e2e:llm           # opt-in browser path (GPU + serve required)
-RUNS=3 pnpm llm:archive-product-path  # multi-run offline+live+e2e → tmp/llm-runs/
+pnpm llm:download-qwen35   # exact revision/file; verify digest and size before install
+pnpm llm:build-cuda        # clean detached pinned commit; verify binary + DSO closure
+pnpm llm:serve             # 127.0.0.1:8080; literal all-layer CUDA offload; attest
+
+INDIGO_LLM_MODE=local \
+INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m \
+pnpm llm:preflight         # must report runtime: verified and ready=true
+
+pnpm llm:validate-baseline # required offline contract gate
+pnpm test:e2e:llm          # opt-in live browser path
+RUNS=3 pnpm llm:archive-product-path
 ```
 
-Default OpenAI-compatible endpoint for packs: **`http://127.0.0.1:1234/v1`** (LM Studio).
-Override with `INDIGO_LLM_ENDPOINT` if you use another port.
+The download command requires the current Hugging Face `hf` CLI. It never uses a glob
+or selects the first matching file. Existing weights are re-verified before reuse.
 
-**GPU:** If `nvidia-smi` reports driver/library mismatch, **reboot** so the loaded kernel
-module matches installed `nvidia-utils` / DKMS. CUDA offload will not work until then;
-CPU-only inference may still work via LM Studio.
+`pnpm llm:serve` refuses non-loopback binding, alternate aliases/packs/context length,
+CPU or partial offload, a mismatched executable, mutable llama/ggml libraries, or an
+uncommitted model digest. It hashes the weights, launcher, and complete project-local
+DSO closure before atomically writing the runtime attestation, then `exec`s the server
+without changing the attested PID/start identity.
 
-## First packs
+Preflight additionally verifies:
 
-| modelId | Quant | Source |
-| --- | --- | --- |
-| `qwen3.5-9b-q4_k_m` (recommended default) | Q4_K_M | [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) |
-| `qwen3.5-9b-q5_k_m` | Q5_K_M | same repo |
+- full model-load headroom before startup, or 4 GiB operating headroom after the exact
+  runtime is already attested and resident;
+- NVIDIA health and a live allocation for the attested PID;
+- exact process start identity, executable, context/model arguments, and mapped
+  llama/ggml DSOs;
+- exact host/port arguments plus ownership of the configured listening socket;
+- unchanged file device/inode/size/mtime identities;
+- `/props` build, model alias, and real model path;
+- exact `/v1/models` served name with redirects forbidden.
 
-Approximate sizes: Q4_K_M ~5.7 GB file / ~6.5 GB RAM+VRAM; Q5_K_M ~6.6 GB file.
+This local evidence prevents accidental or stale runtime substitution. A malicious
+process with the same OS user is outside its stated threat model.
 
-## Install weights (operator)
-
-1. Use a **recent** llama.cpp build with `qwen35` support.
-2. Download a quant (example Q4_K_M):
-
-```sh
-# requires: huggingface-cli or hf
-hf download unsloth/Qwen3.5-9B-GGUF \
-  --local-dir /tmp/qwen3.5-9b-gguf \
-  --include '*Q4_K_M*.gguf'
-```
-
-3. Copy the file into `llm/weights/` using the path in `settings.json`
-   (`artifacts.weightsRelativePath`), e.g.:
-
-```sh
-cp /tmp/qwen3.5-9b-gguf/*Q4_K_M*.gguf llm/weights/qwen3.5-9b-q4_k_m.gguf
-```
-
-4. Record the digest (recommended):
-
-```sh
-sha256sum llm/weights/qwen3.5-9b-q4_k_m.gguf
-# set INDIGO_LLM_MODEL_SHA256=... or fill artifacts.expectedSha256 in a local override
-```
-
-5. Serve on **loopback only** (example):
-
-```sh
-llama-server \
-  --model llm/weights/qwen3.5-9b-q4_k_m.gguf \
-  --host 127.0.0.1 \
-  --port 8080 \
-  --alias qwen3.5-9b-q4_k_m \
-  --temp 0.3 \
-  --top-p 0.8 \
-  --top-k 20 \
-  --min-p 0.00 \
-  -c 4096 \
-  --chat-template-kwargs '{"enable_thinking":false}'
-```
-
-Pack sampling is applied again by the app client; server defaults should still prefer
-non-thinking mode for Qwen3.5 Small.
-
-## Application env
+## Application environment
 
 ```dotenv
 INDIGO_LLM_MODE=disabled
 # INDIGO_LLM_MODE=local
 # INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m
-# INDIGO_LLM_MODELS_DIR=llm/models
-# INDIGO_LLM_WEIGHTS_DIR=llm/weights
 # INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080/v1
 # INDIGO_LLM_TIMEOUT_MS=3000
-# INDIGO_LLM_MODEL_SHA256=
+# INDIGO_LLM_MODEL_SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
+# INDIGO_LLM_ATTESTATION_PATH=tmp/llm-runtime-attestation.json
+# INDIGO_LLM_N_GPU_LAYERS=all
 ```
 
-Default is **disabled**. With `local`, the app loads the pack by id and calls the
-OpenAI-compatible endpoint on loopback only.
+Supported local application mode resolves model settings and weights only from the
+committed `llm/models` and `llm/weights` directories and requires the exact 3,000 ms
+deadline. Alternate directories or longer deadlines are diagnostic experiments, not
+product configuration; the live Playwright and archive commands overwrite inherited
+values with the committed contract.
 
-## Hot-swap to Q5
+Only the opt-in live Playwright configuration enables local mode. Default E2E forces
+`INDIGO_LLM_MODE=disabled` even if the parent shell contains adversarial LLM variables.
 
-1. Download Q5_K_M into `llm/weights/qwen3.5-9b-q5_k_m.gguf`.
-2. Restart llama-server with that file and `--alias qwen3.5-9b-q5_k_m`.
-3. Set `INDIGO_LLM_MODEL_ID=qwen3.5-9b-q5_k_m`.
-4. No TypeScript change required.
+## Contract gates
 
-## Adding a new model
+`pnpm llm:validate-baseline` runs without weights or a server. It checks FactBundle v2,
+closed-output prompt v3, validator v3, the committed pack registry, accepted templates, adversarial
+numeric and advice cases, invalidation, fake synthesis, and disabled composition.
 
-1. Create `llm/models/<modelId>/settings.json` matching the schema.
-2. Place weights under `llm/weights/` (or absolute path via env later).
-3. Use an existing `runtime.adapter` or implement a new adapter under
-   `src/platform/llm/adapters/`.
-4. Point `INDIGO_LLM_MODEL_ID` at the new id.
+The live probe is useful only after full preflight succeeds. A calibrated product-path
+archive requires at least three runs with one model digest, one runtime-attestation
+digest, a 1.0 live available rate, p95 within the interactive budget tolerance, and a
+green browser journey on every run. The archive command fails instead of warning when
+those conditions are not met.
 
-## Product rules
+## Adding another model or runtime
 
-- Models only generate **inferred** explanation prose over a FactBundle.
-- Deterministic methodology never calls the LLM.
-- Validation rejects prose that invents loads or omits reason codes.
-- CI does not download weights or start inference.
+Adding a product pack is a reviewed code/provenance change, not an environment-only hot
+swap. Add an exact artifact lock and non-null pack digest, extend the supported launcher
+and attestation verifier, add grounded baselines, then re-run default and live gates.
 
-## Calibrated baseline (measure first)
-
-Protocol: [docs/architecture/LLM_MEASUREMENT_PROTOCOL.md](../docs/architecture/LLM_MEASUREMENT_PROTOCOL.md)
-
-Offline contract baseline (no weights, no server) is the CI-grade calibration gate:
-
-```sh
-pnpm llm:validate-baseline
-pnpm llm:validate-baseline --json   # machine-readable measurement snapshot
-```
-
-It loads both model packs, runs the golden FactBundle suite (increase / holds / pain
-block / invalidated), checks accepted templates pass and trap prose fails, verifies fake
-synthesize + disabled defaults, and prints accept/reject/synthesize rates. Baseline
-version: `LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`.
-
-Optional live probe against a running loopback server (informational; unreachable does
-not fail the offline gate):
-
-```sh
-INDIGO_LLM_LIVE=1 \
-INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080/v1 \
-INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m \
-pnpm llm:validate-baseline --json
-```
-
-Live results only count as calibrated when cases return `available` after the validation
-gate. Prefer multiple runs with a fixed model digest before any UI experiment.
+CI never downloads weights or starts inference.

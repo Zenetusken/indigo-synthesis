@@ -32,7 +32,7 @@ import { assertDatabaseReady } from '../../src/platform/db/preflight'
 import { newUuidV7 } from '../../src/platform/ids/uuid-v7'
 import { composeLlmStack } from '../../src/platform/llm/composition'
 import { parseLlmConfig } from '../../src/platform/llm/config'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../../src/platform/llm/prompts/future-load.v2'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../../src/platform/llm/prompts/future-load.v3'
 import { runLlmPreflight } from '../../src/platform/llm/runtime/preflight'
 import {
   resetProductData,
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   const digest =
     process.env.INDIGO_LLM_MODEL_SHA256 ??
     '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8'
-  const timeoutMs = Number(process.env.INDIGO_LLM_TIMEOUT_MS ?? '60000')
+  const timeoutMs = Number(process.env.INDIGO_LLM_TIMEOUT_MS ?? '3000')
 
   process.env.INDIGO_CONTENT_MODE = 'development'
   if (!process.env.NODE_ENV) {

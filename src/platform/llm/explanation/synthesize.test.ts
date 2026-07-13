@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLanguageModel } from '../adapters/fake'
 import { parseModelSettings } from '../model-settings'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v3'
 import type { ExplanationFactBundle } from './fact-bundle'
 import { createExplanationGenerationPort } from './synthesize'
 
@@ -71,8 +71,8 @@ function sampleBundle(): ExplanationFactBundle {
 }
 
 const groundedProse = [
-  'Back squat working load moves from 100 kg to 102.5 kg',
-  '(reason development.adjustment.increase, rule 0.0.1-development).',
+  'Back squat future load moves from 100 kg to 102.5 kg because performed sets met the target',
+  'at acceptable effort (reason development.adjustment.increase, rule 0.0.1-development).',
   'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
 ].join(' ')
 
@@ -148,5 +148,46 @@ describe('createExplanationGenerationPort', () => {
         timeoutMs: 1000,
       }),
     ).resolves.toMatchObject({ status: 'unavailable', reason: 'disabled' })
+  })
+
+  it('fails closed before model I/O when a persisted reason has no safe template', async () => {
+    const languageModel = createFakeLanguageModel(async () => {
+      throw new Error('model must not be called')
+    })
+    const port = createExplanationGenerationPort({
+      languageModel,
+      modelSettings: settings,
+      modelContentDigest: 'b'.repeat(64),
+    })
+    const base = sampleBundle()
+    const unsupported: ExplanationFactBundle = {
+      ...base,
+      decision: {
+        ...base.decision,
+        kind: 'blocked',
+        proposedLoadGrams: 100_000,
+      },
+      grounding: {
+        ...base.grounding,
+        reasonCode: 'adjustment.policy-unavailable',
+        ruleVersion: 'unavailable',
+      },
+      display: {
+        ...base.display,
+        proposedLoadLabel: '100 kg',
+      },
+    }
+
+    await expect(
+      port.synthesize({
+        factBundle: unsupported,
+        promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+        timeoutMs: 1000,
+      }),
+    ).resolves.toMatchObject({
+      status: 'unavailable',
+      reason: 'config-error',
+      detail: expect.stringMatching(/adjustment\.policy-unavailable/),
+    })
   })
 })

@@ -6,9 +6,13 @@ set -euo pipefail
 PORT="${INDIGO_LLM_PORT:-8080}"
 HOST="${INDIGO_LLM_HOST:-127.0.0.1}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WEIGHTS="${INDIGO_LLM_WEIGHTS:-$ROOT/llm/weights/qwen3.5-9b-q4_k_m.gguf}"
+if [[ -n "${INDIGO_LLM_WEIGHTS:-}" ]]; then
+  echo "FATAL: INDIGO_LLM_WEIGHTS is unsupported; use the committed llm/weights artifact path" >&2
+  exit 2
+fi
+WEIGHTS="$ROOT/llm/weights/qwen3.5-9b-q4_k_m.gguf"
 ALIAS="${INDIGO_LLM_SERVED_NAME:-qwen3.5-9b-q4_k_m}"
-CTX="${INDIGO_LLM_CTX:-4096}"
+CTX=4096
 # Product default: llama.cpp's literal `all` offloads every model layer.
 NGL="${INDIGO_LLM_N_GPU_LAYERS:-all}"
 REQUIRE_GPU="${INDIGO_LLM_REQUIRE_GPU:-true}"
@@ -18,6 +22,14 @@ EXPECTED_ALIAS="qwen3.5-9b-q4_k_m"
 
 if [[ "$HOST" != "127.0.0.1" ]]; then
   echo "FATAL: supported LLM launcher binds exactly to 127.0.0.1; got $HOST" >&2
+  exit 2
+fi
+if [[ "$PORT" != "8080" ]]; then
+  echo "FATAL: supported LLM launcher binds exactly to port 8080; got $PORT" >&2
+  exit 2
+fi
+if [[ -n "${INDIGO_LLM_CTX:-}" && "$INDIGO_LLM_CTX" != "$CTX" ]]; then
+  echo "FATAL: supported LLM launcher requires INDIGO_LLM_CTX=$CTX" >&2
   exit 2
 fi
 if [[ "$MODEL_ID" != "$EXPECTED_ALIAS" || "$ALIAS" != "$EXPECTED_ALIAS" ]]; then
@@ -77,6 +89,9 @@ if [[ ! -f "$WEIGHTS" ]]; then
 fi
 
 assert_gpu_ready
+
+# The supported runtime does not inherit user-controlled dynamic-loader overrides.
+unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES
 
 node --import tsx scripts/llm/write-runtime-attestation.ts \
   --root "$ROOT" \

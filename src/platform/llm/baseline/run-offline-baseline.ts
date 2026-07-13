@@ -5,7 +5,7 @@ import { parseLlmConfig } from '../config'
 import { createExplanationGenerationPort } from '../explanation/synthesize'
 import { validateExplanationProse } from '../explanation/validate-prose'
 import { loadModelRegistry } from '../model-registry'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v3'
 import {
   GOLDEN_BASELINE_CASES,
   type GoldenBaselineCase,

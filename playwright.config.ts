@@ -53,7 +53,7 @@ export default defineConfig({
       INDIGO_CONTENT_MODE: 'development',
       NEXT_TELEMETRY_DISABLED: '1',
       // Default product path: LLM stays off so CI/default e2e never needs a GPU.
-      INDIGO_LLM_MODE: process.env.INDIGO_LLM_MODE ?? 'disabled',
+      INDIGO_LLM_MODE: 'disabled',
     },
   },
 })

@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 import { createOpenAiCompatibleLoopbackLanguageModel } from '../adapters/openai-compatible-loopback'
 import { createExplanationGenerationPort } from '../explanation/synthesize'
 import { loadModelRegistry, requireModelSettings } from '../model-registry'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v3'
 import { GOLDEN_BASELINE_CASES } from './golden-cases'
 
 export type LiveProbeCaseResult = {
@@ -66,6 +66,11 @@ export type LiveProbeOptions = {
   readonly modelContentDigest?: string
   readonly timeoutMs?: number
   readonly fetchImpl?: typeof fetch
+}
+
+export function liveProbeSucceeded(cases: readonly LiveProbeCaseResult[]): boolean {
+  const eligible = cases.filter((entry) => entry.caseId !== 'invalidated-decision')
+  return eligible.length > 0 && eligible.every((entry) => entry.status === 'available')
 }
 
 /**
@@ -149,10 +154,11 @@ export async function runLiveProbe(options: LiveProbeOptions): Promise<LiveProbe
   const availableCount = cases.filter((c) => c.status === 'available').length
   const unavailableCount = cases.filter((c) => c.status === 'unavailable').length
   const latency = latencyFromCases(cases)
-  const first = cases[0]
+  const eligible = cases.filter((c) => c.caseId !== 'invalidated-decision')
+  const first = eligible[0]
   const allUnreachable =
-    cases.length > 0 &&
-    cases.every(
+    eligible.length > 0 &&
+    eligible.every(
       (c) =>
         c.status === 'unavailable' &&
         (c.reason === 'runtime-unreachable' || c.reason === 'timeout'),
@@ -168,7 +174,7 @@ export async function runLiveProbe(options: LiveProbeOptions): Promise<LiveProbe
     unavailableCount,
     latency,
     // Live probe is informational: unreachable is not a product regression.
-    ok: !allUnreachable || availableCount > 0,
+    ok: liveProbeSucceeded(cases),
     summary: allUnreachable
       ? `Live runtime unreachable at ${options.endpoint} (${first?.detail ?? 'no detail'})`
       : `Live probe: ${availableCount} available, ${unavailableCount} unavailable of ${cases.length}`,

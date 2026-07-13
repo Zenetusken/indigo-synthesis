@@ -26,10 +26,9 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
 - Docker/Compose, CI/CD, a monitoring stack, and deployment packaging are deliberately
   absent.
 - Neurotype assessment, nutrition, social features, wearables, and AI coaching (model-led
-  decisions) are out of scope. Optional host-local grounded explanation prose is an
-  accepted design only—see
-  [ADR 0006](docs/architecture/adr/0006-optional-local-grounded-language.md)—and is not
-  implemented.
+  decisions) are out of scope. Optional host-local grounded explanation prose is
+  implemented only as a default-off, codes-subordinate History presentation path; see
+  [ADR 0006](docs/architecture/adr/0006-optional-local-grounded-language.md).
 
 ## Implemented engineering slice
 
@@ -45,6 +44,8 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
   explicit skip/abandon, pain stop, completion, and application-restart recovery;
 - factual session history and a development-only, bounded future-load decision that
   creates a new revision rather than rewriting completed work;
+- on-demand History explanation through one digest-locked local Q4/CUDA runtime, with a
+  closed grounded-output validator, PostgreSQL cache, and late-pain invalidation;
 - versioned subject export with provenance, category hashes, and explicit omissions;
 - previewed member account/data deletion and owner-only full-instance reset, each with
   reauthentication, exact row counts, and a non-personal tombstone; and
@@ -105,7 +106,7 @@ pnpm typecheck
 pnpm test
 pnpm test:integration
 pnpm test:e2e
-INDIGO_CONTENT_MODE=reviewed pnpm build
+INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 ```
 
 Optional operator-only suite for the local GPU language layer (not part of the normal
@@ -113,8 +114,9 @@ gate; requires a healthy NVIDIA GPU and a loopback model server — see
 `docs/architecture/LLM_RUNTIME_AND_GPU.md`):
 
 ```sh
+pnpm llm:build-cuda
+pnpm llm:serve   # separate terminal, pinned all-layer CUDA offload + attestation
 pnpm llm:preflight
-pnpm llm:serve   # separate terminal, CUDA offload
 pnpm test:e2e:llm
 RUNS=3 pnpm llm:archive-product-path   # multi-run archive → tmp/llm-runs/
 ```
@@ -129,6 +131,12 @@ ignored local E2E configuration from the checked-in template:
 pnpm exec playwright install chromium
 cp .env.e2e.example .env.e2e.local
 ```
+
+The suite holds one host-wide non-blocking lock across reset and Playwright, so a second
+default/live/worktree run fails before it can terminate the first run's database
+connections or bind its ports. The optional `INDIGO_E2E_APPLICATION_PORT` and
+`INDIGO_E2E_SUPERVISOR_PORT` overrides are for explicitly isolated diagnostics; the
+committed defaults remain 3100/3101.
 
 Review `.env.e2e.local` before running the suite. Give it a distinct test-only secret and
 keep its target on the same explicit loopback PostgreSQL host, port, and username as

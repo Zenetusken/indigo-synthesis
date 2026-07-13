@@ -68,14 +68,14 @@ function sampleBundle(
 }
 
 const validProse = [
-  'Back squat working load moves from 100 kg to 102.5 kg because all sets met the target',
-  'at acceptable RPE (reason development.adjustment.increase, rule 0.0.1-development).',
+  'Back squat future load moves from 100 kg to 102.5 kg because performed sets met the target',
+  'at acceptable effort (reason development.adjustment.increase, rule 0.0.1-development).',
   'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
 ].join(' ')
 
 describe('validateExplanationProse', () => {
   it('pins the fail-closed validator version', () => {
-    expect(EXPLANATION_VALIDATOR_VERSION).toBe('future-load-validator.v2')
+    expect(EXPLANATION_VALIDATOR_VERSION).toBe('future-load-validator.v3')
   })
 
   it('accepts grounded increase prose', () => {
@@ -122,6 +122,7 @@ describe('validateExplanationProse', () => {
     'It is okay to resume lifting through a safety hold.',
     'The trainee can increase the load next time.',
     'Keep lifting even with sharp pain.',
+    'It is best to continue training.',
   ])('rejects forward advice: %s', (unsafeSuffix) => {
     const result = validateExplanationProse(
       `${validProse} ${unsafeSuffix}`,
@@ -141,8 +142,8 @@ describe('validateExplanationProse', () => {
       },
     })
     const prose = [
-      'Back squat working load moves from 1,000 lb to 1,005.5 lb',
-      '(reason development.adjustment.increase, rule 0.0.1-development).',
+      'Back squat future load moves from 1,000 lb to 1,005.5 lb because performed sets met the target',
+      'at acceptable effort (reason development.adjustment.increase, rule 0.0.1-development).',
       'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
     ].join(' ')
 
@@ -158,6 +159,34 @@ describe('validateExplanationProse', () => {
       sampleBundle(),
     )
     expect(result.ok).toBe(false)
+  })
+
+  it.each([
+    'This confirms tendonitis.',
+    'This reflects arthritis.',
+    'This means the shoulder is impinged.',
+  ])('rejects an appended medical claim outside the closed template: %s', (suffix) => {
+    expect(validateExplanationProse(`${validProse} ${suffix}`, sampleBundle()).ok).toBe(
+      false,
+    )
+  })
+
+  it('rejects a notice that reverses the required development disclosure', () => {
+    const reversed = validProse.replace(
+      'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+      'This is not an unreviewed development fixture; it is human-reviewed coaching guidance.',
+    )
+
+    expect(validateExplanationProse(reversed, sampleBundle()).ok).toBe(false)
+  })
+
+  it('requires byte-for-byte template text rather than compatibility lookalikes', () => {
+    expect(
+      validateExplanationProse(
+        validProse.replace('Back squat', 'Ｂack squat'),
+        sampleBundle(),
+      ).ok,
+    ).toBe(false)
   })
 
   it('rejects prose for invalidated decisions', () => {

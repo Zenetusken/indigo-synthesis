@@ -1,10 +1,11 @@
+import { canonicalFutureLoadExplanation } from './canonical-prose'
 import type { ExplanationFactBundle } from './fact-bundle'
 
 export type ProseValidationResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly detail: string }
 
-export const EXPLANATION_VALIDATOR_VERSION = 'future-load-validator.v2'
+export const EXPLANATION_VALIDATOR_VERSION = 'future-load-validator.v3'
 
 const diagnosisPatterns: readonly RegExp[] = [
   /\bdiagnos(?:e|is|ed|ing)\b/i,
@@ -20,6 +21,7 @@ const diagnosisPatterns: readonly RegExp[] = [
  */
 const forwardAdvicePatterns: readonly RegExp[] = [
   /\b(?:should|must|ought|recommend|recommended|suggest|suggested|consider)\b/i,
+  /\b(?:best|prudent|advisable|encouraged|urged)\s+to\s+(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i,
   /\b(?:you|the (?:athlete|trainee)|they)\s+(?:can|could|may|might|need to)\b/i,
   /(?:^|[.!?]\s+)(?:please\s+)?(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i,
   /\b(?:safe|okay|ok|fine|cleared)\s+to\s+(?:continue|resume|restart|push|train|lift|exercise|proceed|keep)\b/i,
@@ -174,12 +176,11 @@ export function validateExplanationProse(
   const numericValidation = validateNumericContexts(normalized, bundle)
   if (!numericValidation.ok) return numericValidation
 
-  if (bundle.constraints.developmentFixtureNoticeRequired) {
-    if (!/unreviewed|development fixture|not human-reviewed/i.test(normalized)) {
-      return {
-        ok: false,
-        detail: 'Development content prose must include an unreviewed-fixture notice.',
-      }
+  const canonical = canonicalFutureLoadExplanation(bundle)
+  if (!canonical || trimmed !== canonical) {
+    return {
+      ok: false,
+      detail: 'Prose differs from the closed FactBundle-derived explanation template.',
     }
   }
 

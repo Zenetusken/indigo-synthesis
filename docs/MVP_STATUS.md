@@ -1,6 +1,6 @@
 # Engineering MVP status and traceability
 
-Snapshot: 2026-07-12
+Snapshot: 2026-07-13
 Status: working engineering MVP; **not** a production coaching release and **not** the
 canonical Release 1 gate
 
@@ -155,8 +155,8 @@ language models.
 **Implemented (platform only, default disabled):**
 
 - model-agnostic `src/platform/llm` ports, registry, validation gate, and composition;
-- per-model packs under `llm/models/*/settings.json` (first packs: Qwen3.5-9B Q4_K_M and
-  Q5_K_M);
+- one supported, exact-artifact model pack under `llm/models/*/settings.json`
+  (Qwen3.5-9B Q4_K_M; the unverified Q5 pack was removed);
 - loopback-only OpenAI-compatible adapter for host-local servers (e.g. llama-server);
 - calibrated **offline** golden baseline (`pnpm llm:validate-baseline`) plus optional live
   probe when a loopback server is running;
@@ -165,23 +165,24 @@ language models.
 - pure `buildFutureLoadFactBundle` from persisted decision fields (caller supplies
   `formatLoad` labels);
 - operator guide in `llm/README.md`;
-- host preflight (`pnpm llm:preflight`), serve/load/download scripts, and runtime/GPU
+- host preflight (`pnpm llm:preflight`), pinned build/serve/download scripts, and runtime/GPU
   runbook ([LLM_RUNTIME_AND_GPU.md](architecture/LLM_RUNTIME_AND_GPU.md));
 - live calibrations on this host for Qwen3.5-9B Q4_K_M:
-  - CPU path (pre-reboot): offline 28/28, live availableRate=1.0
-  - **GPU path (post-reboot, 2026-07-13):** driver 580.173.02 / RTX 4070, CUDA
-    `llama-server` with `n-gpu-layers=-1`, ~6.1 GiB VRAM in use, offline 28/28, live
-    **availableRate=1.0** (8/8 eligible; invalidated case correctly unavailable). Product
-    policy remains GPU-only for local inference (`INDIGO_LLM_REQUIRE_GPU=true`).
-  - **Product-path multi-run (same digest, `RUNS=3 pnpm llm:archive-product-path`):**
-    offline 28/28 ×3; `test:e2e:llm` ok ×3 (~14.3–14.7s suite); live latency p50 ~1.2s,
-    p95 ~1.5s. Earlier sample included availableRate **0.75** once (`validation-failed`);
-    integrity re-measure (2026-07-13 post-cache) hit **1.0 / 1.0 / 1.0**. Gate never
-    loosened—cache stores only validation-passing prose.
+  - **GPU path re-attested 2026-07-13:** driver 580.173.02 / RTX 4070; exact Q4
+    digest; pinned llama.cpp commit, launcher, and eight mapped llama/ggml DSOs;
+    literal `n-gpu-layers=all`; ~5.3 GiB live allocation; `/props` and `/models` exact;
+    `readyForLocalInference=true`.
+  - current contract is FactBundle v2 plus closed-output prompt/validator v3 and passes
+    **36/36**.
+  - the hardened v3 archive passed three same-digest/same-attestation runs: live
+    availableRate **1.0 / 1.0 / 1.0**, p95 **992 / 1020 / 1029 ms**, and live History
+    E2E green in **14.124 / 16.057 / 13.647 s**. The archive fails on drift rather than
+    recording a warning.
   - **Explanation invalidation:** completed sessions with post-completion
     `session_feedback.painReported=true` mark FactBundles `invalidated` with reason
     `post-completion-pain-report` (ledger rows immutable). Explain returns
-    `decision-invalidated`; cache rows for the session are deleted inside `reportPain`.
+    `decision-invalidated`; authoritative state commits first, then cache cleanup runs
+    post-commit and best-effort. Locked reads/publication make any residual row inert.
 
 **History product path (implemented, default off):**
 

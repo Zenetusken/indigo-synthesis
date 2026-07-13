@@ -190,16 +190,19 @@ Properties:
 - overrides are explicit audited decisions;
 - golden vectors and property tests prove determinism and bounds.
 
-### Optional grounded explanation (design only)
+### Optional grounded explanation (implemented, default off)
 
-Plain-language explanation of **already persisted** decisions may later use an optional
-host-local language model. That path is presentation only: structured reason codes,
-versions, and loads remain authoritative; model output is labeled inferred and must
-validate against a FactBundle. The methodology engine never calls a model.
+Plain-language explanation of **already persisted** decisions may use the optional
+host-local model from completed-session History. That path is presentation only:
+structured reason codes, versions, and loads remain authoritative; model output is
+labeled inferred and must exactly reproduce the closed FactBundle-derived safe paragraph.
+The methodology engine never calls a model.
 
-Design is pinned in [ADR 0006](adr/0006-optional-local-grounded-language.md) and the
-[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md). No inference
-adapter, prompt runtime, or prose store is implemented yet.
+The implemented slice includes a loopback adapter, versioned prompt/validator, pinned
+model/runtime provenance, on-demand control, provenance-keyed PostgreSQL cache, and
+linearized late-pain invalidation. It remains optional and disabled by default. See
+[ADR 0006](adr/0006-optional-local-grounded-language.md) and the
+[explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md).
 
 ## Data model
 
@@ -247,6 +250,8 @@ the future catalog and Gate 0 approval.
 - performed set
 - session feedback
 - adjustment decision
+- validated future-load explanation cache (owned by user/session/decision with model,
+  runtime, prompt, validator, FactBundle, and duration provenance)
 - audit event
 
 ### Portability/administration

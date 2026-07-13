@@ -24,6 +24,7 @@ import {
   formatOfflineBaselineReport,
   runOfflineBaseline,
 } from '../../src/platform/llm/baseline/run-offline-baseline'
+import { SUPPORTED_LOCAL_LLM_TIMEOUT_MS } from '../../src/platform/llm/config'
 
 async function main(): Promise<void> {
   const asJson = process.argv.includes('--json')
@@ -70,16 +71,16 @@ async function main(): Promise<void> {
     const endpoint = process.env.INDIGO_LLM_ENDPOINT ?? 'http://127.0.0.1:8080/v1'
     const modelId = process.env.INDIGO_LLM_MODEL_ID ?? 'qwen3.5-9b-q4_k_m'
     const digest = process.env.INDIGO_LLM_MODEL_SHA256
-    // CPU inference for 9B often exceeds the product interactive 3s cap; live
-    // calibration may raise this via INDIGO_LLM_TIMEOUT_MS (ms).
+    // The default mirrors the supported History deadline. Explicitly larger values are
+    // diagnostic only; the calibrated archive forcibly restores the product value.
     const timeoutMs = process.env.INDIGO_LLM_TIMEOUT_MS
       ? Number(process.env.INDIGO_LLM_TIMEOUT_MS)
-      : 120_000
+      : SUPPORTED_LOCAL_LLM_TIMEOUT_MS
     live = await runLiveProbe({
       endpoint,
       modelId,
       modelContentDigest: digest,
-      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120_000,
+      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : SUPPORTED_LOCAL_LLM_TIMEOUT_MS,
     })
     if (!asJson) {
       console.log('')

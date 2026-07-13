@@ -4,6 +4,7 @@ import {
   FactBundleBuildError,
   type PersistedFutureLoadDecision,
 } from './build-fact-bundle'
+import { canonicalFutureLoadExplanation } from './canonical-prose'
 import { factBundleHash } from './fact-bundle'
 import { validateExplanationProse } from './validate-prose'
 
@@ -95,11 +96,9 @@ describe('buildFutureLoadFactBundle', () => {
 
   it('builds bundles whose hand-calibrated prose still validates (measure H7→H3)', () => {
     const bundle = buildFutureLoadFactBundle(sampleSource())
-    const prose = [
-      `Back squat future load moves from ${bundle.display.currentLoadLabel} to ${bundle.display.proposedLoadLabel}`,
-      `because performed sets met the target (reason ${bundle.grounding.reasonCode}, rule ${bundle.grounding.ruleVersion}).`,
-      'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
-    ].join(' ')
+    const prose = canonicalFutureLoadExplanation(bundle)
+    expect(prose).not.toBeNull()
+    if (!prose) throw new Error('sample bundle has no safe explanation')
     expect(validateExplanationProse(prose, bundle)).toEqual({ ok: true })
   })
 

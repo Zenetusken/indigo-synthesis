@@ -20,6 +20,26 @@ describe('parseLlmConfig', () => {
     })
   })
 
+  it('treats disabled mode as an isolation boundary from unused runtime settings', () => {
+    expect(
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'disabled',
+        INDIGO_LLM_MODEL_ID: '',
+        INDIGO_LLM_ENDPOINT: 'http://198.51.100.10:9999/v1',
+        INDIGO_LLM_TIMEOUT_MS: 'not-a-timeout',
+        INDIGO_LLM_MODEL_SHA256: 'not-a-digest',
+        INDIGO_LLM_REQUIRE_GPU: 'not-a-boolean',
+      }),
+    ).toMatchObject({
+      mode: 'disabled',
+      modelId: null,
+      endpointOverride: null,
+      timeoutMsOverride: null,
+      modelSha256Override: null,
+      requireGpu: true,
+    })
+  })
+
   it('defaults requireGpu true and accepts false for diagnosis only', () => {
     expect(
       parseLlmConfig({
@@ -50,6 +70,62 @@ describe('parseLlmConfig', () => {
         INDIGO_LLM_ENDPOINT: 'http://example.com/v1',
       }),
     ).toThrow(InvalidLlmConfigurationError)
+  })
+
+  it('rejects alternate loopback endpoints before runtime preflight', () => {
+    for (const endpoint of [
+      'http://localhost:8080/v1',
+      'http://127.0.0.1:8081/v1',
+      'http://127.0.0.1:8080/v1/',
+    ]) {
+      expect(() =>
+        parseLlmConfig({
+          INDIGO_LLM_MODE: 'local',
+          INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+          INDIGO_LLM_ENDPOINT: endpoint,
+        }),
+      ).toThrow(/requires http:\/\/127\.0\.0\.1:8080\/v1/)
+    }
+  })
+
+  it('pins the supported local timeout to the interactive product deadline', () => {
+    expect(
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'local',
+        INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+        INDIGO_LLM_TIMEOUT_MS: '3000',
+      }).timeoutMsOverride,
+    ).toBe(3000)
+
+    for (const timeout of ['2999', '3001', '600000']) {
+      expect(() =>
+        parseLlmConfig({
+          INDIGO_LLM_MODE: 'local',
+          INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+          INDIGO_LLM_TIMEOUT_MS: timeout,
+        }),
+      ).toThrow(/requires 3000/)
+    }
+  })
+
+  it('rejects an alternate model-settings registry in supported local mode', () => {
+    expect(() =>
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'local',
+        INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+        INDIGO_LLM_MODELS_DIR: '/tmp/unreviewed-model-registry',
+      }),
+    ).toThrow(/committed llm\/models registry/)
+  })
+
+  it('rejects an alternate weights directory in supported local mode', () => {
+    expect(() =>
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'local',
+        INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+        INDIGO_LLM_WEIGHTS_DIR: '/tmp/unreviewed-model-weights',
+      }),
+    ).toThrow(/committed llm\/weights artifact directory/)
   })
 })
 

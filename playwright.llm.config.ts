@@ -27,22 +27,17 @@ if (!databaseUrl || !authSecret) {
   throw new Error('E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET are required.')
 }
 
-const llmModelId = process.env.INDIGO_LLM_MODEL_ID ?? 'qwen3.5-9b-q4_k_m'
-const llmEndpoint = process.env.INDIGO_LLM_ENDPOINT ?? 'http://127.0.0.1:8080/v1'
-const llmTimeoutMs = process.env.INDIGO_LLM_TIMEOUT_MS ?? '60000'
-const llmSha256 =
-  process.env.INDIGO_LLM_MODEL_SHA256 ??
-  '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8'
-
 const llmServerEnv = {
   INDIGO_LLM_MODE: 'local',
-  INDIGO_LLM_MODEL_ID: llmModelId,
-  INDIGO_LLM_ENDPOINT: llmEndpoint,
-  INDIGO_LLM_TIMEOUT_MS: llmTimeoutMs,
-  INDIGO_LLM_REQUIRE_GPU: process.env.INDIGO_LLM_REQUIRE_GPU ?? 'true',
-  INDIGO_LLM_MODEL_SHA256: llmSha256,
-  INDIGO_LLM_MODELS_DIR: process.env.INDIGO_LLM_MODELS_DIR ?? 'llm/models',
-  INDIGO_LLM_WEIGHTS_DIR: process.env.INDIGO_LLM_WEIGHTS_DIR ?? 'llm/weights',
+  INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+  INDIGO_LLM_ENDPOINT: 'http://127.0.0.1:8080/v1',
+  INDIGO_LLM_TIMEOUT_MS: '3000',
+  INDIGO_LLM_REQUIRE_GPU: 'true',
+  INDIGO_LLM_N_GPU_LAYERS: 'all',
+  INDIGO_LLM_MODEL_SHA256:
+    '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8',
+  INDIGO_LLM_MODELS_DIR: 'llm/models',
+  INDIGO_LLM_WEIGHTS_DIR: 'llm/weights',
 } as const
 
 // Expose the same env to the test process for preflight assertions.

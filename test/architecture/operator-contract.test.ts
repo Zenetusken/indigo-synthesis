@@ -57,9 +57,11 @@ describe('clean-clone operator contract', () => {
     const defaultE2e = manifest.scripts?.['test:e2e'] ?? ''
     const llmE2e = manifest.scripts?.['test:e2e:llm'] ?? ''
 
-    expect(defaultE2e).toContain('playwright')
-    expect(defaultE2e).not.toContain('playwright.llm.config')
-    expect(llmE2e).toContain('playwright.llm.config.ts')
+    expect(defaultE2e).toContain('scripts/e2e/run.sh default')
+    expect(llmE2e).toContain('scripts/e2e/run.sh llm')
+    const e2eRunner = readFileSync(resolve(projectRoot, 'scripts/e2e/run.sh'), 'utf8')
+    expect(e2eRunner).toContain('@playwright/test/cli.js')
+    expect(e2eRunner).toContain('playwright.llm.config.ts')
 
     const playwrightConfig = readFileSync(
       resolve(projectRoot, 'playwright.config.ts'),
@@ -67,5 +69,33 @@ describe('clean-clone operator contract', () => {
     )
     expect(playwrightConfig).toContain('llm-live.spec.ts')
     expect(playwrightConfig).toMatch(/testIgnore/)
+  })
+
+  it('scrubs dynamic-loader injection from the supported LLM launcher', () => {
+    const launcher = readFileSync(
+      resolve(projectRoot, 'scripts/llm/serve-local.sh'),
+      'utf8',
+    )
+    expect(launcher).toContain('unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT')
+    expect(launcher).toContain('WEIGHTS="$ROOT/llm/weights/qwen3.5-9b-q4_k_m.gguf"')
+    expect(launcher).not.toContain('WEIGHTS="${INDIGO_LLM_WEIGHTS:-')
+    expect(launcher).toContain('CTX=4096')
+    expect(launcher).toContain('requires INDIGO_LLM_CTX=$CTX')
+  })
+
+  it('pins calibrated product measurements to the committed settings contract', () => {
+    const archive = readFileSync(
+      resolve(projectRoot, 'scripts/llm/archive-product-path.sh'),
+      'utf8',
+    )
+    expect(archive).toContain('export INDIGO_LLM_TIMEOUT_MS=3000')
+    expect(archive).toContain('export INDIGO_LLM_MODELS_DIR="$ROOT/llm/models"')
+
+    const liveConfig = readFileSync(
+      resolve(projectRoot, 'playwright.llm.config.ts'),
+      'utf8',
+    )
+    expect(liveConfig).toContain("INDIGO_LLM_TIMEOUT_MS: '3000'")
+    expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
 })

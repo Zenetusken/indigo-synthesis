@@ -10,6 +10,8 @@ import type { ModelSettings } from '../model-settings'
 import { type VerifiedRuntimeIdentity, verifyRuntimeAttestation } from './attestation'
 
 const execFileAsync = promisify(execFile)
+const GIBIBYTE = 1024 * 1024 * 1024
+export const VERIFIED_RUNTIME_HEADROOM_BYTES = 4 * GIBIBYTE
 
 export type GpuStatus =
   | {
@@ -31,6 +33,9 @@ export type MemoryStatus = {
   readonly memTotalBytes: number
   readonly swapUsedBytes: number
   readonly sufficientForApproxModelBytes: boolean
+  readonly readinessBasis: 'model-load' | 'verified-runtime'
+  readonly requiredAvailableBytes: number
+  readonly sufficientForReadiness: boolean
   readonly detail: string
 }
 
@@ -105,6 +110,30 @@ function readMeminfo(): { available: number; total: number; swapUsed: number } {
   const swapTotal = get('SwapTotal')
   const swapFree = get('SwapFree')
   return { available, total, swapUsed: Math.max(0, swapTotal - swapFree) }
+}
+
+export function assessMemoryReadiness(input: {
+  readonly memAvailableBytes: number
+  readonly approxModelBytes: number
+  readonly runtimeVerified: boolean
+}): Pick<
+  MemoryStatus,
+  | 'sufficientForApproxModelBytes'
+  | 'readinessBasis'
+  | 'requiredAvailableBytes'
+  | 'sufficientForReadiness'
+> {
+  const modelLoadRequiredBytes = input.approxModelBytes + VERIFIED_RUNTIME_HEADROOM_BYTES
+  const readinessBasis = input.runtimeVerified ? 'verified-runtime' : 'model-load'
+  const requiredAvailableBytes = input.runtimeVerified
+    ? VERIFIED_RUNTIME_HEADROOM_BYTES
+    : modelLoadRequiredBytes
+  return {
+    sufficientForApproxModelBytes: input.memAvailableBytes >= modelLoadRequiredBytes,
+    readinessBasis,
+    requiredAvailableBytes,
+    sufficientForReadiness: input.memAvailableBytes >= requiredAvailableBytes,
+  }
 }
 
 function readLoadedNvidiaVersion(): string | null {
@@ -418,6 +447,7 @@ async function probeRuntimeEvidence(
       expectedRuntimeVersion: runtimeLock.version,
       expectedRuntimeSha256: runtimeLock.serverBinarySha256,
       expectedRuntimeSizeBytes: runtimeLock.serverBinarySizeBytes,
+      expectedContextTokens: pack.limits.maxContextTokens,
       expectedRuntimeLibraries: runtimeLock.runtimeLibraries,
     })
     if (verified.state === 'invalid') {
@@ -483,8 +513,7 @@ function probeWeights(
       path,
       present: false,
       sizeBytes: null,
-      detail:
-        'Weights file missing — download per llm/README.md or import into LM Studio',
+      detail: 'Weights file missing — download the committed artifact per llm/README.md',
     }
   }
   const sizeBytes = statSync(path).size
@@ -514,23 +543,25 @@ export async function runLlmPreflight(
     }
   }
 
-  const approxNeed = pack?.artifacts.approxSizeBytes ?? 6_000_000_000
-  // Keep ~4 GiB headroom above model file size for KV/context and OS.
-  const need = approxNeed + 4 * 1024 * 1024 * 1024
-  const memory: MemoryStatus = {
-    memAvailableBytes: mem.available,
-    memTotalBytes: mem.total,
-    swapUsedBytes: mem.swapUsed,
-    sufficientForApproxModelBytes: mem.available >= need,
-    detail: `${(mem.available / 1e9).toFixed(1)} GiB available / ${(mem.total / 1e9).toFixed(1)} GiB total; swap used ${(mem.swapUsed / 1e9).toFixed(1)} GiB`,
-  }
-
   const gpu = await probeGpu()
   const weights = probeWeights(config, pack)
   const endpointUrl =
     config.endpointOverride ?? pack?.runtime.defaultEndpoint ?? 'http://127.0.0.1:8080/v1'
   const endpoint = await probeEndpoint(endpointUrl)
   const runtimeEvidence = await probeRuntimeEvidence(config, pack, endpointUrl)
+  const approxModelBytes = pack?.artifacts.approxSizeBytes ?? 6_000_000_000
+  const memoryReadiness = assessMemoryReadiness({
+    memAvailableBytes: mem.available,
+    approxModelBytes,
+    runtimeVerified: runtimeEvidence.state === 'verified',
+  })
+  const memory: MemoryStatus = {
+    memAvailableBytes: mem.available,
+    memTotalBytes: mem.total,
+    swapUsedBytes: mem.swapUsed,
+    ...memoryReadiness,
+    detail: `${(mem.available / GIBIBYTE).toFixed(1)} GiB available / ${(mem.total / GIBIBYTE).toFixed(1)} GiB total; swap used ${(mem.swapUsed / GIBIBYTE).toFixed(1)} GiB`,
+  }
 
   const blockers: string[] = []
   const recommendations: string[] = []
@@ -541,9 +572,20 @@ export async function runLlmPreflight(
       'INDIGO_LLM_MODE=disabled (product default). Set local when GPU preflight is ready.',
     )
   }
-  if (!memory.sufficientForApproxModelBytes) {
-    blockers.push('Insufficient MemAvailable for the configured model size + headroom')
-    recommendations.push('Close browsers/IDE tabs or free swap before loading a 9B GGUF')
+  if (!memory.sufficientForReadiness) {
+    blockers.push(
+      memory.readinessBasis === 'model-load'
+        ? 'Insufficient MemAvailable for the configured model size + headroom'
+        : 'Insufficient MemAvailable for verified-runtime operating headroom',
+    )
+    recommendations.push('Close browsers/IDE tabs or free memory before local inference')
+  } else if (
+    memory.readinessBasis === 'verified-runtime' &&
+    !memory.sufficientForApproxModelBytes
+  ) {
+    recommendations.push(
+      'Verified runtime is operational, but stop it before requiring full model-reload headroom.',
+    )
   }
 
   if (requireGpu) {
@@ -574,7 +616,7 @@ export async function runLlmPreflight(
     blockers.push(`Weights missing at ${weights.path}`)
     recommendations.push('Run: pnpm llm:download-qwen35')
   }
-  if (config.mode === 'local' && runtimeEvidence.state !== 'verified') {
+  if (runtimeEvidence.state !== 'verified') {
     blockers.push(`Runtime identity unverified: ${runtimeEvidence.detail}`)
     recommendations.push(
       'Start the committed CUDA runtime with pnpm llm:serve to create a fresh attestation.',
@@ -591,7 +633,7 @@ export async function runLlmPreflight(
     blockers.length === 0 &&
     endpoint.reachable &&
     runtimeEvidence.state === 'verified' &&
-    memory.sufficientForApproxModelBytes &&
+    memory.sufficientForReadiness &&
     requireGpu &&
     gpu.state === 'ready'
 
@@ -618,7 +660,7 @@ export function formatLlmPreflightReport(report: LlmPreflightReport): string {
     'LLM runtime preflight',
     `  checkedAt=${report.checkedAt}`,
     `  mode=${report.mode} modelId=${report.modelId ?? '(none)'} requireGpu=${report.requireGpu}`,
-    `  memory: ${report.memory.detail} sufficient=${report.memory.sufficientForApproxModelBytes}`,
+    `  memory: ${report.memory.detail} basis=${report.memory.readinessBasis} sufficient=${report.memory.sufficientForReadiness}`,
     `  gpu: ${report.gpu.state}${
       report.gpu.state === 'ready'
         ? ` ${report.gpu.name} driver=${report.gpu.driverVersion} freeMiB=${report.gpu.memoryFreeMiB}`

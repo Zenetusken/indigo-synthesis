@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { lstat, readFile, readlink, realpath, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { lstat, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
 import { z } from 'zod'
 
 export const RUNTIME_ATTESTATION_SCHEMA_VERSION = 1 as const
@@ -80,6 +80,7 @@ export type VerifyRuntimeAttestationOptions = {
   readonly expectedRuntimeVersion: string
   readonly expectedRuntimeSha256: string
   readonly expectedRuntimeSizeBytes: number
+  readonly expectedContextTokens: number
   readonly expectedRuntimeLibraries: readonly {
     readonly filename: string
     readonly sha256: string
@@ -154,8 +155,77 @@ function commandOption(
   command: readonly string[],
   ...names: readonly string[]
 ): string | null {
-  const index = command.findIndex((value) => names.includes(value))
+  let index = -1
+  for (let candidate = 0; candidate < command.length; candidate += 1) {
+    if (!names.includes(command[candidate] ?? '')) continue
+    if (index >= 0) return null
+    index = candidate
+  }
   return index >= 0 ? (command[index + 1] ?? null) : null
+}
+
+export function runtimeCommandMatchesPolicy(
+  command: readonly string[],
+  policy: {
+    readonly weightsRealpath: string
+    readonly servedModelName: string
+    readonly gpuLayers: number
+    readonly host: string
+    readonly port: string
+    readonly contextTokens: number
+  },
+): boolean {
+  const commandWeights = commandOption(command, '--model', '-m')
+  const commandGpuLayers = commandOption(command, '--n-gpu-layers', '-ngl')
+  const normalizedCommandGpuLayers =
+    commandGpuLayers === 'all' ? -2 : Number(commandGpuLayers)
+  return (
+    commandWeights === policy.weightsRealpath &&
+    commandOption(command, '--alias', '-a') === policy.servedModelName &&
+    normalizedCommandGpuLayers === policy.gpuLayers &&
+    commandOption(command, '--host') === policy.host &&
+    commandOption(command, '--port') === policy.port &&
+    Number(commandOption(command, '--ctx-size', '-c')) === policy.contextTokens
+  )
+}
+
+export function mappedFilePaths(maps: string): ReadonlySet<string> {
+  const paths = new Set<string>()
+  for (const line of maps.split('\n')) {
+    const fields = line.trim().split(/\s+/)
+    if (fields.length >= 6) paths.add(fields.slice(5).join(' '))
+  }
+  return paths
+}
+
+async function processOwnsEndpointListener(
+  pid: number,
+  endpoint: string,
+): Promise<boolean> {
+  const url = new URL(endpoint)
+  if (url.hostname !== '127.0.0.1') return false
+  const port = Number(url.port || '80')
+  const localAddress = `0100007F:${port.toString(16).padStart(4, '0').toUpperCase()}`
+  const tcpRows = (await readFile(`/proc/${pid}/net/tcp`, 'utf8')).split('\n').slice(1)
+  const listenerInodes = new Set(
+    tcpRows
+      .map((row) => row.trim().split(/\s+/))
+      .filter((fields) => fields[1] === localAddress && fields[3] === '0A')
+      .map((fields) => fields[9])
+      .filter((inode): inode is string => Boolean(inode)),
+  )
+  if (listenerInodes.size === 0) return false
+
+  for (const fd of await readdir(`/proc/${pid}/fd`)) {
+    try {
+      const target = await readlink(`/proc/${pid}/fd/${fd}`)
+      const match = /^socket:\[(\d+)\]$/.exec(target)
+      if (match?.[1] && listenerInodes.has(match[1])) return true
+    } catch {
+      // File descriptors can close between readdir and readlink; continue fail-closed.
+    }
+  }
+  return false
 }
 
 async function verifyFileIdentity(
@@ -283,21 +353,21 @@ export async function verifyRuntimeAttestation(
       .toString('utf8')
       .split('\0')
       .filter(Boolean)
-    const commandWeights = commandOption(command, '--model', '-m')
-    const commandAlias = commandOption(command, '--alias', '-a')
-    const commandGpuLayers = commandOption(command, '--n-gpu-layers', '-ngl')
-    const normalizedCommandGpuLayers =
-      commandGpuLayers === 'all' ? -2 : Number(commandGpuLayers)
+    const attestedEndpoint = new URL(attestation.endpoint)
     if (
-      !commandWeights ||
-      (await realpath(commandWeights)) !== attestation.weights.realpath ||
-      commandAlias !== attestation.servedModelName ||
-      normalizedCommandGpuLayers !== attestation.gpuLayers
+      !runtimeCommandMatchesPolicy(command, {
+        weightsRealpath: attestation.weights.realpath,
+        servedModelName: attestation.servedModelName,
+        gpuLayers: attestation.gpuLayers,
+        host: attestedEndpoint.hostname,
+        port: attestedEndpoint.port || '80',
+        contextTokens: options.expectedContextTokens,
+      })
     ) {
       return {
         state: 'invalid',
         detail:
-          'Running process arguments do not match the attested model and GPU policy',
+          'Running process arguments do not match the attested model, endpoint, GPU, and context policy',
       }
     }
 
@@ -307,7 +377,12 @@ export async function verifyRuntimeAttestation(
       attestation.runtime,
     )
     if (runtimeFileError) return { state: 'invalid', detail: runtimeFileError }
-    const processMaps = await readFile(`/proc/${attestation.pid}/maps`, 'utf8')
+    const processMaps = mappedFilePaths(
+      await readFile(`/proc/${attestation.pid}/maps`, 'utf8'),
+    )
+    const lockedLibraryPaths = new Set(
+      attestation.runtime.libraries.map((library) => library.realpath),
+    )
     for (const library of attestation.runtime.libraries) {
       const libraryError = await verifyFileIdentity(
         `Runtime library ${library.filename}`,
@@ -315,11 +390,22 @@ export async function verifyRuntimeAttestation(
         library,
       )
       if (libraryError) return { state: 'invalid', detail: libraryError }
-      if (!processMaps.includes(library.realpath)) {
+      if (!processMaps.has(library.realpath)) {
         return {
           state: 'invalid',
           detail: `Running process has not mapped pinned library ${library.filename}`,
         }
+      }
+    }
+    const unexpectedRuntimeLibraries = [...processMaps].filter(
+      (path) =>
+        /^lib(?:llama|ggml|mtmd)[a-z0-9._-]*\.so(?:\.[0-9.]+)?$/.test(basename(path)) &&
+        !lockedLibraryPaths.has(path),
+    )
+    if (unexpectedRuntimeLibraries.length > 0) {
+      return {
+        state: 'invalid',
+        detail: `Running process mapped unexpected runtime libraries: ${unexpectedRuntimeLibraries.join(', ')}`,
       }
     }
     const weightsFileError = await verifyFileIdentity(
@@ -328,6 +414,12 @@ export async function verifyRuntimeAttestation(
       attestation.weights,
     )
     if (weightsFileError) return { state: 'invalid', detail: weightsFileError }
+    if (!(await processOwnsEndpointListener(attestation.pid, attestation.endpoint))) {
+      return {
+        state: 'invalid',
+        detail: 'Attested runtime PID does not own the configured loopback listener',
+      }
+    }
 
     return {
       state: 'verified',

@@ -36,9 +36,43 @@ export async function databaseClient(): Promise<Client> {
 export async function clearApplicationData(): Promise<void> {
   const client = await databaseClient()
   try {
-    await client.query(
-      'TRUNCATE TABLE deletion_tombstone, installation_state, "user" CASCADE',
-    )
+    // Keep the live Next server up between tests without taking TRUNCATE's
+    // schema-wide CASCADE lock set. Follow the production instance-reset order instead
+    // of relying on nondeterministic user-FK cascade order: sessions must disappear
+    // before programs because workout_session -> planned_workout is RESTRICT, and
+    // immutable decision/lineage rows require the authorized reset mode.
+    await client.query('BEGIN')
+    await client.query("SET LOCAL indigo.deletion_mode = 'instance-reset'")
+    await client.query('DELETE FROM installation_state')
+    await client.query('DELETE FROM future_load_explanation_cache')
+    await client.query('DELETE FROM training_command_receipt')
+    await client.query('DELETE FROM program_revision_lineage')
+    await client.query('DELETE FROM workout_session')
+    await client.query('DELETE FROM program')
+    await client.query('DELETE FROM adjustment_decision')
+    await client.query('DELETE FROM performed_set')
+    await client.query('DELETE FROM session_exercise')
+    await client.query('DELETE FROM session_feedback')
+    await client.query('DELETE FROM set_prescription')
+    await client.query('DELETE FROM exercise_prescription')
+    await client.query('DELETE FROM planned_workout')
+    await client.query('DELETE FROM program_revision')
+    await client.query('DELETE FROM safety_hold')
+    await client.query('DELETE FROM strength_baseline')
+    await client.query('DELETE FROM athlete_equipment')
+    await client.query('DELETE FROM athlete_training_day')
+    await client.query('DELETE FROM athlete_profile')
+    await client.query('DELETE FROM audit_event')
+    await client.query('DELETE FROM deletion_plan')
+    await client.query('DELETE FROM verification')
+    await client.query('DELETE FROM session')
+    await client.query('DELETE FROM account')
+    await client.query('DELETE FROM "user"')
+    await client.query('DELETE FROM deletion_tombstone')
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
   } finally {
     await client.end()
   }

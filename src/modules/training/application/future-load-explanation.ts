@@ -19,6 +19,7 @@ import {
   type LlmRuntimeConfig,
   resolveConfiguredModelPack,
   runLlmPreflight,
+  SUPPORTED_LOCAL_LLM_TIMEOUT_MS,
   type VerifiedRuntimeIdentity,
   validateExplanationProse,
 } from '@/platform/llm'
@@ -67,7 +68,6 @@ export type ExplainFutureLoadDecisionDeps = {
   readonly interactiveTimeoutMs?: number
 }
 
-const defaultInteractiveTimeoutMs = 3_000
 const defaultSingleFlight = createBoundedAsyncSingleFlight()
 
 /**
@@ -257,7 +257,7 @@ export async function explainFutureLoadDecision(input: {
       const timeoutMs =
         input.deps?.interactiveTimeoutMs ??
         config.timeoutMsOverride ??
-        defaultInteractiveTimeoutMs
+        SUPPORTED_LOCAL_LLM_TIMEOUT_MS
 
       const synthesisStarted = performance.now()
       const synthesis = await stack.explanationGenerator.synthesize({

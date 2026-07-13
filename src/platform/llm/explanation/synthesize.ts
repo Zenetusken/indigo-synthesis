@@ -3,7 +3,7 @@ import type { ExplanationGenerationPort, LanguageModelPort } from '../ports'
 import {
   buildFutureLoadMessages,
   FUTURE_LOAD_PROMPT_VERSION,
-} from '../prompts/future-load.v2'
+} from '../prompts/future-load.v3'
 import type { ExplanationGenerationRequest, ExplanationGenerationResult } from '../types'
 import { factBundleHash } from './fact-bundle'
 import { validateExplanationProse } from './validate-prose'
@@ -49,7 +49,16 @@ export function createExplanationGenerationPort(
       // pack defaults used when composing the generator).
       const timeoutMs =
         request.timeoutMs ?? options.timeoutMs ?? settings.limits.timeoutMs
-      const messages = buildFutureLoadMessages(bundle)
+      let messages: ReturnType<typeof buildFutureLoadMessages>
+      try {
+        messages = buildFutureLoadMessages(bundle)
+      } catch {
+        return {
+          status: 'unavailable',
+          reason: 'config-error',
+          detail: `No closed explanation template exists for ${bundle.grounding.reasonCode}.`,
+        }
+      }
       const hash = factBundleHash(bundle)
 
       const completion = await options.languageModel.complete({

@@ -5,6 +5,7 @@ import { createBoundedAsyncSingleFlight } from '@/modules/training/application/f
 import type { FutureLoadFactBundlesResult } from '@/modules/training/application/future-load-fact-bundle'
 import type { LlmComposition, LlmRuntimeConfig } from '@/platform/llm'
 import {
+  canonicalFutureLoadExplanation,
   EXPLANATION_VALIDATOR_VERSION,
   explanationCacheKey,
   FUTURE_LOAD_PROMPT_VERSION,
@@ -101,6 +102,16 @@ function sampleBundleResult(
     ],
     ...overrides,
   }
+}
+
+function sampleValidProse(): string {
+  const result = sampleBundleResult()
+  if (result.status !== 'available') throw new Error('sample bundle unavailable')
+  const bundle = result.bundles[0]?.factBundle
+  if (!bundle) throw new Error('sample bundle missing')
+  const prose = canonicalFutureLoadExplanation(bundle)
+  if (!prose) throw new Error('sample bundle has no safe explanation')
+  return prose
 }
 
 function disabledConfig(): LlmRuntimeConfig {
@@ -253,8 +264,7 @@ describe('explainFutureLoadDecision', () => {
   })
 
   it('returns available inferred prose on successful synthesis', async () => {
-    const prose =
-      'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.'
+    const prose = sampleValidProse()
     const result = await explainFutureLoadDecision({
       userId,
       sessionId,
@@ -314,8 +324,7 @@ describe('explainFutureLoadDecision', () => {
   })
 
   it('serves a second request from cache without synthesizing again', async () => {
-    const prose =
-      'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.'
+    const prose = sampleValidProse()
     const synthesize = vi.fn(async () => ({
       status: 'available' as const,
       prose,
@@ -376,8 +385,7 @@ describe('explainFutureLoadDecision', () => {
   })
 
   it('rejects and repairs invalid cached prose under the current validator', async () => {
-    const validProse =
-      'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.'
+    const validProse = sampleValidProse()
     const synthesize = vi.fn(async () => ({
       status: 'available' as const,
       prose: validProse,
@@ -462,8 +470,7 @@ describe('explainFutureLoadDecision', () => {
       await releaseGeneration.promise
       return {
         status: 'available' as const,
-        prose:
-          'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+        prose: sampleValidProse(),
         modelId: verifiedRuntimeIdentity.modelId,
         modelContentDigest: modelDigest,
         runtimeId: verifiedRuntimeIdentity.runtimeId,
@@ -535,8 +542,7 @@ describe('explainFutureLoadDecision', () => {
           explanationGenerator: {
             synthesize: async () => ({
               status: 'available' as const,
-              prose:
-                'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+              prose: sampleValidProse(),
               modelId: verifiedRuntimeIdentity.modelId,
               modelContentDigest: modelDigest,
               runtimeId: verifiedRuntimeIdentity.runtimeId,
@@ -586,8 +592,7 @@ describe('explainFutureLoadDecision', () => {
     }
     const synthesize = vi.fn(async () => ({
       status: 'available' as const,
-      prose:
-        'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+      prose: sampleValidProse(),
       modelId: verifiedRuntimeIdentity.modelId,
       modelContentDigest: modelDigest,
       runtimeId: verifiedRuntimeIdentity.runtimeId,

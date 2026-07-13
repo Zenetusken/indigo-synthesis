@@ -60,8 +60,9 @@ training decisions.
 - Bump the FactBundle to contract version `2`.
 - Remove free-form `skipReason` from model input entirely. Skipped status is sufficient;
   the database already guarantees that the authoritative row has a reason.
-- Bump the prompt to `future-load.v2`; old cache keys cannot collide with v2 input.
-- Introduce `future-load-validator.v2` and include it in cache identity and stored metadata.
+- The initial FactBundle hardening bumped prompt/validator identity to v2. The final
+  adversarial pass bumps both to v3 and accepts only the exact closed
+  FactBundle-derived paragraph; old cache keys cannot collide.
 - Purge v1 cache rows during migration rather than relabeling unverified prose. New rows
   store non-null validator version, served model name, runtime ID, and runtime-attestation
   digest.
@@ -100,6 +101,9 @@ training decisions.
 - Product packs require a non-null expected SHA-256, and an environment digest may only
   equal—not override—the committed pack identity. Remove the unverified Q5 pack until a
   concrete artifact is downloaded, hashed, and measured.
+- Supported local application mode reads model settings and weights only from committed
+  directories and uses the exact 3,000 ms product deadline; archive/live E2E must not
+  inherit alternate registry, weights, or timeout values from the caller environment.
 - Pin the Q4 Hugging Face revision and fail the download before installation on digest
   mismatch.
 - The supported product runtime is the pinned CUDA `llama-server` path. LM Studio remains
@@ -111,6 +115,10 @@ training decisions.
   timestamp. Preflight checks those fields, exact `/props` model path/alias on the pinned
   server, and GPU process memory. This protects against accidental/stale/mismatched runtime
   state; it is not cryptographic attestation against a malicious same-user process.
+- Launcher and preflight pin the committed 4,096-token context argument rather than
+  accepting an inherited runtime override.
+- RAM readiness distinguishes pre-load model-plus-headroom capacity from the 4 GiB
+  operating reserve required after the exact runtime is already attested and resident.
 - Completion responses must return the exact configured model name.
 - Completion, `/models`, and `/props` requests reject redirects and keep abort timers active
   through body parsing.
@@ -141,7 +149,7 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 | LATE SAFETY REPORT                                          |
 | Record pain or a safety issue from this completed session.  |
 | [Optional factual context_______________________________]   |
-| [Record issue and create safety hold]                       |
+| [Record issue and require safety review]                    |
 +-------------------------------------------------------------+
 ```
 
@@ -155,7 +163,7 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 ## Commit sequence and gates
 
 1. **Specification.** This document only; review against live code and audit evidence.
-2. **Grounding and provenance.** FactBundle/prompt/validator v2, cache-version migration,
+2. **Grounding and provenance.** FactBundle v2 plus prompt/validator v3, cache-version migration,
    redirects, exact model response, verified pack/runtime identity. Gate: focused LLM tests,
    offline baseline, typecheck.
 3. **Linearizable invalidation and cache coordination.** Active-state cache port,

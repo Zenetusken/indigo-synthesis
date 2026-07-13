@@ -1,137 +1,130 @@
 # LLM runtime and GPU coherence
 
 Status: operator runbook  
-Related: [LLM measurement protocol](LLM_MEASUREMENT_PROTOCOL.md), [llm/README.md](../../llm/README.md)
+Related: [LLM measurement protocol](LLM_MEASUREMENT_PROTOCOL.md),
+[model/runtime locks](../../llm/README.md)
 
-## RAM gate
+## Product policy
 
-A 9B Q4_K_M GGUF is ~5.7–6.5 GB on disk and needs roughly **model size + ≥4 GiB** free
-`MemAvailable` for comfortable load (KV cache, OS, Next.js).
+The local language layer is optional, loopback-only, and GPU-only. Core product paths
+remain available with `INDIGO_LLM_MODE=disabled`.
+
+| Control | Supported value | Meaning |
+| --- | --- | --- |
+| `INDIGO_LLM_REQUIRE_GPU` | `true` | Product readiness requires healthy NVIDIA state |
+| `INDIGO_LLM_N_GPU_LAYERS` | `all` | llama.cpp offloads every model layer; `-1` means auto and is not accepted |
+| endpoint | `http://127.0.0.1:8080/v1` | Exact IPv4 loopback binding |
+| model | `qwen3.5-9b-q4_k_m` | Only the digest-locked pack is supported |
+| model settings | committed `llm/models` registry | Sampling, limits, and prompt metadata are reviewed code |
+| weights path | committed `llm/weights` directory | Download, preflight, and launcher resolve the same artifact |
+| context | `4096` tokens | Launcher argv and preflight must match the committed pack limit |
+| timeout | `3000` ms | Interactive explanation budget |
+
+CPU, partial/auto offload, LM Studio, alternate packs, redirecting endpoints, and
+unattested servers can be used for private diagnosis only; none may report product
+readiness.
+
+## RAM and NVIDIA gates
+
+A 5.68 GB Q4_K_M file needs roughly the model size plus 4 GiB of available system RAM
+before loading. Once the exact process is attested and resident, requiring room for a
+second copy is a false blocker; steady-state readiness instead preserves 4 GiB of
+remaining operating headroom. Preflight reports its `model-load` or `verified-runtime`
+memory basis explicitly.
 
 | MemAvailable | Verdict |
 | --- | --- |
-| ≥ 12 GiB | Comfortable for Q4 + headroom |
-| 8–12 GiB | Possible; close heavy browsers first |
-| < 8 GiB | Do not load 9B; free memory first |
+| at least 12 GiB | comfortable |
+| 8–12 GiB | close heavy processes first |
+| below 8 GiB | do not load the 9B runtime |
 
-Check: `pnpm llm:preflight` (reads `/proc/meminfo`).
+For an already verified runtime, `MemAvailable` below 4 GiB blocks inference; 4 GiB or
+more is sufficient even when full reload headroom is temporarily unavailable. Stop the
+runtime before using the pre-load table to decide whether it can be loaded again.
 
-## Product policy: GPU only
+`pnpm llm:preflight` reads `/proc/meminfo` and runs `nvidia-smi`. If NVML reports a
+driver/library mismatch after a package update, save work and reboot; do not unload
+NVIDIA modules from an active graphical session. After reboot, confirm `nvidia-smi`
+and `/sys/module/nvidia/version` agree.
 
-The Indigo LLM layer **must not** run product inference on CPU.
+## Provenance chain
 
-| Control | Default | Effect |
-| --- | --- | --- |
-| `INDIGO_LLM_REQUIRE_GPU` | `true` | Preflight is not ready unless `nvidia-smi` is healthy |
-| `INDIGO_LLM_N_GPU_LAYERS` | `-1` | Serve refuses to start with `0` when GPU is required |
-| `pnpm llm:serve` | GPU assert | Exits 2 if NVML/driver mismatch or no GPU |
-
-Emergency diagnosis only: `INDIGO_LLM_REQUIRE_GPU=false` (never a release path).
-
-## GPU coherence (NVIDIA on Pop!_OS)
-
-### Healthy state
-
-- `nvidia-smi` prints GPU name, driver version, memory
-- Loaded kernel module version **equals** userspace (`nvidia-utils` / NVML)
-- DKMS shows the same version for the running kernel
-
-### Current failure mode: driver/library mismatch
-
-Symptoms:
+The supported stack is pinned at every mutable project-controlled layer:
 
 ```text
-Failed to initialize NVML: Driver/library version mismatch
+artifact.lock.json ─► exact HF revision / filename / size / weights SHA-256
+settings.json      ─► committed sampling / limits / prompt metadata
+llama-cpp.lock.json ─► source commit / CUDA architecture
+                    ├► launcher SHA-256 + size
+                    └► every local llama / ggml / mtmd DSO SHA-256 + size
+serve-local.sh      ─► exact loopback / model / alias / context / all-layer argv
+attestation.json    ─► PID + process start + file identities + all digests
+preflight           ─► /proc exe, argv, exact maps, listener + /props + /models + NVIDIA PID memory
 ```
 
-Typical cause after a driver package upgrade **without reboot**:
+The launcher writes `tmp/llm-runtime-attestation.json` atomically with mode `0600`
+before replacing its shell PID with `llama-server`. Preflight rejects stale PIDs,
+changed files, unmapped/substituted/extra runtime DSOs, wrong host/port/context or listener PID,
+wrong build/model props, a wrong served name, missing GPU allocation, or a configured
+digest that differs from the pack. The supported launcher clears dynamic-loader override
+variables before attestation and execution.
 
-| Layer | Example |
-| --- | --- |
-| Still **loaded** kernel module | `580.159.03` (`/sys/module/nvidia/version`) |
-| Installed userspace / DKMS | `580.173.02` |
-| Result | NVML and CUDA apps fail; display may still “work” on the old module |
+The binary/DSO digest set is deliberately host-build-specific. Changing the source
+checkout path or toolchain can change RPATH/build output and requires an explicit
+review/re-pin. The local attestation protects against accidental/stale substitution;
+same-user malicious tampering is outside its threat model.
 
-**Fix (required for CUDA):**
-
-1. Save work.
-2. **Reboot** (cleanest). This loads the installed DKMS module.
-3. Verify: `nvidia-smi` and `cat /sys/module/nvidia/version` match package version.
-4. Re-run `pnpm llm:preflight` — GPU state should be `ready`.
-
-Avoid unloading `nvidia` modules while an active graphical session uses the GPU; that
-can freeze the display. Prefer reboot over `rmmod` on a workstation session.
-
-### After GPU is healthy
-
-Prefer CUDA offload when starting `llama-server` (`--n-gpu-layers -1`).  
-`pnpm llm:serve` uses LM Studio when `lms` is present; LM Studio CUDA backends live under
-`~/.lmstudio/extensions/backends/llama.cpp-*-nvidia-cuda*`.
-
-If GPU remains broken, CPU inference is still valid for calibration but slower — set
-expectations in the live probe metrics, do not loosen the validation gate.
-
-## Loopback topology (product-aligned)
-
-```text
-Next.js / scripts  ──loopback only──►  OpenAI-compatible server
-                                       llama-server :8080  (preferred; qwen35)
-                                       LM Studio :1234     (fallback; may lack qwen35)
-                                              │
-                                              ▼
-                                       GGUF weights (+ CUDA if healthy)
-```
-
-Recommended server binary: build recent `llama.cpp` (this host uses
-`~/project/llama.cpp-indigo/build/bin/llama-server`). LM Studio 1.26 backends rejected
-architecture `qwen35` as of this writing.
-
-- Core product still defaults `INDIGO_LLM_MODE=disabled`.
-- No cloud model dependency.
-- Architecture tests allow fetch only in the loopback LLM adapter + preflight.
-
-## Operator sequence (GPU-only)
+## Clean operator sequence
 
 ```sh
-# If preflight shows driver mismatch:
-pnpm llm:reboot-cuda    # or: sudo reboot
-
-# After reboot — one-shot GPU measure:
 cd ~/project/indigo-synthesis
-git checkout feat/llm-modular-inference-layer
-pnpm llm:measure-gpu
-# builds CUDA llama-server if needed, serves ngl=-1, live baseline JSON
 
-# Manual steps:
-pnpm llm:preflight      # requireGpu=true; gpu.state must be ready
+# Artifact and exact host build
+pnpm llm:download-qwen35
 pnpm llm:build-cuda
-pnpm llm:serve          # fails closed without healthy nvidia-smi
-INDIGO_LLM_LIVE=1 pnpm llm:validate-baseline --json
 
-# Browser product path (History Explain with MODE=local + GPU):
+# Starts the pinned server and creates a fresh attestation
+pnpm llm:serve
+```
+
+In a second shell:
+
+```sh
+export INDIGO_LLM_MODE=local
+export INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m
+export INDIGO_LLM_MODEL_SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
+export INDIGO_LLM_N_GPU_LAYERS=all
+export INDIGO_LLM_TIMEOUT_MS=3000
+
+pnpm llm:preflight
+pnpm llm:validate-baseline
 pnpm test:e2e:llm
-
-# Multi-run archive (offline + live latency + e2e → tmp/llm-runs/):
 RUNS=3 pnpm llm:archive-product-path
 ```
 
-`pnpm test:e2e` keeps `INDIGO_LLM_MODE=disabled` and never requires a GPU.  
-`pnpm test:e2e:llm` is operator-only: it starts the Next e2e supervisor with
-`INDIGO_LLM_MODE=local`, `INDIGO_LLM_REQUIRE_GPU=true`, and the loopback endpoint,
-then asserts grounded History prose (or honest soft failure) after a completed workout.  
-Prefer ≥3 archived product-path runs with the same model digest before cache work.
+Supported local application config rejects alternate model-settings/weights directories
+and deadlines other than 3,000 ms. The live browser and multi-run archive commands also
+pin those values rather than inheriting a caller's diagnostic environment.
 
-## Coherence checklist
+For a one-shot post-reboot bootstrap, `pnpm llm:measure-gpu` checks raw GPU/artifact
+state first, builds if the binary lock is absent, stops only a matching prior listener,
+starts the pinned server, and only then runs full preflight and live measurement. It
+does not run readiness preflight before the server exists and does not broadly `pkill`
+unrelated processes.
 
-| Piece | Healthy signal |
+## Healthy signals
+
+| Layer | Required evidence |
 | --- | --- |
-| RAM | `sufficientForApproxModelBytes=true` |
-| GPU | `gpu.state=ready` (**required** for product local mode) |
-| Weights | file under `llm/weights/` |
-| Server | `endpoint.reachable=true` on loopback **with CUDA offload** |
-| Pack | `servedModelName` matches a `/v1/models` id |
-| Offline baseline | `pnpm llm:validate-baseline` PASS |
-| Live GPU measure | `availableRate=1.0` + `nvidia-smi` shows model VRAM |
+| RAM | `sufficientForReadiness=true` under the reported memory basis |
+| GPU | `gpu.state=ready` and attested PID has non-zero NVIDIA allocation |
+| weights | exact size/digest in the artifact lock |
+| runtime | `runtimeEvidence.state=verified` |
+| endpoint | exact model alias from non-redirecting `/v1/models` |
+| composition | verified runtime identity matches the committed pack |
+| offline | every baseline check passes at the current FactBundle-v2/prompt-v3 contract |
+| live | every eligible case available within the configured timeout |
+| browser | opt-in live E2E passes with deterministic codes still visible |
 
-Until offline baseline is green **and** a GPU live measure is archived, do not enable
-trainee-facing prose UI.
+Default `pnpm test:e2e` forces disabled mode, regardless of parent-shell LLM variables.
+Only `pnpm test:e2e:llm` enables the verified local runtime.

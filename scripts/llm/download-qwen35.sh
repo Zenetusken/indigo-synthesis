@@ -2,7 +2,13 @@
 # Download Qwen3.5-9B Q4_K_M GGUF into llm/weights for the Indigo pack.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT_DIR="${INDIGO_LLM_WEIGHTS_DIR:-$ROOT/llm/weights}"
+cd "$ROOT"
+OUT_DIR="$ROOT/llm/weights"
+if [[ -n "${INDIGO_LLM_WEIGHTS_DIR:-}" ]] \
+  && [[ "$(realpath -m "$INDIGO_LLM_WEIGHTS_DIR")" != "$OUT_DIR" ]]; then
+  echo "FATAL: supported download installs only into $OUT_DIR" >&2
+  exit 2
+fi
 mkdir -p "$OUT_DIR"
 LOCK="$ROOT/llm/models/qwen3.5-9b-q4_k_m/artifact.lock.json"
 REPO="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).repository" "$LOCK")"

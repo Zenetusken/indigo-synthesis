@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  assessMemoryReadiness,
   type EndpointStatus,
   endpointModelReadinessBlocker,
   probeEndpoint,
+  VERIFIED_RUNTIME_HEADROOM_BYTES,
 } from './preflight'
 
 function endpoint(models: readonly string[]): EndpointStatus {
@@ -121,5 +123,41 @@ describe('endpointModelReadinessBlocker', () => {
     expect(
       endpointModelReadinessBlocker(endpoint(['qwen3.5-9b-q4_k_m']), 'qwen3.5-9b-q4_k_m'),
     ).toBeNull()
+  })
+})
+
+describe('assessMemoryReadiness', () => {
+  const approxModelBytes = 5_680_000_000
+
+  it('requires model bytes plus operating headroom before a runtime is verified', () => {
+    const result = assessMemoryReadiness({
+      memAvailableBytes: VERIFIED_RUNTIME_HEADROOM_BYTES,
+      approxModelBytes,
+      runtimeVerified: false,
+    })
+
+    expect(result).toMatchObject({
+      readinessBasis: 'model-load',
+      sufficientForApproxModelBytes: false,
+      sufficientForReadiness: false,
+    })
+    expect(result.requiredAvailableBytes).toBe(
+      approxModelBytes + VERIFIED_RUNTIME_HEADROOM_BYTES,
+    )
+  })
+
+  it('does not require room to load a second model after the attested runtime is resident', () => {
+    const result = assessMemoryReadiness({
+      memAvailableBytes: VERIFIED_RUNTIME_HEADROOM_BYTES,
+      approxModelBytes,
+      runtimeVerified: true,
+    })
+
+    expect(result).toEqual({
+      readinessBasis: 'verified-runtime',
+      requiredAvailableBytes: VERIFIED_RUNTIME_HEADROOM_BYTES,
+      sufficientForApproxModelBytes: false,
+      sufficientForReadiness: true,
+    })
   })
 })

@@ -6,8 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-echo "=== Stopping local inference servers ==="
-pkill -f 'llama-server' 2>/dev/null || true
+echo "=== Runtime note ==="
+echo "The OS reboot will stop local inference; this script does not kill unrelated processes."
 
 echo "=== Current NVIDIA state (expected mismatch pre-reboot) ==="
 echo "loaded module: $(cat /sys/module/nvidia/version 2>/dev/null || echo none)"
@@ -18,7 +18,6 @@ echo
 echo "=== After reboot, run this exactly ==="
 cat <<'EOF'
 cd ~/project/indigo-synthesis
-git checkout feat/llm-modular-inference-layer
 pnpm llm:measure-gpu
 # Expected: nvidia-smi OK, CUDA llama-server, live availableRate=1.0, GPU memory in use
 EOF

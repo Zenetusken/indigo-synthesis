@@ -1,7 +1,9 @@
 # Explanation generation contract
 
-Status: **accepted design; not implemented**  
-Date: 2026-07-12  
+Status: **implemented; FactBundle v2 and closed-output prompt/validator v3 active**
+
+Date: 2026-07-13
+
 Authority: [ADR 0006](adr/0006-optional-local-grounded-language.md)
 
 This document pins how an optional **host-local, model-agnostic** language-generation
@@ -128,7 +130,7 @@ interface ExplanationConstraints {
   readonly mustNotDiagnose: true
   readonly mustNotAdviseIgnoringPainOrHolds: true
   readonly developmentFixtureNoticeRequired: boolean // true when contentMode === 'development'
-  readonly maxOutputTokens: number // implementation default ≤ 256 for v2
+  readonly maxOutputTokens: number // current implementation default ≤ 256
 }
 ```
 
@@ -146,7 +148,7 @@ Before hashing or prompting:
 
 ## 5. Generation request and result
 
-### 5.1 Port shape (target)
+### 5.1 Port shape
 
 ```ts
 interface ExplanationGenerationPort {
@@ -157,7 +159,7 @@ interface ExplanationGenerationPort {
 
 interface ExplanationGenerationRequest {
   readonly factBundle: ExplanationFactBundle
-  readonly promptVersion: string // e.g. 'future-load.v2'
+  readonly promptVersion: string // e.g. 'future-load.v3'
   readonly timeoutMs: number
 }
 
@@ -165,9 +167,9 @@ type ExplanationGenerationResult =
   | {
       readonly status: 'available'
       readonly prose: string
-      readonly modelId: string // operator-configured opaque id; not a product constant
+      readonly modelId: string // committed model-pack identifier
       readonly modelContentDigest: string // SHA-256 (or stronger) of the loaded weights/artifact
-      readonly runtimeId: string // e.g. adapter name + runtime version label
+      readonly runtimeId: string // verified runtime commit + process identity
       readonly promptVersion: string
       readonly factBundleHash: string
       readonly generatedAt: string // UTC ISO from application clock port, not the model
@@ -178,6 +180,7 @@ type ExplanationGenerationResult =
         | 'disabled'
         | 'runtime-unreachable'
         | 'timeout'
+        | 'config-error'
         | 'validation-failed'
         | 'model-error'
         | 'invalidated-decision'
@@ -198,15 +201,17 @@ without throwing into the workout path.
 
 ### 5.3 Model identity (model-agnostic)
 
-The product **does not** hard-code a model family, size, quantisation, weight format, or
-inference engine. When local inference is enabled, configuration records only what is
-needed to reproduce and invalidate caches:
+Domain/application authority does not branch on model family, size, quantisation, weight
+format, or inference engine. The current supported deployment is deliberately narrower:
+one exact Q4 artifact and one host-pinned CUDA runtime are admitted only after full
+attestation. Configuration records what is needed to reproduce and invalidate caches:
 
 | Field | Role |
 | --- | --- |
-| `modelId` | Opaque operator label (stable string the host chooses) |
+| `modelId` | Stable committed pack identifier |
 | `modelContentDigest` | Cryptographic digest of the loaded weights/artifact |
-| `runtimeId` | Which adapter/runtime served the request |
+| `runtimeId` | Verified runtime commit and process identity |
+| `runtimeAttestationDigest` | Digest of the launcher-produced process/file evidence |
 | path or endpoint | Local file path and/or loopback URL for the chosen runtime |
 | optional metadata | Family, size, quant, format—for operator docs only, not product branches |
 
@@ -218,8 +223,8 @@ Rules:
   when digests are maintained correctly.
 - Resource targets (latency, RAM/VRAM) are operator sizing concerns. The contract only
   requires that interactive paths respect `timeoutMs` and degrade to `unavailable`.
-- Optional offline groundedness recordings may pin a digest for a specific evaluation
-  run; that pin is test evidence, not a product default model.
+- An environment digest may assert equality with the committed pack digest; it cannot
+  override it. A pack without a verified digest is not a product option.
 
 ## 6. Validation gate (mandatory)
 
@@ -243,6 +248,10 @@ Before any prose is shown or cached as `available`:
 6. **Invalidated decisions**: do not generate “active increase” framing when
    `decision.invalidated` is true; either skip generation or use a fixed
    non-model sentence that the decision is no longer active.
+7. **Closed output (v3)**: derive the one allowed paragraph with
+   `canonicalFutureLoadExplanation(FactBundle)` and require byte-for-byte equality after
+   trimming. The earlier lexical/numeric checks are defense-in-depth and useful failure
+   diagnostics; they are not treated as proof over arbitrary prose.
 
 Failed validation → `status: 'unavailable', reason: 'validation-failed'`. Do not store
 failed prose as success.
@@ -255,13 +264,20 @@ failed prose as success.
 explanationCacheKey =
   decisionId
   + '\0' + promptVersion
+  + '\0' + validatorVersion
   + '\0' + modelId
   + '\0' + modelContentDigest
   + '\0' + factBundleHash
 ```
 
-Optional storage: PostgreSQL table or local filesystem under a configured data directory.
-Either is fine; both must be subject-scoped and deleted with personal data deletion.
+Storage is PostgreSQL `future_load_explanation_cache`. Rows retain served-model,
+runtime, runtime-attestation, prompt, validator, FactBundle, and generation-duration
+provenance. Schema upgrades purge rows that cannot prove the current contract rather
+than relabeling them.
+
+Every cache hit is revalidated by the current validator before presentation. Identity
+or validation failure deletes the row and regenerates only through the normal guarded
+path. `validatorVersion` participates in the key.
 
 ### 7.2 Invalidation
 
@@ -275,6 +291,19 @@ Drop or mark stale when any of:
 Cached prose is **not** part of the immutable training ledger. Deleting it must not
 delete the adjustment decision.
 
+### 7.3 Concurrency and failure semantics
+
+- Cache read and final publication run under the same per-user PostgreSQL advisory lock
+  as `reportPain` and query authoritative completed-session/pain state while locked.
+- Generation happens outside the lock. `putIfActive` is the publication linearization
+  point and rechecks state after generation.
+- Post-completion pain commits feedback, hold, receipt, and audit first. Cache purge is
+  post-commit and best effort, so cache failure cannot roll back safety state.
+- Cache relation/read/write failure degrades only after a fresh locked active-state
+  check; inability to query authoritative state fails closed.
+- A bounded process-local singleflight coalesces identical misses in the supported
+  single-Node deployment and releases entries in `finally`.
+
 ## 8. Delivery and performance
 
 | Event | Behavior |
@@ -285,7 +314,8 @@ delete the adjustment decision.
 | Model timeout | Default ≤ 3000 ms for interactive lazy path; then `unavailable` |
 | Model down | Codes-only UI; no synthetic fallback prose |
 
-No Redis, queue product, or WebSocket is required for v1. Prefer:
+No Redis, queue product, or WebSocket is required. The implemented path is explicit lazy
+generation on History with bounded in-process miss coalescing.
 
 1. lazy on read, or  
 2. fire-and-forget in-process work that cannot fail the request, or  
@@ -306,22 +336,29 @@ Rules:
 - Application outbound-network-blocked proofs still pass with inference disabled.
 - Adapters are swappable behind `ExplanationGenerationPort` (different engines/formats
   are infrastructure choices, not domain changes).
-- Optional config surface (names illustrative until implemented; values are operator-
-  chosen, not product defaults):
+- Implemented optional config surface (the listed model/runtime values are the current
+  supported, attested deployment):
 
 ```dotenv
 # Default: disabled. Do not set in production unless the operator intends local inference.
 INDIGO_LLM_MODE=disabled
 # INDIGO_LLM_MODE=local
-# INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080
-# INDIGO_LLM_MODEL_ID=operator-chosen-label
-# INDIGO_LLM_MODEL_PATH=/var/lib/indigo/models/weights.bin
-# INDIGO_LLM_MODEL_SHA256=...
+# INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080/v1
+# INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m
+# INDIGO_LLM_MODEL_SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
+# INDIGO_LLM_N_GPU_LAYERS=all
+# INDIGO_LLM_ATTESTATION_PATH=tmp/llm-runtime-attestation.json
 # INDIGO_LLM_TIMEOUT_MS=3000
 ```
 
-Startup preflight may **report** LLM status; it must not fail the process when disabled
-or unreachable.
+Supported local application mode reads settings and weights only from the committed
+`llm/models` and `llm/weights` directories and accepts exactly the 3,000 ms deadline.
+Alternate directories or longer timeouts are diagnostic-only and cannot satisfy the
+product configuration contract.
+
+Application boot does not require LLM readiness when the feature is disabled. The
+explicit operator command `pnpm llm:preflight` is a hard readiness gate and exits
+non-zero when the attested local stack is not ready.
 
 ## 10. Module and layer placement
 
@@ -359,6 +396,7 @@ This path does not unblock `LLM/ML coaching` in the deferred list.
 | `disabled` | Explanations use rule codes only | Enable local runtime if desired |
 | `runtime-unreachable` | Optional service not running | Start or reconfigure host-local inference |
 | `timeout` | Host too slow for interactive generate | Smaller/faster model, shorter prompt, or manual control |
+| `config-error` | No closed template exists for this persisted reason | Codes-only; add a reviewed template before enabling prose |
 | `validation-failed` | Model drifted from facts | Check prompt/model; codes remain correct |
 | `model-error` | Runtime error | Inspect the configured inference runtime logs |
 | `invalidated-decision` | Decision no longer active | Show invalidation copy only |
@@ -370,11 +408,18 @@ A slice is not done because inference “works once.”
 ### 13.1 Automated (required before enable-by-config in any shared environment)
 
 - Unit tests for FactBundle builders against fixture decisions.
-- Validation-gate tests: missing reason code, wrong load, invented kg, diagnosis lexicon.
+- Validation-gate tests: exact closed paragraph, wrong load, invented kg, reversed notice,
+  advice/medical suffixes, and unsupported persisted reasons.
 - Port tests with a fake adapter (available / each unavailable reason).
 - Architecture: domain purity unchanged; no general outbound model SDK in core paths;
   loopback-only client if HTTP is used.
 - Personal-data deletion removes any stored prose for the subject.
+- Subject exports include cached prose and its full generation/validation/runtime
+  provenance; subject and instance deletion previews count those rows exactly.
+- Deterministic race tests cover pain-before-publication and publication-before-pain;
+  no stale cache row may be served or reinserted after invalidation. A row may remain
+  physically when post-commit best-effort cleanup is unavailable, but locked state
+  checks make it inert.
 
 ### 13.2 Groundedness golden set
 
@@ -397,16 +442,15 @@ must not require any model weight file or local inference process.**
 - Measurable benefit (later beta): explanation comprehension vs codes-only—not screen
   time or chat engagement.
 
-## 14. Implementation sequence (authoritative order)
+## 14. Implementation sequence
 
-1. This contract + ADR 0006 (done when accepted in-repo).
-2. FactBundle builder + validation pure functions + tests (no model binary).
-3. Disabled default port + config parsing.
-4. History UI wiring that already degrades to codes-only.
-5. First local adapter + operator install notes (engine and weights are operator-chosen;
-   document the adapter’s expected API, not a mandated model).
-6. Cache + invalidation on decision invalidation.
-7. Optional operator doc-retrieval tool (separate from trainee path).
+1. Contract + ADR 0006. **Done.**
+2. FactBundle v2 plus closed-output prompt/validator v3 and adversarial goldens. **Done.**
+3. Disabled default, strict loopback transport, and exact response model. **Done.**
+4. Codes-first History explanation and completed-session safety correction. **Done.**
+5. Exact artifact/runtime locks and live attestation. **Done.**
+6. Linearizable, revalidated cache plus portability accounting. **Done.**
+7. Optional operator doc retrieval remains separate and is not required for this slice.
 
 Do not open trainee chat, program-generation prompts, or cloud keys in this sequence.
 Do not bake a preferred model name into domain code, UI copy, or migration defaults.
@@ -425,8 +469,5 @@ Do not bake a preferred model name into domain code, UI copy, or migration defau
 | Capability | Relationship |
 | --- | --- |
 | LLM/ML **coaching** (decisions, instruments, opaque scores) | Still deferred; full re-entry bar unchanged |
-| Optional local **grounded explanation** | Design accepted here; implement per sequence above |
+| Optional local **grounded explanation** | Implemented per the sequence above; default disabled |
 | Queues/Redis/vector DB | Still deferred; not required by this contract |
-
-When implementation begins, update `docs/MVP_STATUS.md` and the self-hosting contract in
-the same change that introduces runtime config or storage.

@@ -40,12 +40,18 @@ export {
   type LlmRuntimeConfig,
   parseLlmConfig,
   resetLlmConfigForTests,
+  SUPPORTED_LOCAL_LLM_ENDPOINT,
+  SUPPORTED_LOCAL_LLM_TIMEOUT_MS,
 } from './config'
 export {
   buildFutureLoadFactBundle,
   FactBundleBuildError,
   type PersistedFutureLoadDecision,
 } from './explanation/build-fact-bundle'
+export {
+  canonicalFutureLoadExplanation,
+  DEVELOPMENT_FIXTURE_NOTICE,
+} from './explanation/canonical-prose'
 export type { ExplanationFactBundle } from './explanation/fact-bundle'
 export {
   canonicalJsonStringify,
@@ -71,7 +77,7 @@ export type {
 export {
   buildFutureLoadMessages,
   FUTURE_LOAD_PROMPT_VERSION,
-} from './prompts/future-load.v2'
+} from './prompts/future-load.v3'
 export type { VerifiedRuntimeIdentity } from './runtime/attestation'
 export {
   formatLlmPreflightReport,
