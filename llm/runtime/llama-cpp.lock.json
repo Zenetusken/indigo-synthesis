@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/ggml-org/llama.cpp.git",
+  "commit": "99f3dc32296f825fec94f202da1e9fede1e78cf9",
+  "version": "1 (99f3dc3)",
+  "serverBinarySha256": "98d94db475801d2852bb79123729155f343db2dd29f6c21fbbb1d05197562ff4",
+  "serverBinarySizeBytes": 17896,
+  "runtimeLibraries": [
+    {
+      "filename": "libllama-server-impl.so",
+      "sha256": "c16004544480529f0dce358f73114a2038915c6a0e51c296840b4aabf025b321",
+      "sizeBytes": 6758016
+    },
+    {
+      "filename": "libllama-common.so.0.0.1",
+      "sha256": "30fb3be0a60988d9bf5d6534fe000ad78d0247611e83023aa3d8cdf61f5e9e6b",
+      "sizeBytes": 5822736
+    },
+    {
+      "filename": "libmtmd.so.0.0.1",
+      "sha256": "a4744cf56ad364ee9b6d927f9d47ef442dd8c5c624d7fa89f0498a3c53ccc851",
+      "sizeBytes": 1370024
+    },
+    {
+      "filename": "libllama.so.0.0.1",
+      "sha256": "cde6e933bc4ab0aa0bd1d8d275b026561ac58fd7f78b7be2e87dfabec1f2fad3",
+      "sizeBytes": 3942632
+    },
+    {
+      "filename": "libggml.so.0.16.0",
+      "sha256": "8856120c24b8dfc3761a9d3d3f78e138c6edbe8524d4d45632443551abf100eb",
+      "sizeBytes": 55184
+    },
+    {
+      "filename": "libggml-base.so.0.16.0",
+      "sha256": "3de25e7ec31be29678d5915c2c4a15c5cf9c6189d9e566114ed70cc719081682",
+      "sizeBytes": 901880
+    },
+    {
+      "filename": "libggml-cpu.so.0.16.0",
+      "sha256": "da18633573c34f95ee00a6d21335ed76c29aeebed6627c8ebca94cb521e023ca",
+      "sizeBytes": 1132376
+    },
+    {
+      "filename": "libggml-cuda.so.0.16.0",
+      "sha256": "de5fbbfb12fc86da85d1675f9fd88ca911e49435c16161fe215f3841a639a7ad",
+      "sizeBytes": 61935328
+    }
+  ],
+  "cudaArchitectures": [89],
+  "serverBinary": "build/bin/llama-server",
+  "propsEndpoint": "/props"
+}

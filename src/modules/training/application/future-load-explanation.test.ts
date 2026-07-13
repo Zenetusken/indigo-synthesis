@@ -8,6 +8,14 @@ import { FUTURE_LOAD_PROMPT_VERSION } from '@/platform/llm'
 const decisionId = 'dec-1'
 const sessionId = 'ses-1'
 const userId = 'user-1'
+const modelDigest = '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8'
+const verifiedRuntimeIdentity = {
+  modelId: 'qwen3.5-9b-q4_k_m',
+  modelContentDigest: modelDigest,
+  servedModelName: 'qwen3.5-9b-q4_k_m',
+  runtimeId: 'llama.cpp@test',
+  runtimeAttestationDigest: 'c'.repeat(64),
+} as const
 
 function sampleBundleResult(
   overrides: Partial<FutureLoadFactBundlesResult & { status: 'available' }> = {},
@@ -34,7 +42,7 @@ function sampleBundleResult(
           templateReviewStatus: 'development',
         },
         factBundle: {
-          contractVersion: '1',
+          contractVersion: '2',
           bundleKind: 'future-load-decision',
           locale: 'en',
           contentMode: 'development',
@@ -88,6 +96,7 @@ function disabledConfig(): LlmRuntimeConfig {
     modelId: null,
     modelsDir: 'llm/models',
     weightsDir: 'llm/weights',
+    runtimeAttestationPath: 'tmp/llm-runtime-attestation.json',
     endpointOverride: null,
     timeoutMsOverride: null,
     modelSha256Override: null,
@@ -101,9 +110,10 @@ function localConfig(): LlmRuntimeConfig {
     modelId: 'qwen3.5-9b-q4_k_m',
     modelsDir: 'llm/models',
     weightsDir: 'llm/weights',
+    runtimeAttestationPath: 'tmp/llm-runtime-attestation.json',
     endpointOverride: 'http://127.0.0.1:8080/v1',
     timeoutMsOverride: 8_000,
-    modelSha256Override: 'b'.repeat(64),
+    modelSha256Override: modelDigest,
     requireGpu: true,
   }
 }
@@ -205,7 +215,7 @@ describe('explainFutureLoadDecision', () => {
             registry: null,
             activeSettings: {
               modelId: 'qwen3.5-9b-q4_k_m',
-              artifacts: { expectedSha256: 'b'.repeat(64) },
+              artifacts: { expectedSha256: modelDigest },
             },
             languageModel: {
               complete: async () => ({
@@ -244,6 +254,7 @@ describe('explainFutureLoadDecision', () => {
           ({
             readyForLocalInference: true,
             blockers: [],
+            verifiedRuntimeIdentity,
           }) as never,
         compose: () =>
           ({
@@ -251,7 +262,7 @@ describe('explainFutureLoadDecision', () => {
             registry: null,
             activeSettings: {
               modelId: 'qwen3.5-9b-q4_k_m',
-              artifacts: { expectedSha256: 'b'.repeat(64) },
+              artifacts: { expectedSha256: modelDigest },
             },
             languageModel: {
               complete: async () => ({
@@ -265,7 +276,7 @@ describe('explainFutureLoadDecision', () => {
                 status: 'available' as const,
                 prose,
                 modelId: 'qwen3.5-9b-q4_k_m',
-                modelContentDigest: 'b'.repeat(64),
+                modelContentDigest: modelDigest,
                 runtimeId: 'fake',
                 promptVersion: FUTURE_LOAD_PROMPT_VERSION,
                 factBundleHash: 'a'.repeat(64),
@@ -296,7 +307,7 @@ describe('explainFutureLoadDecision', () => {
       status: 'available' as const,
       prose,
       modelId: 'qwen3.5-9b-q4_k_m',
-      modelContentDigest: 'b'.repeat(64),
+      modelContentDigest: modelDigest,
       runtimeId: 'fake',
       promptVersion: FUTURE_LOAD_PROMPT_VERSION,
       factBundleHash: 'a'.repeat(64),
@@ -305,6 +316,7 @@ describe('explainFutureLoadDecision', () => {
     const preflight = vi.fn(async () => ({
       readyForLocalInference: true,
       blockers: [],
+      verifiedRuntimeIdentity,
     }))
     const cache = createMemoryFutureLoadExplanationCache()
     const deps = {
@@ -318,7 +330,7 @@ describe('explainFutureLoadDecision', () => {
           registry: null,
           activeSettings: {
             modelId: 'qwen3.5-9b-q4_k_m',
-            artifacts: { expectedSha256: 'b'.repeat(64) },
+            artifacts: { expectedSha256: modelDigest },
           },
           languageModel: {
             complete: async () => ({
@@ -360,7 +372,7 @@ describe('explainFutureLoadDecision', () => {
       cacheKey: 'stale',
       prose: 'stale increase paraphrase',
       modelId: 'qwen3.5-9b-q4_k_m',
-      modelContentDigest: 'b'.repeat(64),
+      modelContentDigest: modelDigest,
       promptVersion: FUTURE_LOAD_PROMPT_VERSION,
       factBundleHash: 'a'.repeat(64),
       generateDurationMs: 1000,
@@ -422,6 +434,7 @@ describe('explainFutureLoadDecision', () => {
           ({
             readyForLocalInference: true,
             blockers: [],
+            verifiedRuntimeIdentity,
           }) as never,
         compose: () =>
           ({
@@ -429,7 +442,7 @@ describe('explainFutureLoadDecision', () => {
             registry: null,
             activeSettings: {
               modelId: 'qwen3.5-9b-q4_k_m',
-              artifacts: { expectedSha256: 'b'.repeat(64) },
+              artifacts: { expectedSha256: modelDigest },
             },
             languageModel: {
               complete: async () => ({

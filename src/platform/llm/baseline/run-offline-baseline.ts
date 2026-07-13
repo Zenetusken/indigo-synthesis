@@ -5,7 +5,7 @@ import { parseLlmConfig } from '../config'
 import { createExplanationGenerationPort } from '../explanation/synthesize'
 import { validateExplanationProse } from '../explanation/validate-prose'
 import { loadModelRegistry } from '../model-registry'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v1'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
 import {
   GOLDEN_BASELINE_CASES,
   type GoldenBaselineCase,
@@ -170,7 +170,7 @@ export async function runOfflineBaseline(options?: {
     checks.push(
       check(
         'registry/load',
-        ids.includes('qwen3.5-9b-q4_k_m') && ids.includes('qwen3.5-9b-q5_k_m'),
+        ids.length === 1 && ids[0] === 'qwen3.5-9b-q4_k_m',
         `Loaded packs: ${ids.join(', ')}`,
       ),
     )
@@ -196,7 +196,7 @@ export async function runOfflineBaseline(options?: {
       servedModelName: 'n/a',
       enableThinking: false,
       modelId: 'n/a',
-      modelContentDigest: 'unverified',
+      modelContentDigest: 'disabled-no-model',
     })
     checks.push(
       check(

@@ -9,6 +9,7 @@ const llmConfigSchema = z
     INDIGO_LLM_MODEL_ID: z.string().min(1).optional(),
     INDIGO_LLM_MODELS_DIR: z.string().min(1).optional(),
     INDIGO_LLM_WEIGHTS_DIR: z.string().min(1).optional(),
+    INDIGO_LLM_ATTESTATION_PATH: z.string().min(1).optional(),
     INDIGO_LLM_ENDPOINT: z.string().url().optional(),
     INDIGO_LLM_TIMEOUT_MS: z.coerce.number().int().min(100).max(600_000).optional(),
     INDIGO_LLM_MODEL_SHA256: z
@@ -68,6 +69,7 @@ export type LlmRuntimeConfig = {
   readonly modelId: string | null
   readonly modelsDir: string
   readonly weightsDir: string
+  readonly runtimeAttestationPath: string
   readonly endpointOverride: string | null
   readonly timeoutMsOverride: number | null
   readonly modelSha256Override: string | null
@@ -90,6 +92,10 @@ export function defaultWeightsDir(cwd = process.cwd()): string {
   return resolve(cwd, 'llm/weights')
 }
 
+export function defaultRuntimeAttestationPath(cwd = process.cwd()): string {
+  return resolve(cwd, 'tmp/llm-runtime-attestation.json')
+}
+
 export function parseLlmConfig(
   input: Record<string, string | undefined>,
   cwd = process.cwd(),
@@ -109,6 +115,10 @@ export function parseLlmConfig(
     weightsDir: resolve(
       cwd,
       parsed.data.INDIGO_LLM_WEIGHTS_DIR ?? defaultWeightsDir(cwd),
+    ),
+    runtimeAttestationPath: resolve(
+      cwd,
+      parsed.data.INDIGO_LLM_ATTESTATION_PATH ?? defaultRuntimeAttestationPath(cwd),
     ),
     endpointOverride: parsed.data.INDIGO_LLM_ENDPOINT ?? null,
     timeoutMsOverride: parsed.data.INDIGO_LLM_TIMEOUT_MS ?? null,

@@ -49,7 +49,7 @@
       "properties": {
         "weightsRelativePath": { "type": "string", "minLength": 1 },
         "expectedSha256": {
-          "type": ["string", "null"],
+          "type": "string",
           "pattern": "^[a-f0-9]{64}$"
         },
         "approxSizeBytes": { "type": "integer", "minimum": 1 }

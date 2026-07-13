@@ -4,13 +4,28 @@ export type ProseValidationResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly detail: string }
 
+export const EXPLANATION_VALIDATOR_VERSION = 'future-load-validator.v2'
+
 const diagnosisPatterns: readonly RegExp[] = [
   /\bdiagnos(?:e|is|ed|ing)\b/i,
   /\binjur(?:y|ies|ed)\b/i,
   /\bmedical clearance\b/i,
-  /\bsafe to push through (?:the )?pain\b/i,
   /\byou (?:are|have) (?:torn|fractured|ruptured)\b/i,
   /\bovertraining syndrome\b/i,
+]
+
+/**
+ * Explanation is retrospective presentation, never forward coaching. These patterns are
+ * deliberately broad: the accepted paragraph does not need modal or imperative advice.
+ */
+const forwardAdvicePatterns: readonly RegExp[] = [
+  /\b(?:should|must|ought|recommend|recommended|suggest|suggested|consider)\b/i,
+  /\b(?:you|the (?:athlete|trainee)|they)\s+(?:can|could|may|might|need to)\b/i,
+  /(?:^|[.!?]\s+)(?:please\s+)?(?:continue|resume|restart|push|train|lift|exercise|try|attempt|add|increase|decrease|perform|proceed|keep|do)\b/i,
+  /\b(?:safe|okay|ok|fine|cleared)\s+to\s+(?:continue|resume|restart|push|train|lift|exercise|proceed|keep)\b/i,
+  /\b(?:ignore|disregard|override|bypass|push through)\b.{0,60}\b(?:pain|hurt|symptom|discomfort|hold|warning)\b/i,
+  /\b(?:continu(?:e|ing)|resum(?:e|ing)|restart(?:ing)?|push(?:ing)?|train(?:ing)?|lift(?:ing)?|exercis(?:e|ing)|work(?:ing)?\s+out|proceed(?:ing)?|keep(?:ing)?)\b.{0,60}\b(?:pain|hurt|symptom|discomfort|hold)\b/i,
+  /\b(?:pain|hurt|symptom|discomfort|hold)\b.{0,60}\b(?:continu(?:e|ing)|resum(?:e|ing)|restart(?:ing)?|push(?:ing)?|train(?:ing)?|lift(?:ing)?|exercis(?:e|ing)|work(?:ing)?\s+out|proceed(?:ing)?|keep(?:ing)?)\b/i,
 ]
 
 const maxProseLength = 2_000
@@ -19,61 +34,61 @@ function normalize(text: string): string {
   return text.normalize('NFKC')
 }
 
-/**
- * Extract load-like number tokens (integers or decimals) for smuggling checks.
- * Ignores pure ordinal-looking sequences already handled via allow-list comparison.
- */
-function extractNumericTokens(text: string): readonly string[] {
-  const matches = text.match(/\d+(?:\.\d+)?/g)
-  return matches ?? []
+function replaceAllLiteral(text: string, literal: string): string {
+  return literal ? text.split(literal).join(' ') : text
 }
 
-function allowListedNumbers(bundle: ExplanationFactBundle): Set<string> {
-  const allowed = new Set<string>()
+const loadMentionPattern =
+  /(?<![\p{L}\p{N}])\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*(?:kg|kilograms?|lb|lbs|pounds?)(?![\p{L}\p{N}])/giu
 
-  const add = (value: string | number | null | undefined) => {
-    if (value === null || value === undefined) return
-    const asString = String(value)
-    allowed.add(asString)
-    // Also accept integer grams forms when display labels embed them.
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      allowed.add(String(value))
+function validateNumericContexts(
+  normalized: string,
+  bundle: ExplanationFactBundle,
+): ProseValidationResult {
+  const authorizedLoadLabels = new Set(
+    [bundle.display.currentLoadLabel, bundle.display.proposedLoadLabel].map(normalize),
+  )
+
+  for (const mention of normalized.match(loadMentionPattern) ?? []) {
+    if (!authorizedLoadLabels.has(mention)) {
+      return {
+        ok: false,
+        detail: `Prose contains an unauthorized display load: ${mention}`,
+      }
     }
   }
 
-  add(bundle.display.currentLoadLabel)
-  add(bundle.display.proposedLoadLabel)
-  // Pull numeric substrings from display labels (e.g. "100 kg", "102.5 kg").
-  for (const label of [
+  // V2 intentionally permits numbers only inside exact required identity strings or exact
+  // display labels. Repetitions, RPE, ordinals, and raw grams do not authorize prose.
+  let unmasked = normalized
+  for (const literal of [
     bundle.display.currentLoadLabel,
     bundle.display.proposedLoadLabel,
+    bundle.grounding.reasonCode,
+    bundle.grounding.ruleVersion,
   ]) {
-    for (const token of extractNumericTokens(label)) {
-      allowed.add(token)
+    unmasked = replaceAllLiteral(unmasked, normalize(literal))
+  }
+
+  const numberWord = unmasked.match(
+    /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|half|quarter|double|twice)\b/i,
+  )?.[0]
+  if (numberWord) {
+    return {
+      ok: false,
+      detail: `Prose contains a number word outside an authorized field: ${numberWord}`,
     }
   }
 
-  add(bundle.decision.currentLoadGrams)
-  add(bundle.decision.proposedLoadGrams)
-  for (const set of bundle.decision.setFacts) {
-    add(set.ordinal)
-    add(set.loadGrams)
-    add(set.repetitions)
-    add(set.rpe)
+  const remainingNumber = unmasked.match(/\p{N}+/u)?.[0]
+  if (remainingNumber) {
+    return {
+      ok: false,
+      detail: `Prose contains a number outside an authorized field: ${remainingNumber}`,
+    }
   }
 
-  // Rule version often contains dotted numbers (0.0.1) — allow those tokens.
-  for (const token of extractNumericTokens(bundle.grounding.ruleVersion)) {
-    allowed.add(token)
-  }
-  for (const token of extractNumericTokens(bundle.grounding.engineVersion)) {
-    allowed.add(token)
-  }
-  for (const token of extractNumericTokens(bundle.grounding.methodologyVersion)) {
-    allowed.add(token)
-  }
-
-  return allowed
+  return { ok: true }
 }
 
 export function validateExplanationProse(
@@ -147,15 +162,17 @@ export function validateExplanationProse(
     }
   }
 
-  const allowed = allowListedNumbers(bundle)
-  for (const token of extractNumericTokens(normalized)) {
-    if (!allowed.has(token)) {
+  for (const pattern of forwardAdvicePatterns) {
+    if (pattern.test(normalized)) {
       return {
         ok: false,
-        detail: `Prose contains a number not present in the FactBundle: ${token}`,
+        detail: 'Prose contains prohibited forward advice or safety-bypass language.',
       }
     }
   }
+
+  const numericValidation = validateNumericContexts(normalized, bundle)
+  if (!numericValidation.ok) return numericValidation
 
   if (bundle.constraints.developmentFixtureNoticeRequired) {
     if (!/unreviewed|development fixture|not human-reviewed/i.test(normalized)) {

@@ -4,41 +4,61 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="${INDIGO_LLM_WEIGHTS_DIR:-$ROOT/llm/weights}"
 mkdir -p "$OUT_DIR"
-TARGET="$OUT_DIR/qwen3.5-9b-q4_k_m.gguf"
+LOCK="$ROOT/llm/models/qwen3.5-9b-q4_k_m/artifact.lock.json"
+REPO="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).repository" "$LOCK")"
+REVISION="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).revision" "$LOCK")"
+FILENAME="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).filename" "$LOCK")"
+INSTALLED_FILENAME="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).installedFilename" "$LOCK")"
+EXPECTED_SHA256="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).sha256" "$LOCK")"
+EXPECTED_SIZE="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).sizeBytes" "$LOCK")"
+TARGET="$OUT_DIR/$INSTALLED_FILENAME"
+
+verify_artifact() {
+  local path="$1"
+  local size digest
+  size="$(stat -c '%s' "$path")"
+  digest="$(sha256sum "$path" | cut -d ' ' -f 1)"
+  if [[ "$size" != "$EXPECTED_SIZE" ]]; then
+    echo "FATAL: size $size does not match artifact lock $EXPECTED_SIZE" >&2
+    return 1
+  fi
+  if [[ "$digest" != "$EXPECTED_SHA256" ]]; then
+    echo "FATAL: SHA-256 $digest does not match artifact lock $EXPECTED_SHA256" >&2
+    return 1
+  fi
+  printf '%s  %s\n' "$digest" "$TARGET" > "$TARGET.sha256"
+}
 
 if [[ -f "$TARGET" && "${FORCE:-}" != "1" ]]; then
+  verify_artifact "$TARGET"
   echo "Already present: $TARGET"
   ls -lh "$TARGET"
-  sha256sum "$TARGET" | tee "$OUT_DIR/qwen3.5-9b-q4_k_m.gguf.sha256"
   exit 0
 fi
 
-echo "Downloading unsloth/Qwen3.5-9B-GGUF Q4_K_M → $TARGET"
+if ! command -v hf >/dev/null 2>&1; then
+  echo "FATAL: Hugging Face CLI 'hf' is required (install huggingface_hub)." >&2
+  exit 1
+fi
+
+echo "Downloading $REPO/$FILENAME at revision $REVISION → $TARGET"
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
-if command -v hf >/dev/null 2>&1; then
-  hf download unsloth/Qwen3.5-9B-GGUF \
-    --local-dir "$TMP" \
-    --include '*Q4_K_M*.gguf'
-elif command -v huggingface-cli >/dev/null 2>&1; then
-  huggingface-cli download unsloth/Qwen3.5-9B-GGUF \
-    --local-dir "$TMP" \
-    --include '*Q4_K_M*.gguf'
-else
-  echo "Need hf or huggingface-cli on PATH" >&2
+hf download "$REPO" "$FILENAME" \
+  --revision "$REVISION" \
+  --local-dir "$TMP"
+
+FILE="$TMP/$FILENAME"
+if [[ ! -f "$FILE" ]]; then
+  echo "FATAL: exact locked artifact was not downloaded: $FILE" >&2
   exit 1
 fi
 
-FILE="$(find "$TMP" -type f -name '*Q4_K_M*.gguf' | head -1)"
-if [[ -z "$FILE" ]]; then
-  echo "Download finished but no Q4_K_M GGUF found under $TMP" >&2
-  find "$TMP" -type f | head -50 >&2
-  exit 1
-fi
-
-cp -f "$FILE" "$TARGET"
-sha256sum "$TARGET" | tee "$OUT_DIR/qwen3.5-9b-q4_k_m.gguf.sha256"
+verify_artifact "$FILE"
+install -m 0644 "$FILE" "$TARGET.tmp"
+mv -f "$TARGET.tmp" "$TARGET"
+verify_artifact "$TARGET"
 ls -lh "$TARGET"
-echo "Done. Set INDIGO_LLM_MODEL_SHA256 to the digest above for cache identity."
+echo "Verified SHA-256: $EXPECTED_SHA256"

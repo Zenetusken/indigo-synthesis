@@ -886,7 +886,7 @@ describe('training PostgreSQL command boundary', () => {
         prose: 'stale inferred paraphrase',
         modelId: 'test-model',
         modelContentDigest: 'a'.repeat(64),
-        promptVersion: 'future-load.v1',
+        promptVersion: 'future-load.v2',
         factBundleHash: 'b'.repeat(64),
         generateDurationMs: 1000,
       })
@@ -978,6 +978,7 @@ describe('training PostgreSQL command boundary', () => {
             modelId: 'qwen3.5-9b-q4_k_m',
             modelsDir: 'llm/models',
             weightsDir: 'llm/weights',
+            runtimeAttestationPath: 'tmp/llm-runtime-attestation.json',
             endpointOverride: 'http://127.0.0.1:8080/v1',
             timeoutMsOverride: 1000,
             modelSha256Override: 'a'.repeat(64),

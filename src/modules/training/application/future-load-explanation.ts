@@ -11,7 +11,9 @@ import {
   type LlmComposition,
   type LlmPreflightReport,
   type LlmRuntimeConfig,
+  resolveConfiguredModelPack,
   runLlmPreflight,
+  type VerifiedRuntimeIdentity,
 } from '@/platform/llm'
 
 export type FutureLoadExplanationUnavailableReason =
@@ -47,14 +49,17 @@ export type FutureLoadExplanationResult =
 export type ExplainFutureLoadDecisionDeps = {
   readonly getBundles?: typeof getFutureLoadFactBundlesForSession
   readonly getConfig?: () => LlmRuntimeConfig
-  readonly compose?: (config: LlmRuntimeConfig) => LlmComposition
+  readonly compose?: (
+    config: LlmRuntimeConfig,
+    verifiedRuntimeIdentity?: VerifiedRuntimeIdentity,
+  ) => LlmComposition
   readonly preflight?: (config: LlmRuntimeConfig) => Promise<LlmPreflightReport>
   readonly cache?: FutureLoadExplanationCachePort | null
   /** Interactive budget for History (ms). Defaults to config override or 8000. */
   readonly interactiveTimeoutMs?: number
 }
 
-const defaultInteractiveTimeoutMs = 8_000
+const defaultInteractiveTimeoutMs = 3_000
 
 /**
  * On-demand plain-language explanation for one stored future-load decision.
@@ -139,34 +144,21 @@ export async function explainFutureLoadDecision(input: {
     }
   }
 
-  // Need model identity for cache key before preflight so hits skip GPU readiness.
-  const stack = compose(config)
-  const modelId = stack.activeSettings?.modelId ?? config.modelId
-  const modelContentDigest =
-    config.modelSha256Override ??
-    stack.activeSettings?.artifacts.expectedSha256 ??
-    'unverified'
-
-  if (!modelId || !stack.explanationGenerator) {
-    // Still require readiness when we cannot compose a generator.
-    const readiness = await preflight(config)
-    if (!readiness.readyForLocalInference) {
-      return {
-        status: 'unavailable',
-        reason: 'llm-not-ready',
-        detail:
-          readiness.blockers[0] ??
-          'Local model is not available right now; stored rule codes still apply.',
-        durationMs: elapsed(),
-      }
-    }
+  // Committed model identity is sufficient for a cache lookup. A miss requires a
+  // fresh runtime attestation before a model adapter can be composed.
+  let configuredPack: ReturnType<typeof resolveConfiguredModelPack>
+  try {
+    configuredPack = resolveConfiguredModelPack(config)
+  } catch (error) {
     return {
       status: 'unavailable',
       reason: 'llm-not-ready',
-      detail: 'Explanation generator is not composed for the current configuration.',
+      detail: error instanceof Error ? error.message : 'Model pack is not configured.',
       durationMs: elapsed(),
     }
   }
+  const modelId = configuredPack.settings.modelId
+  const modelContentDigest = configuredPack.modelContentDigest
 
   const cacheKey = explanationCacheKey({
     decisionId: input.decisionId,
@@ -195,13 +187,36 @@ export async function explainFutureLoadDecision(input: {
   }
 
   const readiness = await preflight(config)
-  if (!readiness.readyForLocalInference) {
+  if (!readiness.readyForLocalInference || !readiness.verifiedRuntimeIdentity) {
     return {
       status: 'unavailable',
       reason: 'llm-not-ready',
       detail:
         readiness.blockers[0] ??
         'Local model is not available right now; stored rule codes still apply.',
+      durationMs: elapsed(),
+    }
+  }
+
+  let stack: LlmComposition
+  try {
+    stack = compose(config, readiness.verifiedRuntimeIdentity)
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail:
+        error instanceof Error
+          ? error.message
+          : 'Explanation generator is not composed for the verified runtime.',
+      durationMs: elapsed(),
+    }
+  }
+  if (!stack.explanationGenerator) {
+    return {
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: 'Explanation generator is not composed for the verified runtime.',
       durationMs: elapsed(),
     }
   }

@@ -9,9 +9,29 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WEIGHTS="${INDIGO_LLM_WEIGHTS:-$ROOT/llm/weights/qwen3.5-9b-q4_k_m.gguf}"
 ALIAS="${INDIGO_LLM_SERVED_NAME:-qwen3.5-9b-q4_k_m}"
 CTX="${INDIGO_LLM_CTX:-4096}"
-# Product default: offload all layers. Override only for explicit diagnostics.
-NGL="${INDIGO_LLM_N_GPU_LAYERS:--1}"
+# Product default: llama.cpp's literal `all` offloads every model layer.
+NGL="${INDIGO_LLM_N_GPU_LAYERS:-all}"
 REQUIRE_GPU="${INDIGO_LLM_REQUIRE_GPU:-true}"
+ATTESTATION_PATH="${INDIGO_LLM_ATTESTATION_PATH:-$ROOT/tmp/llm-runtime-attestation.json}"
+MODEL_ID="${INDIGO_LLM_MODEL_ID:-qwen3.5-9b-q4_k_m}"
+EXPECTED_ALIAS="qwen3.5-9b-q4_k_m"
+
+if [[ "$HOST" != "127.0.0.1" ]]; then
+  echo "FATAL: supported LLM launcher binds exactly to 127.0.0.1; got $HOST" >&2
+  exit 2
+fi
+if [[ "$MODEL_ID" != "$EXPECTED_ALIAS" || "$ALIAS" != "$EXPECTED_ALIAS" ]]; then
+  echo "FATAL: supported LLM launcher only serves the committed $EXPECTED_ALIAS pack" >&2
+  exit 2
+fi
+if [[ "$NGL" != "all" ]]; then
+  echo "FATAL: supported LLM launcher requires INDIGO_LLM_N_GPU_LAYERS=all" >&2
+  exit 2
+fi
+if [[ "$REQUIRE_GPU" == "false" || "$REQUIRE_GPU" == "0" ]]; then
+  echo "FATAL: supported local inference requires CUDA; use an ad-hoc command for diagnosis" >&2
+  exit 2
+fi
 
 resolve_llama_server() {
   if [[ -n "${INDIGO_LLAMA_SERVER:-}" && -x "${INDIGO_LLAMA_SERVER}" ]]; then
@@ -31,10 +51,6 @@ resolve_llama_server() {
 }
 
 assert_gpu_ready() {
-  if [[ "$REQUIRE_GPU" == "false" || "$REQUIRE_GPU" == "0" ]]; then
-    echo "WARNING: INDIGO_LLM_REQUIRE_GPU=false — CPU path allowed for diagnosis only." >&2
-    return 0
-  fi
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     echo "FATAL: nvidia-smi missing. GPU-only LLM layer cannot start." >&2
     exit 2
@@ -44,10 +60,6 @@ assert_gpu_ready() {
     echo "Reboot so the loaded NVIDIA module matches installed nvidia-utils/DKMS." >&2
     nvidia-smi 2>&1 | head -5 >&2 || true
     echo "Loaded module: $(cat /sys/module/nvidia/version 2>/dev/null || echo unknown)" >&2
-    exit 2
-  fi
-  if [[ "$NGL" == "0" ]]; then
-    echo "FATAL: INDIGO_LLM_N_GPU_LAYERS=0 disables GPU offload; product policy forbids CPU-only serve." >&2
     exit 2
   fi
   echo "GPU OK:"
@@ -65,6 +77,17 @@ if [[ ! -f "$WEIGHTS" ]]; then
 fi
 
 assert_gpu_ready
+
+node --import tsx scripts/llm/write-runtime-attestation.ts \
+  --root "$ROOT" \
+  --pid "$$" \
+  --endpoint "http://$HOST:$PORT/v1" \
+  --model-id "$MODEL_ID" \
+  --served-name "$ALIAS" \
+  --gpu-layers "$NGL" \
+  --binary "$LLAMA_BIN" \
+  --weights "$WEIGHTS" \
+  --output "$ATTESTATION_PATH"
 
 echo "Starting GPU llama-server"
 echo "  bin=$LLAMA_BIN"

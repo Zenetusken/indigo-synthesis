@@ -26,7 +26,7 @@ describe('model settings', () => {
         ...(samplePack as object),
         artifacts: {
           weightsRelativePath: '../escape.gguf',
-          expectedSha256: null,
+          expectedSha256: 'a'.repeat(64),
           approxSizeBytes: 1,
         },
       }),
@@ -44,15 +44,24 @@ describe('model settings', () => {
       }),
     ).toThrow(InvalidModelSettingsError)
   })
+
+  it('rejects non-loopback model-pack endpoints', () => {
+    expect(() =>
+      parseModelSettings({
+        ...(samplePack as object),
+        runtime: {
+          ...(samplePack as { runtime: object }).runtime,
+          defaultEndpoint: 'https://models.example/v1',
+        },
+      }),
+    ).toThrow(/defaultEndpoint must use HTTP\(S\) on a loopback host/)
+  })
 })
 
 describe('model registry', () => {
-  it('loads both committed Qwen packs', () => {
+  it('loads only model packs with committed artifact identity', () => {
     const registry = loadModelRegistry(resolve(process.cwd(), 'llm/models'))
-    expect([...registry.keys()].sort()).toEqual([
-      'qwen3.5-9b-q4_k_m',
-      'qwen3.5-9b-q5_k_m',
-    ])
+    expect([...registry.keys()]).toEqual(['qwen3.5-9b-q4_k_m'])
   })
 
   it('fails when the models directory is missing', () => {

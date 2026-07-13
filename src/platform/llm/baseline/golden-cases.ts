@@ -4,7 +4,7 @@ import type { ExplanationFactBundle } from '../explanation/fact-bundle'
  * Version of the offline groundedness baseline. Bump when golden cases or acceptance
  * criteria change so operator reports stay comparable.
  */
-export const LLM_BASELINE_VERSION = '2026-07-12.1'
+export const LLM_BASELINE_VERSION = '2026-07-13.2'
 
 export type GoldenBaselineCase = {
   readonly id: string
@@ -23,7 +23,7 @@ function baseBundle(
 ): ExplanationFactBundle {
   const contentMode = partial.contentMode ?? 'development'
   return {
-    contractVersion: '1',
+    contractVersion: '2',
     bundleKind: 'future-load-decision',
     locale: 'en',
     contentMode,
@@ -51,7 +51,6 @@ const performedSet = {
   repetitions: 5,
   rpe: 7,
   explicitlyConfirmed: true,
-  skipReason: null,
 }
 
 const developmentNotice =
@@ -119,6 +118,30 @@ export const GOLDEN_BASELINE_CASES: readonly GoldenBaselineCase[] = [
         prose: [
           'Back squat moves from 100 kg to 102.5 kg (reason development.adjustment.increase,',
           'rule 0.0.1-development). This may indicate an injury.',
+          developmentNotice,
+        ].join(' '),
+      },
+      {
+        label: 'repetitions-reinterpreted-as-load',
+        prose: [
+          'Back squat moves from 100 kg to 102.5 kg (reason development.adjustment.increase,',
+          'rule 0.0.1-development). The additional load is 5 kg.',
+          developmentNotice,
+        ].join(' '),
+      },
+      {
+        label: 'raw-grams-reinterpreted-as-load',
+        prose: [
+          'Back squat moves from 100 kg to 102.5 kg (reason development.adjustment.increase,',
+          'rule 0.0.1-development). The next target is 100000 kg.',
+          developmentNotice,
+        ].join(' '),
+      },
+      {
+        label: 'forward-pain-advice',
+        prose: [
+          'Back squat moves from 100 kg to 102.5 kg (reason development.adjustment.increase,',
+          'rule 0.0.1-development). You should continue training even if you feel sharp pain.',
           developmentNotice,
         ].join(' '),
       },
@@ -197,7 +220,6 @@ export const GOLDEN_BASELINE_CASES: readonly GoldenBaselineCase[] = [
             repetitions: null,
             rpe: null,
             explicitlyConfirmed: null,
-            skipReason: 'time',
           },
         ],
         painReported: false,
@@ -253,7 +275,6 @@ export const GOLDEN_BASELINE_CASES: readonly GoldenBaselineCase[] = [
             repetitions: 8,
             rpe: null,
             explicitlyConfirmed: true,
-            skipReason: null,
           },
         ],
         painReported: null,

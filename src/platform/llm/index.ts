@@ -27,10 +27,12 @@ export {
   runOfflineBaseline,
 } from './baseline/run-offline-baseline'
 export {
+  type ConfiguredModelPack,
   composeLlmStack,
   getLlmComposition,
   type LlmComposition,
   resetLlmCompositionForTests,
+  resolveConfiguredModelPack,
 } from './composition'
 export {
   getLlmConfig,
@@ -51,7 +53,10 @@ export {
   factBundleHash,
 } from './explanation/fact-bundle'
 export { createExplanationGenerationPort } from './explanation/synthesize'
-export { validateExplanationProse } from './explanation/validate-prose'
+export {
+  EXPLANATION_VALIDATOR_VERSION,
+  validateExplanationProse,
+} from './explanation/validate-prose'
 export {
   loadModelRegistry,
   ModelRegistryError,
@@ -63,7 +68,11 @@ export type {
   ExplanationGenerationPort,
   LanguageModelPort,
 } from './ports'
-export { FUTURE_LOAD_PROMPT_VERSION } from './prompts/future-load.v1'
+export {
+  buildFutureLoadMessages,
+  FUTURE_LOAD_PROMPT_VERSION,
+} from './prompts/future-load.v2'
+export type { VerifiedRuntimeIdentity } from './runtime/attestation'
 export {
   formatLlmPreflightReport,
   type LlmPreflightReport,

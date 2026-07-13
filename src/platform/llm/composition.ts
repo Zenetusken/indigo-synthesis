@@ -9,6 +9,7 @@ import {
 } from './model-registry'
 import type { ModelSettings } from './model-settings'
 import type { ExplanationGenerationPort, LanguageModelPort } from './ports'
+import type { VerifiedRuntimeIdentity } from './runtime/attestation'
 
 export type LlmComposition = {
   readonly config: LlmRuntimeConfig
@@ -16,13 +17,29 @@ export type LlmComposition = {
   readonly activeSettings: ModelSettings | null
   readonly languageModel: LanguageModelPort
   readonly explanationGenerator: ExplanationGenerationPort | null
+  readonly verifiedRuntimeIdentity: VerifiedRuntimeIdentity | null
 }
 
-function resolveModelContentDigest(
-  settings: ModelSettings,
+export type ConfiguredModelPack = {
+  readonly registry: ModelRegistry
+  readonly settings: ModelSettings
+  readonly modelContentDigest: string
+}
+
+export function resolveConfiguredModelPack(
   config: LlmRuntimeConfig,
-): string {
-  return config.modelSha256Override ?? settings.artifacts.expectedSha256 ?? 'unverified'
+): ConfiguredModelPack {
+  const registry = loadModelRegistry(config.modelsDir)
+  const modelId = config.modelId
+  if (!modelId) {
+    throw new Error('INDIGO_LLM_MODEL_ID is required when INDIGO_LLM_MODE=local')
+  }
+  const settings = requireModelSettings(registry, modelId)
+  const modelContentDigest = settings.artifacts.expectedSha256
+  if (config.modelSha256Override && config.modelSha256Override !== modelContentDigest) {
+    throw new Error('INDIGO_LLM_MODEL_SHA256 must equal the committed model-pack digest')
+  }
+  return { registry, settings, modelContentDigest }
 }
 
 /**
@@ -31,6 +48,7 @@ function resolveModelContentDigest(
  */
 export function composeLlmStack(
   config: LlmRuntimeConfig = getLlmConfig(),
+  verifiedRuntimeIdentity?: VerifiedRuntimeIdentity,
 ): LlmComposition {
   if (config.mode === 'disabled') {
     const languageModel = createDisabledLanguageModel()
@@ -40,17 +58,25 @@ export function composeLlmStack(
       activeSettings: null,
       languageModel,
       explanationGenerator: null,
+      verifiedRuntimeIdentity: null,
     }
   }
 
-  const registry = loadModelRegistry(config.modelsDir)
-  const modelId = config.modelId
-  if (!modelId) {
-    throw new Error('INDIGO_LLM_MODEL_ID is required when INDIGO_LLM_MODE=local')
+  const {
+    registry,
+    settings: activeSettings,
+    modelContentDigest,
+  } = resolveConfiguredModelPack(config)
+  if (!verifiedRuntimeIdentity) {
+    throw new Error('A verified runtime identity is required for local inference')
   }
-
-  const activeSettings = requireModelSettings(registry, modelId)
-  const modelContentDigest = resolveModelContentDigest(activeSettings, config)
+  if (
+    verifiedRuntimeIdentity.modelId !== activeSettings.modelId ||
+    verifiedRuntimeIdentity.servedModelName !== activeSettings.runtime.servedModelName ||
+    verifiedRuntimeIdentity.modelContentDigest !== modelContentDigest
+  ) {
+    throw new Error('Verified runtime identity does not match the configured model pack')
+  }
   const endpoint = config.endpointOverride ?? activeSettings.runtime.defaultEndpoint
   const timeoutMs = config.timeoutMsOverride ?? activeSettings.limits.timeoutMs
 
@@ -60,7 +86,10 @@ export function composeLlmStack(
       languageModel = createDisabledLanguageModel()
       break
     case 'openai-compatible-loopback':
-      languageModel = createOpenAiCompatibleLoopbackLanguageModel({ endpoint })
+      languageModel = createOpenAiCompatibleLoopbackLanguageModel({
+        endpoint,
+        runtimeId: verifiedRuntimeIdentity.runtimeId,
+      })
       break
     default: {
       const _exhaustive: never = activeSettings.runtime.adapter
@@ -81,6 +110,7 @@ export function composeLlmStack(
     activeSettings,
     languageModel,
     explanationGenerator,
+    verifiedRuntimeIdentity,
   }
 }
 

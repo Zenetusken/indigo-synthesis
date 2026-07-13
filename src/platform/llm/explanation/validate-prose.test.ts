@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ExplanationFactBundle } from './fact-bundle'
-import { validateExplanationProse } from './validate-prose'
+import { EXPLANATION_VALIDATOR_VERSION, validateExplanationProse } from './validate-prose'
 
 function sampleBundle(
   overrides: Partial<ExplanationFactBundle> = {},
 ): ExplanationFactBundle {
   const base: ExplanationFactBundle = {
-    contractVersion: '1',
+    contractVersion: '2',
     bundleKind: 'future-load-decision',
     locale: 'en',
     contentMode: 'development',
@@ -28,7 +28,6 @@ function sampleBundle(
           repetitions: 5,
           rpe: 7,
           explicitlyConfirmed: true,
-          skipReason: null,
         },
       ],
       painReported: false,
@@ -75,6 +74,10 @@ const validProse = [
 ].join(' ')
 
 describe('validateExplanationProse', () => {
+  it('pins the fail-closed validator version', () => {
+    expect(EXPLANATION_VALIDATOR_VERSION).toBe('future-load-validator.v2')
+  })
+
   it('accepts grounded increase prose', () => {
     expect(validateExplanationProse(validProse, sampleBundle())).toEqual({ ok: true })
   })
@@ -96,6 +99,57 @@ describe('validateExplanationProse', () => {
     if (!result.ok) {
       expect(result.detail).toMatch(/110/)
     }
+  })
+
+  it.each([
+    ['a repetition count reinterpreted as load', 'The additional load is 5 kg.'],
+    ['raw grams reinterpreted as display load', 'The displayed load is 100000 kg.'],
+    ['a set fact number outside its field', 'Reported RPE was 7.'],
+    ['a non-exact unit alias', 'The current load is 100 kilograms.'],
+    ['full-width invented digits', 'The additional load is ５ kg.'],
+    ['a spelled-out invented load', 'The additional load is five kg.'],
+  ])('rejects %s', (_label, unsafeSuffix) => {
+    const result = validateExplanationProse(
+      `${validProse} ${unsafeSuffix}`,
+      sampleBundle(),
+    )
+    expect(result.ok).toBe(false)
+  })
+
+  it.each([
+    'You should continue training even if you feel sharp pain.',
+    'Continue training even if discomfort remains.',
+    'It is okay to resume lifting through a safety hold.',
+    'The trainee can increase the load next time.',
+    'Keep lifting even with sharp pain.',
+  ])('rejects forward advice: %s', (unsafeSuffix) => {
+    const result = validateExplanationProse(
+      `${validProse} ${unsafeSuffix}`,
+      sampleBundle(),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.detail).toMatch(/advice|safety/i)
+  })
+
+  it('accepts exact localized display labels and rejects nearby alternatives', () => {
+    const bundle = sampleBundle({
+      subject: { units: 'imperial' },
+      display: {
+        currentLoadLabel: '1,000 lb',
+        proposedLoadLabel: '1,005.5 lb',
+        exerciseName: 'Back squat',
+      },
+    })
+    const prose = [
+      'Back squat working load moves from 1,000 lb to 1,005.5 lb',
+      '(reason development.adjustment.increase, rule 0.0.1-development).',
+      'This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+    ].join(' ')
+
+    expect(validateExplanationProse(prose, bundle)).toEqual({ ok: true })
+    expect(validateExplanationProse(`${prose} The load is 1,005 lb.`, bundle).ok).toBe(
+      false,
+    )
   })
 
   it('rejects diagnostic language', () => {

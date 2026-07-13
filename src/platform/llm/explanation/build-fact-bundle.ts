@@ -76,7 +76,7 @@ export function buildFutureLoadFactBundle(
   const invalidated = source.invalidated === true
 
   return {
-    contractVersion: '1',
+    contractVersion: '2',
     bundleKind: 'future-load-decision',
     locale: 'en',
     contentMode: source.contentMode,

@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 import { createOpenAiCompatibleLoopbackLanguageModel } from '../adapters/openai-compatible-loopback'
 import { createExplanationGenerationPort } from '../explanation/synthesize'
 import { loadModelRegistry, requireModelSettings } from '../model-registry'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v1'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
 import { GOLDEN_BASELINE_CASES } from './golden-cases'
 
 export type LiveProbeCaseResult = {
@@ -76,8 +76,7 @@ export async function runLiveProbe(options: LiveProbeOptions): Promise<LiveProbe
   const modelsDir = options.modelsDir ?? resolve(process.cwd(), 'llm/models')
   const registry = loadModelRegistry(modelsDir)
   const settings = requireModelSettings(registry, options.modelId)
-  const digest =
-    options.modelContentDigest ?? settings.artifacts.expectedSha256 ?? 'unverified'
+  const digest = options.modelContentDigest ?? settings.artifacts.expectedSha256
   const timeoutMs = options.timeoutMs ?? settings.limits.timeoutMs
 
   let languageModel: ReturnType<typeof createOpenAiCompatibleLoopbackLanguageModel>

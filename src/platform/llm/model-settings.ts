@@ -11,6 +11,20 @@ const sha256Schema = z
   .string()
   .regex(/^[a-f0-9]{64}$/, 'expectedSha256 must be a lowercase hex SHA-256 digest')
 
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+function isLoopbackHttpEndpoint(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      loopbackHosts.has(url.hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
 export const modelSettingsSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -34,12 +48,18 @@ export const modelSettingsSchema = z
           (path) => !path.includes('..') && !path.startsWith('/') && !path.includes('\\'),
           'weightsRelativePath must be a relative path without traversal',
         ),
-      expectedSha256: sha256Schema.nullable(),
+      expectedSha256: sha256Schema,
       approxSizeBytes: z.number().int().positive(),
     }),
     runtime: z.object({
       adapter: z.enum(['openai-compatible-loopback', 'disabled']),
-      defaultEndpoint: z.string().url(),
+      defaultEndpoint: z
+        .string()
+        .url()
+        .refine(
+          isLoopbackHttpEndpoint,
+          'defaultEndpoint must use HTTP(S) on a loopback host',
+        ),
       servedModelName: z.string().min(1),
       recommendedServer: z.string().min(1),
       minLlamaCppNote: z.string(),

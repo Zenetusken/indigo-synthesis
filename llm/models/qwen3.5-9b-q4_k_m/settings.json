@@ -21,8 +21,8 @@
     "adapter": "openai-compatible-loopback",
     "defaultEndpoint": "http://127.0.0.1:8080/v1",
     "servedModelName": "qwen3.5-9b-q4_k_m",
-    "recommendedServer": "lms-or-llama-server",
-    "minLlamaCppNote": "Loopback OpenAI API (LM Studio default :1234 or llama-server). Qwen3.5 needs a recent runtime with qwen35 support. GPU requires matching NVIDIA kernel+userspace (see pnpm llm:preflight)."
+    "recommendedServer": "pinned-llama.cpp-cuda",
+    "minLlamaCppNote": "Use the repository-pinned CUDA llama-server through pnpm llm:serve. Product readiness requires a matching runtime attestation and exact served model identity."
   },
   "chat": {
     "enableThinking": false,

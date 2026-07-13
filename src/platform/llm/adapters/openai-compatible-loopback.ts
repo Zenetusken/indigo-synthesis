@@ -115,10 +115,12 @@ export function createOpenAiCompatibleLoopbackLanguageModel(
 
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), request.timeoutMs)
+      let responseReceived = false
 
       try {
         const response = await fetchImpl(url, {
           method: 'POST',
+          redirect: 'error',
           headers: {
             'content-type': 'application/json',
             accept: 'application/json',
@@ -126,6 +128,15 @@ export function createOpenAiCompatibleLoopbackLanguageModel(
           body: JSON.stringify(buildRequestBody(request, request.sampling)),
           signal: controller.signal,
         })
+        responseReceived = true
+
+        if (response.redirected || (response.status >= 300 && response.status < 400)) {
+          return {
+            status: 'unavailable',
+            reason: 'model-error',
+            detail: 'Inference server redirects are not permitted.',
+          }
+        }
 
         if (!response.ok) {
           return {
@@ -136,7 +147,22 @@ export function createOpenAiCompatibleLoopbackLanguageModel(
         }
 
         const payload = (await response.json()) as {
+          model?: unknown
           choices?: readonly { message?: { content?: string | null } }[]
+        }
+        if (typeof payload.model !== 'string' || payload.model.trim().length === 0) {
+          return {
+            status: 'unavailable',
+            reason: 'model-error',
+            detail: 'Inference server response omitted a non-empty model identifier.',
+          }
+        }
+        if (payload.model !== request.servedModelName) {
+          return {
+            status: 'unavailable',
+            reason: 'model-error',
+            detail: `Inference server responded as model "${payload.model}"; expected "${request.servedModelName}".`,
+          }
         }
         const text = payload.choices?.[0]?.message?.content?.trim() ?? ''
         if (!text) {
@@ -160,6 +186,13 @@ export function createOpenAiCompatibleLoopbackLanguageModel(
             status: 'unavailable',
             reason: 'timeout',
             detail: `Inference timed out after ${request.timeoutMs}ms`,
+          }
+        }
+        if (responseReceived) {
+          return {
+            status: 'unavailable',
+            reason: 'model-error',
+            detail: 'Inference server returned a malformed response body.',
           }
         }
         return {

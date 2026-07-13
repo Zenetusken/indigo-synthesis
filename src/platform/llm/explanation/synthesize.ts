@@ -3,7 +3,7 @@ import type { ExplanationGenerationPort, LanguageModelPort } from '../ports'
 import {
   buildFutureLoadMessages,
   FUTURE_LOAD_PROMPT_VERSION,
-} from '../prompts/future-load.v1'
+} from '../prompts/future-load.v2'
 import type { ExplanationGenerationRequest, ExplanationGenerationResult } from '../types'
 import { factBundleHash } from './fact-bundle'
 import { validateExplanationProse } from './validate-prose'

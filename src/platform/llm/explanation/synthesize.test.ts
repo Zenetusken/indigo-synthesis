@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLanguageModel } from '../adapters/fake'
 import { parseModelSettings } from '../model-settings'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v1'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../prompts/future-load.v2'
 import type { ExplanationFactBundle } from './fact-bundle'
 import { createExplanationGenerationPort } from './synthesize'
 
@@ -18,7 +18,7 @@ const settings = parseModelSettings(
 
 function sampleBundle(): ExplanationFactBundle {
   return {
-    contractVersion: '1',
+    contractVersion: '2',
     bundleKind: 'future-load-decision',
     locale: 'en',
     contentMode: 'development',
@@ -40,7 +40,6 @@ function sampleBundle(): ExplanationFactBundle {
           repetitions: 5,
           rpe: 7,
           explicitlyConfirmed: true,
-          skipReason: null,
         },
       ],
       painReported: false,

@@ -48,7 +48,6 @@ function mapSetFact(
       repetitions: null,
       rpe: null,
       explicitlyConfirmed: null,
-      skipReason: set.skipReason,
     }
   }
 
@@ -60,7 +59,6 @@ function mapSetFact(
     rpe: set.rpe,
     // Workout view does not yet expose explicitlyConfirmed; treat confirmedAt as proxy.
     explicitlyConfirmed: set.confirmedAt !== null,
-    skipReason: null,
   }
 }
 

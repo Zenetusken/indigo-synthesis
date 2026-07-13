@@ -1,7 +1,7 @@
 import type { ExplanationFactBundle } from '../explanation/fact-bundle'
 import type { ChatMessage } from '../types'
 
-export const FUTURE_LOAD_PROMPT_VERSION = 'future-load.v1'
+export const FUTURE_LOAD_PROMPT_VERSION = 'future-load.v2'
 
 export function buildFutureLoadMessages(
   bundle: ExplanationFactBundle,
@@ -14,11 +14,13 @@ export function buildFutureLoadMessages(
     'You write plain-language explanations of strength-training load decisions.',
     'You are a copywriter over closed facts, not a coach and not a clinician.',
     'Use ONLY the facts in the user message FactBundle.',
+    'Explain the stored rule in past/present factual terms; do not give advice or tell the trainee what to do next.',
     'Do not invent loads, reps, RPE, dates, diagnoses, or medical advice.',
     'Do not tell the athlete to ignore pain or safety holds.',
     'Do not call deterministic rules AI, smart, or optimized.',
     'You must mention the exact reasonCode and ruleVersion strings from grounding.',
     'When kind is increase, include the exact display.currentLoadLabel and display.proposedLoadLabel strings.',
+    'Do not include any number except those exact required strings and authorized display load labels.',
     'Keep the answer to a short paragraph (a few sentences).',
     developmentNotice,
   ]

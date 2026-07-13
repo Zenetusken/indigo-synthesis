@@ -24,9 +24,9 @@ describe('buildMeasurementSnapshot live latency', () => {
     passed: 28,
     failed: 0,
     checkedAt: '2026-07-13T00:00:00.000Z',
-    promptVersion: 'future-load.v1',
-    baselineVersion: '2026-07-12.1',
-    modelPackIds: ['qwen3.5-9b-q4_k_m', 'qwen3.5-9b-q5_k_m'],
+    promptVersion: 'future-load.v2',
+    baselineVersion: '2026-07-13.2',
+    modelPackIds: ['qwen3.5-9b-q4_k_m'],
     checks: [
       { id: 'increase-at-target/accepted', ok: true, detail: 'ok' },
       { id: 'increase-at-target/reject:invented-load', ok: true, detail: 'ok' },

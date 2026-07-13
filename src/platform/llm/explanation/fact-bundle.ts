@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 export type ExplanationFactBundle = {
-  readonly contractVersion: '1'
+  readonly contractVersion: '2'
   readonly bundleKind: 'future-load-decision'
   readonly locale: 'en'
   readonly contentMode: 'development' | 'reviewed'
@@ -24,7 +24,6 @@ export type ExplanationFactBundle = {
       readonly repetitions: number | null
       readonly rpe: number | null
       readonly explicitlyConfirmed: boolean | null
-      readonly skipReason: string | null
     }[]
     readonly painReported: boolean | null
   }

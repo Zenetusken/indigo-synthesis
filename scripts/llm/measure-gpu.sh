@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 export INDIGO_LLM_REQUIRE_GPU="${INDIGO_LLM_REQUIRE_GPU:-true}"
-export INDIGO_LLM_N_GPU_LAYERS="${INDIGO_LLM_N_GPU_LAYERS:--1}"
+export INDIGO_LLM_N_GPU_LAYERS="${INDIGO_LLM_N_GPU_LAYERS:-all}"
 export INDIGO_LLM_ENDPOINT="${INDIGO_LLM_ENDPOINT:-http://127.0.0.1:8080/v1}"
 export INDIGO_LLM_MODEL_ID="${INDIGO_LLM_MODEL_ID:-qwen3.5-9b-q4_k_m}"
 export INDIGO_LLM_MODEL_SHA256="${INDIGO_LLM_MODEL_SHA256:-03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8}"
@@ -20,20 +20,36 @@ nvidia-smi
 echo "Loaded module: $(cat /sys/module/nvidia/version)"
 echo "MemAvailable: $(awk '/MemAvailable/ {printf \"%.1f GiB\\n\", $2/1024/1024}' /proc/meminfo)"
 
-echo "=== 2) Preflight (must be ready) ==="
-pnpm llm:preflight
-
-echo "=== 3) Ensure CUDA llama-server binary ==="
-if [[ ! -x "$INDIGO_LLAMA_SERVER" ]] || ! ldd "$INDIGO_LLAMA_SERVER" 2>/dev/null | grep -qi cuda; then
+echo "=== 2) Ensure pinned CUDA llama-server binary ==="
+LOCKED_BINARY_SHA256="$(node -p "JSON.parse(require('fs').readFileSync('llm/runtime/llama-cpp.lock.json', 'utf8')).serverBinarySha256")"
+ACTUAL_BINARY_SHA256="$(sha256sum "$INDIGO_LLAMA_SERVER" 2>/dev/null | cut -d ' ' -f 1 || true)"
+if [[ ! -x "$INDIGO_LLAMA_SERVER" ]] || [[ "$ACTUAL_BINARY_SHA256" != "$LOCKED_BINARY_SHA256" ]]; then
   echo "Building/rebuilding CUDA llama-server..."
   bash scripts/llm/build-cuda-server.sh
 fi
 
-echo "=== 4) Stop any CPU-only server on :8080 ==="
-pkill -f 'llama-server.*8080' 2>/dev/null || true
-sleep 1
+echo "=== 3) Stop only a matching prior listener on :8080 ==="
+if command -v lsof >/dev/null 2>&1; then
+  LISTENER_PID="$(lsof -t -iTCP:8080 -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+else
+  LISTENER_PID=""
+fi
+if [[ -n "$LISTENER_PID" ]]; then
+  LISTENER_EXE="$(readlink -f "/proc/$LISTENER_PID/exe" 2>/dev/null || true)"
+  EXPECTED_EXE="$(readlink -f "$INDIGO_LLAMA_SERVER")"
+  LISTENER_COMMAND="$(tr '\0' ' ' < "/proc/$LISTENER_PID/cmdline" 2>/dev/null || true)"
+  if [[ "$LISTENER_EXE" != "$EXPECTED_EXE" || "$LISTENER_COMMAND" != *"qwen3.5-9b-q4_k_m.gguf"* ]]; then
+    echo "FATAL: :8080 is owned by an unrelated process; refusing to kill PID $LISTENER_PID" >&2
+    exit 2
+  fi
+  kill "$LISTENER_PID"
+  for _ in $(seq 1 20); do
+    kill -0 "$LISTENER_PID" 2>/dev/null || break
+    sleep 0.25
+  done
+fi
 
-echo "=== 5) Start GPU server (background) ==="
+echo "=== 4) Start pinned GPU server (background) ==="
 LOG=/tmp/indigo-llama-gpu.log
 nohup bash scripts/llm/serve-local.sh >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -54,6 +70,9 @@ done
 
 curl -sS http://127.0.0.1:8080/v1/models | head -c 400
 echo
+
+echo "=== 5) Product readiness preflight ==="
+pnpm llm:preflight
 
 echo "=== 6) GPU memory after model load ==="
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv

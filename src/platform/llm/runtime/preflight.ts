@@ -1,10 +1,13 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { assertLoopbackEndpoint } from '../adapters/openai-compatible-loopback'
 import { getLlmConfig, type LlmRuntimeConfig } from '../config'
 import { loadModelRegistry } from '../model-registry'
 import type { ModelSettings } from '../model-settings'
+import { type VerifiedRuntimeIdentity, verifyRuntimeAttestation } from './attestation'
 
 const execFileAsync = promisify(execFile)
 
@@ -45,6 +48,20 @@ export type EndpointStatus = {
   readonly detail: string
 }
 
+export type RuntimeEvidenceStatus =
+  | {
+      readonly state: 'verified'
+      readonly detail: string
+      readonly identity: VerifiedRuntimeIdentity
+      readonly gpuMemoryMiB: number
+    }
+  | {
+      readonly state: 'unverified'
+      readonly detail: string
+      readonly identity: null
+      readonly gpuMemoryMiB: null
+    }
+
 export type LlmPreflightReport = {
   readonly checkedAt: string
   readonly mode: LlmRuntimeConfig['mode']
@@ -55,10 +72,26 @@ export type LlmPreflightReport = {
   readonly gpu: GpuStatus
   readonly weights: WeightsStatus | null
   readonly endpoint: EndpointStatus
+  readonly runtimeEvidence: RuntimeEvidenceStatus
+  readonly verifiedRuntimeIdentity: VerifiedRuntimeIdentity | null
   /** True only when the product may enable local inference under current policy. */
   readonly readyForLocalInference: boolean
   readonly blockers: readonly string[]
   readonly recommendations: readonly string[]
+}
+
+type RuntimeLock = {
+  readonly repository: string
+  readonly commit: string
+  readonly version: string
+  readonly serverBinarySha256: string
+  readonly serverBinarySizeBytes: number
+  readonly runtimeLibraries: readonly {
+    readonly filename: string
+    readonly sha256: string
+    readonly sizeBytes: number
+  }[]
+  readonly propsEndpoint: string
 }
 
 function readMeminfo(): { available: number; total: number; swapUsed: number } {
@@ -157,14 +190,40 @@ async function probeGpu(): Promise<GpuStatus> {
   }
 }
 
-async function probeEndpoint(endpoint: string): Promise<EndpointStatus> {
+export async function probeEndpoint(
+  endpoint: string,
+  options?: { readonly fetchImpl?: typeof fetch; readonly timeoutMs?: number },
+): Promise<EndpointStatus> {
+  try {
+    assertLoopbackEndpoint(endpoint)
+  } catch (error) {
+    return {
+      endpoint,
+      reachable: false,
+      models: [],
+      detail: error instanceof Error ? error.message : 'Endpoint must be loopback',
+    }
+  }
+
   const base = endpoint.replace(/\/$/, '')
   const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2_000)
+  let responseReceived = false
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 2_000)
-    const response = await fetch(modelsUrl, { signal: controller.signal })
-    clearTimeout(timer)
+    const response = await (options?.fetchImpl ?? fetch)(modelsUrl, {
+      redirect: 'error',
+      signal: controller.signal,
+    })
+    responseReceived = true
+    if (response.redirected || (response.status >= 300 && response.status < 400)) {
+      return {
+        endpoint,
+        reachable: false,
+        models: [],
+        detail: `Redirects are not permitted from ${modelsUrl}`,
+      }
+    }
     if (!response.ok) {
       return {
         endpoint,
@@ -173,12 +232,30 @@ async function probeEndpoint(endpoint: string): Promise<EndpointStatus> {
         detail: `HTTP ${response.status} from ${modelsUrl}`,
       }
     }
-    const body = (await response.json()) as {
-      data?: readonly { id?: string }[]
+    const body = (await response.json()) as unknown
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      !('data' in body) ||
+      !Array.isArray(body.data)
+    ) {
+      return {
+        endpoint,
+        reachable: false,
+        models: [],
+        detail: `Malformed JSON body from ${modelsUrl}`,
+      }
     }
-    const models = (body.data ?? [])
-      .map((row) => row.id)
-      .filter((id): id is string => typeof id === 'string')
+    const models = body.data
+      .map((row: unknown) =>
+        typeof row === 'object' &&
+        row !== null &&
+        'id' in row &&
+        typeof row.id === 'string'
+          ? row.id
+          : null,
+      )
+      .filter((id: string | null): id is string => id !== null && id.length > 0)
     return {
       endpoint,
       reachable: true,
@@ -192,7 +269,205 @@ async function probeEndpoint(endpoint: string): Promise<EndpointStatus> {
       endpoint,
       reachable: false,
       models: [],
-      detail: error instanceof Error ? error.message : 'Endpoint unreachable',
+      detail:
+        error instanceof Error && error.name === 'AbortError'
+          ? `Endpoint timed out while reading ${modelsUrl}`
+          : responseReceived
+            ? `Malformed response body from ${modelsUrl}`
+            : error instanceof Error
+              ? error.message
+              : 'Endpoint unreachable',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export function endpointModelReadinessBlocker(
+  endpoint: EndpointStatus,
+  servedModelName: string | null,
+): string | null {
+  if (!endpoint.reachable) return `Inference endpoint unreachable: ${endpoint.endpoint}`
+  if (endpoint.models.length === 0) {
+    return `Inference endpoint lists no models: ${endpoint.endpoint}`
+  }
+  if (servedModelName && !endpoint.models.includes(servedModelName)) {
+    return `Inference endpoint does not list exact served model "${servedModelName}".`
+  }
+  return null
+}
+
+function readRuntimeLock(cwd = process.cwd()): RuntimeLock {
+  return JSON.parse(
+    readFileSync(resolve(cwd, 'llm/runtime/llama-cpp.lock.json'), 'utf8'),
+  ) as RuntimeLock
+}
+
+async function probeRuntimeGpuAllocation(pid: number): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'nvidia-smi',
+      ['--query-compute-apps=pid,used_gpu_memory', '--format=csv,noheader,nounits'],
+      { timeout: 5_000 },
+    )
+    for (const row of stdout.trim().split('\n')) {
+      const [candidatePid, memory] = row.split(',').map((value) => value.trim())
+      if (Number(candidatePid) === pid && Number(memory) > 0) return Number(memory)
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+async function probeRuntimeProps(
+  endpoint: string,
+  propsPath: string,
+  identity: VerifiedRuntimeIdentity,
+  attestedWeightsPath: string,
+  runtimeCommit: string,
+): Promise<string | null> {
+  const endpointUrl = assertLoopbackEndpoint(endpoint)
+  endpointUrl.pathname = propsPath
+  endpointUrl.search = ''
+  endpointUrl.hash = ''
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 2_000)
+  try {
+    const response = await fetch(endpointUrl, {
+      redirect: 'error',
+      signal: controller.signal,
+    })
+    if (
+      response.redirected ||
+      (response.status >= 300 && response.status < 400) ||
+      !response.ok
+    ) {
+      return `Pinned runtime props unavailable at ${endpointUrl}`
+    }
+    const body = (await response.json()) as unknown
+    if (typeof body !== 'object' || body === null) {
+      return 'Pinned runtime props returned a malformed body'
+    }
+    const props = body as Record<string, unknown>
+    if (props.model_alias !== identity.servedModelName) {
+      return 'Runtime props model alias does not match the attested model'
+    }
+    if (
+      typeof props.model_path !== 'string' ||
+      (await realpath(props.model_path)) !== attestedWeightsPath
+    ) {
+      return 'Runtime props model path does not match the attested weights'
+    }
+    if (
+      typeof props.build_info !== 'string' ||
+      !props.build_info.includes(runtimeCommit.slice(0, 7))
+    ) {
+      return 'Runtime props build identity does not match the pinned commit'
+    }
+    return null
+  } catch (error) {
+    return error instanceof Error && error.name === 'AbortError'
+      ? `Pinned runtime props timed out at ${endpointUrl}`
+      : 'Pinned runtime props could not be verified'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function probeRuntimeEvidence(
+  config: LlmRuntimeConfig,
+  pack: ModelSettings | null,
+  endpoint: string,
+): Promise<RuntimeEvidenceStatus> {
+  if (!pack) {
+    return {
+      state: 'unverified',
+      detail: 'No committed model pack is active',
+      identity: null,
+      gpuMemoryMiB: null,
+    }
+  }
+  if (
+    config.modelSha256Override &&
+    config.modelSha256Override !== pack.artifacts.expectedSha256
+  ) {
+    return {
+      state: 'unverified',
+      detail: 'INDIGO_LLM_MODEL_SHA256 disagrees with the committed model digest',
+      identity: null,
+      gpuMemoryMiB: null,
+    }
+  }
+
+  try {
+    const runtimeLock = readRuntimeLock()
+    const expectedWeightsPath = resolve(
+      config.weightsDir,
+      pack.artifacts.weightsRelativePath,
+    )
+    const verified = await verifyRuntimeAttestation({
+      path: config.runtimeAttestationPath,
+      endpoint,
+      modelId: pack.modelId,
+      servedModelName: pack.runtime.servedModelName,
+      expectedModelSha256: pack.artifacts.expectedSha256,
+      expectedWeightsPath,
+      expectedRuntimeCommit: runtimeLock.commit,
+      expectedRuntimeRepository: runtimeLock.repository,
+      expectedRuntimeVersion: runtimeLock.version,
+      expectedRuntimeSha256: runtimeLock.serverBinarySha256,
+      expectedRuntimeSizeBytes: runtimeLock.serverBinarySizeBytes,
+      expectedRuntimeLibraries: runtimeLock.runtimeLibraries,
+    })
+    if (verified.state === 'invalid') {
+      return {
+        state: 'unverified',
+        detail: verified.detail,
+        identity: null,
+        gpuMemoryMiB: null,
+      }
+    }
+
+    const propsError = await probeRuntimeProps(
+      endpoint,
+      runtimeLock.propsEndpoint,
+      verified.identity,
+      verified.attestation.weights.realpath,
+      runtimeLock.commit,
+    )
+    if (propsError) {
+      return {
+        state: 'unverified',
+        detail: propsError,
+        identity: null,
+        gpuMemoryMiB: null,
+      }
+    }
+    const gpuMemoryMiB = await probeRuntimeGpuAllocation(verified.attestation.pid)
+    if (gpuMemoryMiB === null) {
+      return {
+        state: 'unverified',
+        detail: 'Attested runtime PID has no observed NVIDIA memory allocation',
+        identity: null,
+        gpuMemoryMiB: null,
+      }
+    }
+    return {
+      state: 'verified',
+      detail: `Pinned runtime, weights and GPU allocation verified for PID ${verified.attestation.pid}`,
+      identity: verified.identity,
+      gpuMemoryMiB,
+    }
+  } catch (error) {
+    return {
+      state: 'unverified',
+      detail:
+        error instanceof Error
+          ? error.message
+          : 'Pinned runtime evidence could not be verified',
+      identity: null,
+      gpuMemoryMiB: null,
     }
   }
 }
@@ -255,6 +530,7 @@ export async function runLlmPreflight(
   const endpointUrl =
     config.endpointOverride ?? pack?.runtime.defaultEndpoint ?? 'http://127.0.0.1:8080/v1'
   const endpoint = await probeEndpoint(endpointUrl)
+  const runtimeEvidence = await probeRuntimeEvidence(config, pack, endpointUrl)
 
   const blockers: string[] = []
   const recommendations: string[] = []
@@ -273,7 +549,7 @@ export async function runLlmPreflight(
   if (requireGpu) {
     if (gpu.state === 'ready') {
       recommendations.push(
-        'GPU ready — local inference must use CUDA offload (INDIGO_LLM_N_GPU_LAYERS=-1)',
+        'GPU ready — local inference must offload all model layers (INDIGO_LLM_N_GPU_LAYERS=all)',
       )
     } else if (gpu.state === 'mismatch') {
       blockers.push(
@@ -298,35 +574,26 @@ export async function runLlmPreflight(
     blockers.push(`Weights missing at ${weights.path}`)
     recommendations.push('Run: pnpm llm:download-qwen35')
   }
-  if (!endpoint.reachable) {
-    blockers.push(`Inference endpoint unreachable: ${endpoint.endpoint}`)
-    recommendations.push('Run: pnpm llm:serve  (GPU-only llama-server on loopback :8080)')
-  } else if (endpoint.models.length === 0) {
-    recommendations.push('Server is up but no models loaded')
-  }
-
-  const servedName = pack?.runtime.servedModelName
-  if (
-    endpoint.reachable &&
-    servedName &&
-    endpoint.models.length > 0 &&
-    !endpoint.models.some(
-      (id) =>
-        id === servedName ||
-        id.includes(servedName) ||
-        id.toLowerCase().includes('qwen3.5-9b'),
-    )
-  ) {
+  if (config.mode === 'local' && runtimeEvidence.state !== 'verified') {
+    blockers.push(`Runtime identity unverified: ${runtimeEvidence.detail}`)
     recommendations.push(
-      `Loaded models do not match pack servedModelName "${servedName}".`,
+      'Start the committed CUDA runtime with pnpm llm:serve to create a fresh attestation.',
     )
+  }
+  const servedName = pack?.runtime.servedModelName ?? null
+  const endpointBlocker = endpointModelReadinessBlocker(endpoint, servedName)
+  if (endpointBlocker) {
+    blockers.push(endpointBlocker)
+    recommendations.push('Run: pnpm llm:serve  (GPU-only llama-server on loopback :8080)')
   }
 
   const readyForLocalInference =
     blockers.length === 0 &&
     endpoint.reachable &&
+    runtimeEvidence.state === 'verified' &&
     memory.sufficientForApproxModelBytes &&
-    (!requireGpu || gpu.state === 'ready')
+    requireGpu &&
+    gpu.state === 'ready'
 
   return {
     checkedAt: new Date().toISOString(),
@@ -338,6 +605,8 @@ export async function runLlmPreflight(
     gpu,
     weights,
     endpoint,
+    runtimeEvidence,
+    verifiedRuntimeIdentity: runtimeEvidence.identity,
     readyForLocalInference,
     blockers,
     recommendations,
@@ -370,6 +639,7 @@ export function formatLlmPreflightReport(report: LlmPreflightReport): string {
   lines.push(
     `  endpoint: reachable=${report.endpoint.reachable} ${report.endpoint.endpoint}`,
     `            ${report.endpoint.detail}`,
+    `  runtime: ${report.runtimeEvidence.state} — ${report.runtimeEvidence.detail}`,
   )
   if (report.endpoint.models.length) {
     lines.push(`  models: ${report.endpoint.models.join(', ')}`)

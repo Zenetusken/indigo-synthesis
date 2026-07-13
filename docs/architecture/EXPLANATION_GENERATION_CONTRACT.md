@@ -60,7 +60,7 @@ authoritative decision exists. The model never queries the database.
 
 ```ts
 interface ExplanationFactBundle {
-  readonly contractVersion: '1'
+  readonly contractVersion: '2'
   readonly bundleKind:
     | 'future-load-decision'
     // later: 'program-prescription' | 'safety-hold-state' — each needs its own golden set
@@ -112,7 +112,6 @@ interface FutureLoadDecisionFacts {
     readonly repetitions: number | null
     readonly rpe: number | null
     readonly explicitlyConfirmed: boolean | null
-    readonly skipReason: string | null
   }[]
   readonly painReported: boolean | null
 }
@@ -129,7 +128,7 @@ interface ExplanationConstraints {
   readonly mustNotDiagnose: true
   readonly mustNotAdviseIgnoringPainOrHolds: true
   readonly developmentFixtureNoticeRequired: boolean // true when contentMode === 'development'
-  readonly maxOutputTokens: number // implementation default ≤ 256 for v1
+  readonly maxOutputTokens: number // implementation default ≤ 256 for v2
 }
 ```
 
@@ -140,6 +139,7 @@ Before hashing or prompting:
 - serialize with the same canonical JSON rules used elsewhere in methodology (sorted
   keys, no insignificant whitespace variance);
 - include `contractVersion`;
+- omit trainee-authored free text, including set notes and skip reasons;
 - never include raw auth secrets, recovery codes, or unrelated profile fields.
 
 `factBundleHash` = SHA-256 of the canonical FactBundle. Cache and audit keys use it.
@@ -157,7 +157,7 @@ interface ExplanationGenerationPort {
 
 interface ExplanationGenerationRequest {
   readonly factBundle: ExplanationFactBundle
-  readonly promptVersion: string // e.g. 'future-load.v1'
+  readonly promptVersion: string // e.g. 'future-load.v2'
   readonly timeoutMs: number
 }
 
@@ -232,11 +232,14 @@ Before any prose is shown or cached as `available`:
    `display.proposedLoadLabel` when kind is `increase` or when both loads are material to
    the decision; for pure `blocked` / `hold` without load change, must not claim a new
    working weight.
-4. **Numeric smuggling**: reject if prose contains load-like numbers that are not in the
-   FactBundle display labels or set facts (implementation: extract integers/decimals and
-   compare to an allow-list derived from the bundle).
-5. **Safety lexicon**: reject if prose claims diagnosis, “injury,” “you are safe to push
-   through pain,” or medical clearance language (maintained deny-list + tests).
+4. **Numeric smuggling**: normalize Unicode, recognize unit-bearing loads as complete
+   values, and allow only the exact authorized display labels. Mask only those labels plus
+   the exact required reason code and rule version; reject every remaining digit or
+   spelled-out quantity. Raw grams, repetitions, RPE, and ordinals never authorize prose
+   numbers.
+5. **Safety and advice**: reject diagnosis language, forward coaching/modal/imperative
+   language, or instructions that permit continuing through pain, symptoms, or a safety
+   hold. Explanation is retrospective presentation only.
 6. **Invalidated decisions**: do not generate “active increase” framing when
    `decision.invalidated` is true; either skip generation or use a fixed
    non-model sentence that the decision is no longer active.

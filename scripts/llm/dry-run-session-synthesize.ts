@@ -32,7 +32,7 @@ import { assertDatabaseReady } from '../../src/platform/db/preflight'
 import { newUuidV7 } from '../../src/platform/ids/uuid-v7'
 import { composeLlmStack } from '../../src/platform/llm/composition'
 import { parseLlmConfig } from '../../src/platform/llm/config'
-import { FUTURE_LOAD_PROMPT_VERSION } from '../../src/platform/llm/prompts/future-load.v1'
+import { FUTURE_LOAD_PROMPT_VERSION } from '../../src/platform/llm/prompts/future-load.v2'
 import { runLlmPreflight } from '../../src/platform/llm/runtime/preflight'
 import {
   resetProductData,
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       2,
     ),
   )
-  if (!preflight.readyForLocalInference) {
+  if (!preflight.readyForLocalInference || !preflight.verifiedRuntimeIdentity) {
     console.error('Preflight not ready for local GPU inference. Aborting dry-run.')
     process.exitCode = 2
     return
@@ -182,7 +182,7 @@ async function main(): Promise<void> {
     }
 
     console.log('\n=== 4) Live synthesize (GPU model) ===')
-    const stack = composeLlmStack(llmConfig)
+    const stack = composeLlmStack(llmConfig, preflight.verifiedRuntimeIdentity)
     if (!stack.explanationGenerator || !stack.activeSettings) {
       console.error('Explanation generator not composed.')
       process.exitCode = 1
