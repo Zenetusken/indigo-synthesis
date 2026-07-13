@@ -2,9 +2,15 @@ import {
   createPostgresFutureLoadExplanationCache,
   type FutureLoadExplanationCachePort,
 } from '@/modules/training/application/future-load-explanation-cache'
+import {
+  type AsyncSingleFlight,
+  createBoundedAsyncSingleFlight,
+  SingleFlightCapacityError,
+} from '@/modules/training/application/future-load-explanation-singleflight'
 import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   composeLlmStack,
+  EXPLANATION_VALIDATOR_VERSION,
   explanationCacheKey,
   FUTURE_LOAD_PROMPT_VERSION,
   getLlmConfig,
@@ -14,6 +20,7 @@ import {
   resolveConfiguredModelPack,
   runLlmPreflight,
   type VerifiedRuntimeIdentity,
+  validateExplanationProse,
 } from '@/platform/llm'
 
 export type FutureLoadExplanationUnavailableReason =
@@ -54,12 +61,14 @@ export type ExplainFutureLoadDecisionDeps = {
     verifiedRuntimeIdentity?: VerifiedRuntimeIdentity,
   ) => LlmComposition
   readonly preflight?: (config: LlmRuntimeConfig) => Promise<LlmPreflightReport>
-  readonly cache?: FutureLoadExplanationCachePort | null
-  /** Interactive budget for History (ms). Defaults to config override or 8000. */
+  readonly cache?: FutureLoadExplanationCachePort
+  readonly singleFlight?: AsyncSingleFlight
+  /** Interactive budget for History (ms). Defaults to config override or 3000. */
   readonly interactiveTimeoutMs?: number
 }
 
 const defaultInteractiveTimeoutMs = 3_000
+const defaultSingleFlight = createBoundedAsyncSingleFlight()
 
 /**
  * On-demand plain-language explanation for one stored future-load decision.
@@ -78,10 +87,8 @@ export async function explainFutureLoadDecision(input: {
   const getConfig = input.deps?.getConfig ?? getLlmConfig
   const compose = input.deps?.compose ?? composeLlmStack
   const preflight = input.deps?.preflight ?? runLlmPreflight
-  const cache =
-    input.deps?.cache === undefined
-      ? createPostgresFutureLoadExplanationCache()
-      : input.deps.cache
+  const cache = input.deps?.cache ?? createPostgresFutureLoadExplanationCache()
+  const singleFlight = input.deps?.singleFlight ?? defaultSingleFlight
 
   const bundlesResult = await getBundles(input.userId, input.sessionId)
   if (bundlesResult.status !== 'available') {
@@ -119,9 +126,7 @@ export async function explainFutureLoadDecision(input: {
 
   // Semantic invalidation (e.g. post-completion pain): never serve model or cache prose.
   if (item.factBundle.decision.invalidated) {
-    if (cache) {
-      await cache.deleteBySessionId(input.sessionId)
-    }
+    await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
     return {
       status: 'unavailable',
       reason: 'decision-invalidated',
@@ -163,111 +168,182 @@ export async function explainFutureLoadDecision(input: {
   const cacheKey = explanationCacheKey({
     decisionId: input.decisionId,
     promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+    validatorVersion: EXPLANATION_VALIDATOR_VERSION,
     modelId,
     modelContentDigest,
     factBundleHash: item.factBundleHash,
   })
 
-  if (cache) {
-    const hit = await cache.getByCacheKey(cacheKey)
-    if (hit) {
+  try {
+    return await singleFlight.run(cacheKey, async () => {
+      {
+        const cached = await cache.getIfActive({
+          userId: input.userId,
+          sessionId: input.sessionId,
+          decisionId: input.decisionId,
+          cacheKey,
+        })
+        if (cached.status === 'invalidated') {
+          return invalidatedExplanationResult(elapsed())
+        }
+        if (cached.status === 'state-unavailable') {
+          return stateUnavailableResult(elapsed())
+        }
+        if (cached.status === 'hit') {
+          const hit = cached.value
+          const identityMatches =
+            hit.modelId === modelId &&
+            hit.modelContentDigest === modelContentDigest &&
+            hit.servedModelName === configuredPack.settings.runtime.servedModelName &&
+            hit.promptVersion === FUTURE_LOAD_PROMPT_VERSION &&
+            hit.validatorVersion === EXPLANATION_VALIDATOR_VERSION &&
+            hit.factBundleHash === item.factBundleHash
+          const validation = validateExplanationProse(hit.prose, item.factBundle)
+          if (identityMatches && validation.ok) {
+            return {
+              status: 'available',
+              prose: hit.prose,
+              modelId: hit.modelId,
+              modelContentDigest: hit.modelContentDigest,
+              promptVersion: hit.promptVersion,
+              factBundleHash: hit.factBundleHash,
+              durationMs: elapsed(),
+              inferred: true,
+              fromCache: true,
+              generateDurationMs: hit.generateDurationMs,
+            }
+          }
+          await cache.deleteByCacheKey(cacheKey)
+        }
+        // `cache-unavailable` is a safe miss: getIfActive already confirmed active state
+        // while holding the reportPain advisory lock.
+      }
+
+      const readiness = await preflight(config)
+      if (!readiness.readyForLocalInference || !readiness.verifiedRuntimeIdentity) {
+        return {
+          status: 'unavailable',
+          reason: 'llm-not-ready',
+          detail:
+            readiness.blockers[0] ??
+            'Local model is not available right now; stored rule codes still apply.',
+          durationMs: elapsed(),
+        }
+      }
+
+      let stack: LlmComposition
+      try {
+        stack = compose(config, readiness.verifiedRuntimeIdentity)
+      } catch (error) {
+        return {
+          status: 'unavailable',
+          reason: 'llm-not-ready',
+          detail:
+            error instanceof Error
+              ? error.message
+              : 'Explanation generator is not composed for the verified runtime.',
+          durationMs: elapsed(),
+        }
+      }
+      if (!stack.explanationGenerator) {
+        return {
+          status: 'unavailable',
+          reason: 'llm-not-ready',
+          detail: 'Explanation generator is not composed for the verified runtime.',
+          durationMs: elapsed(),
+        }
+      }
+
+      const timeoutMs =
+        input.deps?.interactiveTimeoutMs ??
+        config.timeoutMsOverride ??
+        defaultInteractiveTimeoutMs
+
+      const synthesisStarted = performance.now()
+      const synthesis = await stack.explanationGenerator.synthesize({
+        factBundle: item.factBundle,
+        promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+        timeoutMs,
+      })
+      const generateDurationMs = Math.round(performance.now() - synthesisStarted)
+
+      if (synthesis.status !== 'available') {
+        return {
+          status: 'unavailable',
+          reason: 'synthesis-failed',
+          detail: `${synthesis.reason}${synthesis.detail ? `: ${synthesis.detail}` : ''}`,
+          durationMs: elapsed(),
+        }
+      }
+
+      {
+        const publication = await cache.putIfActive({
+          userId: input.userId,
+          sessionId: input.sessionId,
+          decisionId: input.decisionId,
+          cacheKey,
+          prose: synthesis.prose,
+          modelId: synthesis.modelId,
+          modelContentDigest: synthesis.modelContentDigest,
+          servedModelName: readiness.verifiedRuntimeIdentity.servedModelName,
+          runtimeId: synthesis.runtimeId,
+          runtimeAttestationDigest:
+            readiness.verifiedRuntimeIdentity.runtimeAttestationDigest,
+          promptVersion: synthesis.promptVersion,
+          validatorVersion: EXPLANATION_VALIDATOR_VERSION,
+          factBundleHash: synthesis.factBundleHash,
+          generateDurationMs,
+        })
+        if (publication.status === 'invalidated') {
+          return invalidatedExplanationResult(elapsed())
+        }
+        if (publication.status === 'state-unavailable') {
+          return stateUnavailableResult(elapsed())
+        }
+        // `cache-unavailable` is no-cache success after a fresh locked active-state check.
+      }
+
       return {
         status: 'available',
-        prose: hit.prose,
-        modelId: hit.modelId,
-        modelContentDigest: hit.modelContentDigest,
-        promptVersion: hit.promptVersion,
-        factBundleHash: hit.factBundleHash,
+        prose: synthesis.prose,
+        modelId: synthesis.modelId,
+        modelContentDigest: synthesis.modelContentDigest,
+        promptVersion: synthesis.promptVersion,
+        factBundleHash: synthesis.factBundleHash,
         durationMs: elapsed(),
         inferred: true,
-        fromCache: true,
-        generateDurationMs: hit.generateDurationMs,
+        fromCache: false,
+        generateDurationMs,
+      }
+    })
+  } catch (error) {
+    if (error instanceof SingleFlightCapacityError) {
+      return {
+        status: 'unavailable',
+        reason: 'llm-not-ready',
+        detail: 'Local explanation generation is busy; stored rule codes still apply.',
+        durationMs: elapsed(),
       }
     }
+    throw error
   }
+}
 
-  const readiness = await preflight(config)
-  if (!readiness.readyForLocalInference || !readiness.verifiedRuntimeIdentity) {
-    return {
-      status: 'unavailable',
-      reason: 'llm-not-ready',
-      detail:
-        readiness.blockers[0] ??
-        'Local model is not available right now; stored rule codes still apply.',
-      durationMs: elapsed(),
-    }
-  }
-
-  let stack: LlmComposition
-  try {
-    stack = compose(config, readiness.verifiedRuntimeIdentity)
-  } catch (error) {
-    return {
-      status: 'unavailable',
-      reason: 'llm-not-ready',
-      detail:
-        error instanceof Error
-          ? error.message
-          : 'Explanation generator is not composed for the verified runtime.',
-      durationMs: elapsed(),
-    }
-  }
-  if (!stack.explanationGenerator) {
-    return {
-      status: 'unavailable',
-      reason: 'llm-not-ready',
-      detail: 'Explanation generator is not composed for the verified runtime.',
-      durationMs: elapsed(),
-    }
-  }
-
-  const timeoutMs =
-    input.deps?.interactiveTimeoutMs ??
-    config.timeoutMsOverride ??
-    defaultInteractiveTimeoutMs
-
-  const synthesisStarted = performance.now()
-  const synthesis = await stack.explanationGenerator.synthesize({
-    factBundle: item.factBundle,
-    promptVersion: FUTURE_LOAD_PROMPT_VERSION,
-    timeoutMs,
-  })
-  const generateDurationMs = Math.round(performance.now() - synthesisStarted)
-
-  if (synthesis.status !== 'available') {
-    return {
-      status: 'unavailable',
-      reason: 'synthesis-failed',
-      detail: `${synthesis.reason}${synthesis.detail ? `: ${synthesis.detail}` : ''}`,
-      durationMs: elapsed(),
-    }
-  }
-
-  if (cache) {
-    await cache.put({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      decisionId: input.decisionId,
-      cacheKey,
-      prose: synthesis.prose,
-      modelId: synthesis.modelId,
-      modelContentDigest: synthesis.modelContentDigest,
-      promptVersion: synthesis.promptVersion,
-      factBundleHash: synthesis.factBundleHash,
-      generateDurationMs,
-    })
-  }
-
+function invalidatedExplanationResult(durationMs: number): FutureLoadExplanationResult {
   return {
-    status: 'available',
-    prose: synthesis.prose,
-    modelId: synthesis.modelId,
-    modelContentDigest: synthesis.modelContentDigest,
-    promptVersion: synthesis.promptVersion,
-    factBundleHash: synthesis.factBundleHash,
-    durationMs: elapsed(),
-    inferred: true,
-    fromCache: false,
-    generateDurationMs,
+    status: 'unavailable',
+    reason: 'decision-invalidated',
+    detail:
+      'A post-completion pain report was recorded. Stored rule codes remain; plain-language paraphrases of the prior decision are not offered.',
+    durationMs,
+  }
+}
+
+function stateUnavailableResult(durationMs: number): FutureLoadExplanationResult {
+  return {
+    status: 'unavailable',
+    reason: 'llm-not-ready',
+    detail: 'Decision state could not be confirmed; stored rule codes still apply.',
+    durationMs,
   }
 }

@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { explainFutureLoadDecision } from '@/modules/training/application/future-load-explanation'
 import { createMemoryFutureLoadExplanationCache } from '@/modules/training/application/future-load-explanation-cache'
+import { createBoundedAsyncSingleFlight } from '@/modules/training/application/future-load-explanation-singleflight'
 import type { FutureLoadFactBundlesResult } from '@/modules/training/application/future-load-fact-bundle'
 import type { LlmComposition, LlmRuntimeConfig } from '@/platform/llm'
-import { FUTURE_LOAD_PROMPT_VERSION } from '@/platform/llm'
+import {
+  EXPLANATION_VALIDATOR_VERSION,
+  explanationCacheKey,
+  FUTURE_LOAD_PROMPT_VERSION,
+} from '@/platform/llm'
 
 const decisionId = 'dec-1'
 const sessionId = 'ses-1'
@@ -16,6 +21,14 @@ const verifiedRuntimeIdentity = {
   runtimeId: 'llama.cpp@test',
   runtimeAttestationDigest: 'c'.repeat(64),
 } as const
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
 function sampleBundleResult(
   overrides: Partial<FutureLoadFactBundlesResult & { status: 'available' }> = {},
@@ -112,7 +125,7 @@ function localConfig(): LlmRuntimeConfig {
     weightsDir: 'llm/weights',
     runtimeAttestationPath: 'tmp/llm-runtime-attestation.json',
     endpointOverride: 'http://127.0.0.1:8080/v1',
-    timeoutMsOverride: 8_000,
+    timeoutMsOverride: 3_000,
     modelSha256Override: modelDigest,
     requireGpu: true,
   }
@@ -126,7 +139,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => sampleBundleResult(),
         getConfig: disabledConfig,
         compose: () =>
@@ -159,7 +172,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId: 'missing',
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => sampleBundleResult(),
         getConfig: disabledConfig,
       },
@@ -173,7 +186,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => ({
           status: 'available',
           bundles: [],
@@ -201,7 +214,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>
@@ -247,7 +260,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>
@@ -362,10 +375,277 @@ describe('explainFutureLoadDecision', () => {
     expect(preflight).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects and repairs invalid cached prose under the current validator', async () => {
+    const validProse =
+      'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.'
+    const synthesize = vi.fn(async () => ({
+      status: 'available' as const,
+      prose: validProse,
+      modelId: verifiedRuntimeIdentity.modelId,
+      modelContentDigest: modelDigest,
+      runtimeId: verifiedRuntimeIdentity.runtimeId,
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      factBundleHash: 'a'.repeat(64),
+      generatedAt: '2026-07-13T00:00:00.000Z',
+    }))
+    const cache = createMemoryFutureLoadExplanationCache()
+    const cacheKey = explanationCacheKey({
+      decisionId,
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      validatorVersion: EXPLANATION_VALIDATOR_VERSION,
+      modelId: verifiedRuntimeIdentity.modelId,
+      modelContentDigest: modelDigest,
+      factBundleHash: 'a'.repeat(64),
+    })
+    await cache.putIfActive({
+      userId,
+      sessionId,
+      decisionId,
+      cacheKey,
+      prose: `${validProse} Use 5 kg for a warm-up.`,
+      modelId: verifiedRuntimeIdentity.modelId,
+      modelContentDigest: modelDigest,
+      servedModelName: verifiedRuntimeIdentity.servedModelName,
+      runtimeId: verifiedRuntimeIdentity.runtimeId,
+      runtimeAttestationDigest: verifiedRuntimeIdentity.runtimeAttestationDigest,
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      validatorVersion: EXPLANATION_VALIDATOR_VERSION,
+      factBundleHash: 'a'.repeat(64),
+      generateDurationMs: 1,
+    })
+    const deps = {
+      cache,
+      getBundles: async () => sampleBundleResult(),
+      getConfig: localConfig,
+      preflight: async () =>
+        ({
+          readyForLocalInference: true,
+          blockers: [],
+          verifiedRuntimeIdentity,
+        }) as never,
+      compose: () =>
+        ({
+          explanationGenerator: { synthesize },
+        }) as unknown as LlmComposition,
+    }
+
+    const repaired = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps,
+    })
+    const cached = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps,
+    })
+
+    expect(repaired).toMatchObject({ status: 'available', fromCache: false })
+    expect(cached).toMatchObject({ status: 'available', fromCache: true })
+    expect(synthesize).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces overlapping misses and returns invalidated when pain linearizes before put', async () => {
+    let invalidated = false
+    const cache = createMemoryFutureLoadExplanationCache({
+      activeState: () =>
+        invalidated
+          ? { status: 'invalidated', reason: 'post-completion-pain-report' }
+          : { status: 'active' },
+    })
+    const generationStarted = deferred()
+    const releaseGeneration = deferred()
+    const synthesize = vi.fn(async () => {
+      generationStarted.resolve()
+      await releaseGeneration.promise
+      return {
+        status: 'available' as const,
+        prose:
+          'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+        modelId: verifiedRuntimeIdentity.modelId,
+        modelContentDigest: modelDigest,
+        runtimeId: verifiedRuntimeIdentity.runtimeId,
+        promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+        factBundleHash: 'a'.repeat(64),
+        generatedAt: '2026-07-13T00:00:00.000Z',
+      }
+    })
+    const deps = {
+      cache,
+      singleFlight: createBoundedAsyncSingleFlight(),
+      getBundles: async () => sampleBundleResult(),
+      getConfig: localConfig,
+      preflight: async () =>
+        ({
+          readyForLocalInference: true,
+          blockers: [],
+          verifiedRuntimeIdentity,
+        }) as never,
+      compose: () =>
+        ({ explanationGenerator: { synthesize } }) as unknown as LlmComposition,
+    }
+
+    const first = explainFutureLoadDecision({ userId, sessionId, decisionId, deps })
+    const second = explainFutureLoadDecision({ userId, sessionId, decisionId, deps })
+    await generationStarted.promise
+    invalidated = true
+    releaseGeneration.resolve()
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ status: 'unavailable', reason: 'decision-invalidated' }),
+      expect.objectContaining({ status: 'unavailable', reason: 'decision-invalidated' }),
+    ])
+    expect(synthesize).toHaveBeenCalledTimes(1)
+  })
+
+  it('permits a put that linearizes before pain while post-commit purge removes its row', async () => {
+    let invalidated = false
+    const underlying = createMemoryFutureLoadExplanationCache({
+      activeState: () =>
+        invalidated
+          ? { status: 'invalidated', reason: 'post-completion-pain-report' }
+          : { status: 'active' },
+    })
+    const putCommitted = deferred()
+    const releasePutResult = deferred()
+    const cache = {
+      ...underlying,
+      async putIfActive(input: Parameters<typeof underlying.putIfActive>[0]) {
+        const result = await underlying.putIfActive(input)
+        putCommitted.resolve()
+        await releasePutResult.promise
+        return result
+      },
+    }
+    const deps = {
+      cache,
+      singleFlight: createBoundedAsyncSingleFlight(),
+      getBundles: async () => sampleBundleResult(),
+      getConfig: localConfig,
+      preflight: async () =>
+        ({
+          readyForLocalInference: true,
+          blockers: [],
+          verifiedRuntimeIdentity,
+        }) as never,
+      compose: () =>
+        ({
+          explanationGenerator: {
+            synthesize: async () => ({
+              status: 'available' as const,
+              prose:
+                'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+              modelId: verifiedRuntimeIdentity.modelId,
+              modelContentDigest: modelDigest,
+              runtimeId: verifiedRuntimeIdentity.runtimeId,
+              promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+              factBundleHash: 'a'.repeat(64),
+              generatedAt: '2026-07-13T00:00:00.000Z',
+            }),
+          },
+        }) as unknown as LlmComposition,
+    }
+
+    const pending = explainFutureLoadDecision({ userId, sessionId, decisionId, deps })
+    await putCommitted.promise
+    // putIfActive committed first: Explain is linearized before the overlapping pain.
+    invalidated = true
+    await underlying.deleteBySessionId({ userId, sessionId })
+    releasePutResult.resolve()
+    await expect(pending).resolves.toMatchObject({
+      status: 'available',
+      fromCache: false,
+    })
+
+    invalidated = false
+    await expect(
+      underlying.getIfActive({
+        userId,
+        sessionId,
+        decisionId,
+        cacheKey: explanationCacheKey({
+          decisionId,
+          promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+          validatorVersion: EXPLANATION_VALIDATOR_VERSION,
+          modelId: verifiedRuntimeIdentity.modelId,
+          modelContentDigest: modelDigest,
+          factBundleHash: 'a'.repeat(64),
+        }),
+      }),
+    ).resolves.toEqual({ status: 'miss' })
+  })
+
+  it('degrades cache read/write errors to no-cache success after active-state checks', async () => {
+    const base = createMemoryFutureLoadExplanationCache()
+    const cache = {
+      ...base,
+      getIfActive: async () => ({ status: 'cache-unavailable' as const }),
+      putIfActive: async () => ({ status: 'cache-unavailable' as const }),
+    }
+    const synthesize = vi.fn(async () => ({
+      status: 'available' as const,
+      prose:
+        'Load moves from 50 kg to 51 kg (reason development.adjustment.increase, rule 0.0.1-development). This is an unreviewed development fixture, not human-reviewed coaching guidance.',
+      modelId: verifiedRuntimeIdentity.modelId,
+      modelContentDigest: modelDigest,
+      runtimeId: verifiedRuntimeIdentity.runtimeId,
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      factBundleHash: 'a'.repeat(64),
+      generatedAt: '2026-07-13T00:00:00.000Z',
+    }))
+
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache,
+        singleFlight: createBoundedAsyncSingleFlight(),
+        getBundles: async () => sampleBundleResult(),
+        getConfig: localConfig,
+        preflight: async () =>
+          ({
+            readyForLocalInference: true,
+            blockers: [],
+            verifiedRuntimeIdentity,
+          }) as never,
+        compose: () =>
+          ({ explanationGenerator: { synthesize } }) as unknown as LlmComposition,
+      },
+    })
+
+    expect(result).toMatchObject({ status: 'available', fromCache: false })
+    expect(synthesize).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed without generation when authoritative state cannot be confirmed', async () => {
+    const synthesize = vi.fn()
+    const cache = {
+      ...createMemoryFutureLoadExplanationCache(),
+      getIfActive: async () => ({ status: 'state-unavailable' as const }),
+    }
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache,
+        getBundles: async () => sampleBundleResult(),
+        getConfig: localConfig,
+        compose: () =>
+          ({ explanationGenerator: { synthesize } }) as unknown as LlmComposition,
+      },
+    })
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'llm-not-ready' })
+    expect(synthesize).not.toHaveBeenCalled()
+  })
+
   it('returns decision-invalidated without model or cache hit after pain', async () => {
     const synthesize = vi.fn()
     const cache = createMemoryFutureLoadExplanationCache()
-    await cache.put({
+    await cache.putIfActive({
       userId,
       sessionId,
       decisionId,
@@ -373,7 +653,11 @@ describe('explainFutureLoadDecision', () => {
       prose: 'stale increase paraphrase',
       modelId: 'qwen3.5-9b-q4_k_m',
       modelContentDigest: modelDigest,
+      servedModelName: verifiedRuntimeIdentity.servedModelName,
+      runtimeId: verifiedRuntimeIdentity.runtimeId,
+      runtimeAttestationDigest: verifiedRuntimeIdentity.runtimeAttestationDigest,
       promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      validatorVersion: 'future-load-validator.v2',
       factBundleHash: 'a'.repeat(64),
       generateDurationMs: 1000,
     })
@@ -418,7 +702,9 @@ describe('explainFutureLoadDecision', () => {
       reason: 'decision-invalidated',
     })
     expect(synthesize).not.toHaveBeenCalled()
-    expect(await cache.getByCacheKey('stale')).toBeNull()
+    expect(
+      await cache.getIfActive({ userId, sessionId, decisionId, cacheKey: 'stale' }),
+    ).toEqual({ status: 'miss' })
   })
 
   it('maps synthesis failure without inventing prose', async () => {
@@ -427,7 +713,7 @@ describe('explainFutureLoadDecision', () => {
       sessionId,
       decisionId,
       deps: {
-        cache: null,
+        cache: createMemoryFutureLoadExplanationCache(),
         getBundles: async () => sampleBundleResult(),
         getConfig: localConfig,
         preflight: async () =>

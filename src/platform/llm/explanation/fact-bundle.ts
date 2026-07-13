@@ -84,6 +84,7 @@ export function factBundleHash(bundle: ExplanationFactBundle): string {
 export function explanationCacheKey(input: {
   readonly decisionId: string
   readonly promptVersion: string
+  readonly validatorVersion: string
   readonly modelId: string
   readonly modelContentDigest: string
   readonly factBundleHash: string
@@ -91,6 +92,7 @@ export function explanationCacheKey(input: {
   return [
     input.decisionId,
     input.promptVersion,
+    input.validatorVersion,
     input.modelId,
     input.modelContentDigest,
     input.factBundleHash,

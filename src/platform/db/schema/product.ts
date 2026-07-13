@@ -871,7 +871,11 @@ export const futureLoadExplanationCache = pgTable(
     prose: text('prose').notNull(),
     modelId: text('model_id').notNull(),
     modelContentDigest: text('model_content_digest').notNull(),
+    servedModelName: text('served_model_name').notNull(),
+    runtimeId: text('runtime_id').notNull(),
+    runtimeAttestationDigest: text('runtime_attestation_digest').notNull(),
     promptVersion: text('prompt_version').notNull(),
+    validatorVersion: text('validator_version').notNull(),
     factBundleHash: text('fact_bundle_hash').notNull(),
     /** Wall time of the original successful synthesize (ms); not cache-hit time. */
     generateDurationMs: integer('generate_duration_ms').notNull(),
@@ -880,6 +884,7 @@ export const futureLoadExplanationCache = pgTable(
   (table) => [
     uniqueIndex('future_load_explanation_cache_key_uidx').on(table.cacheKey),
     index('future_load_explanation_cache_user_idx').on(table.userId),
+    index('future_load_explanation_cache_session_idx').on(table.sessionId),
     index('future_load_explanation_cache_decision_idx').on(table.decisionId),
   ],
 )

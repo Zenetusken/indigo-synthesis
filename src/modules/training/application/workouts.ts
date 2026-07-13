@@ -37,6 +37,10 @@ import {
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
 import {
+  createPostgresFutureLoadExplanationCache,
+  type FutureLoadExplanationCachePort,
+} from '@/modules/training/application/future-load-explanation-cache'
+import {
   commandReceiptMatches,
   type TrainingCommandRequest,
   trainingCommandRequestHash,
@@ -62,7 +66,6 @@ import {
   athleteProfiles,
   auditEvents,
   exercisePrescriptions,
-  futureLoadExplanationCache,
   performedSetCorrections,
   performedSets,
   plannedWorkouts,
@@ -1533,18 +1536,23 @@ export async function setSessionPaused(
   })
 }
 
-export async function reportPain(rawInput: {
-  readonly userId: string
-  readonly sessionId: string
-  readonly commandId: string
-  readonly details: string
-}): Promise<void> {
+export async function reportPain(
+  rawInput: {
+    readonly userId: string
+    readonly sessionId: string
+    readonly commandId: string
+    readonly details: string
+  },
+  deps?: {
+    readonly explanationCache?: FutureLoadExplanationCachePort
+  },
+): Promise<void> {
   const input = {
     userId: rawInput.userId,
     ...parseWorkoutCommand(reportPainCommandSchema, rawInput),
   }
 
-  await getDb().transaction(async (transaction) => {
+  const shouldPurgeExplanationCache = await getDb().transaction(async (transaction) => {
     await transaction.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.userId}, 0))`,
     )
@@ -1567,7 +1575,9 @@ export async function reportPain(rawInput: {
       targetId: input.sessionId,
       payload: { details: input.details },
     } satisfies TrainingCommandRequest
-    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) return
+    if (await commandWasReplayed(transaction, input.commandId, receiptRequest)) {
+      return session.status === 'completed'
+    }
     if (!['active', 'paused', 'completed'].includes(session.status))
       throw new WorkoutCommandError(
         'session.not-reportable',
@@ -1586,7 +1596,9 @@ export async function reportPain(rawInput: {
       )
       .for('update')
       .limit(1)
-    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
+    if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) {
+      return session.status === 'completed'
+    }
 
     const now = new Date()
     const wasCompleted = session.status === 'completed'
@@ -1670,14 +1682,19 @@ export async function reportPain(rawInput: {
       },
     })
 
-    // Non-ledger: drop cached paraphrases when a completed-session correction
-    // permanently invalidates the decisions they described.
-    if (wasCompleted) {
-      await transaction
-        .delete(futureLoadExplanationCache)
-        .where(eq(futureLoadExplanationCache.sessionId, input.sessionId))
-    }
+    return wasCompleted
   })
+
+  // Presentation cleanup is deliberately post-commit and fail-soft. The authoritative
+  // correction, invalidation, hold, receipt, and audit never depend on cache availability.
+  if (shouldPurgeExplanationCache) {
+    const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
+    try {
+      await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+    } catch {
+      // Authoritative safety state is already committed; cleanup must remain fail-soft.
+    }
+  }
 }
 
 export async function correctPerformedSet(rawInput: {
@@ -1928,13 +1945,19 @@ export async function resolveSafetyHold(rawInput: {
       },
     })
 
-    // Non-ledger: drop cached paraphrases when post-completion pain invalidates framing.
-    if (wasCompleted) {
-      await transaction
-        .delete(futureLoadExplanationCache)
-        .where(eq(futureLoadExplanationCache.sessionId, input.sessionId))
-    }
+    return wasCompleted
   })
+
+  // Presentation cleanup is deliberately post-commit and fail-soft. The authoritative
+  // feedback, safety hold, receipt, and audit never depend on cache availability.
+  if (shouldPurgeExplanationCache) {
+    const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
+    try {
+      await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+    } catch {
+      // Authoritative safety state is already committed; cleanup must remain fail-soft.
+    }
+  }
 }
 
 export async function completeWorkout(rawInput: {

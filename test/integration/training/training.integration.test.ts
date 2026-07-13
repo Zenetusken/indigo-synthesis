@@ -1,4 +1,4 @@
-import { count, eq } from 'drizzle-orm'
+import { count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   type AuthenticatedActor,
@@ -20,6 +20,11 @@ import {
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
 import { explainFutureLoadDecision } from '@/modules/training/application/future-load-explanation'
+import {
+  createMemoryFutureLoadExplanationCache,
+  createPostgresFutureLoadExplanationCache,
+  storageKeyFromExplanationCacheKey,
+} from '@/modules/training/application/future-load-explanation-cache'
 import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   abandonWorkout,
@@ -107,6 +112,61 @@ async function startedSession() {
   const setId = session?.exercises[0]?.sets[0]?.id
   if (!session || !setId) throw new Error('Started fixture session has no set.')
   return { seeded, sessionId, setId, session }
+}
+
+async function completedSessionWithDecision() {
+  const { sessionId, setId } = await startedSession()
+  await completeSet({
+    userId: owner.id,
+    sessionId,
+    setId,
+    commandId: newUuidV7(),
+    actualLoadGrams: TEST_TARGET_LOAD_GRAMS,
+    actualRepetitions: TEST_TARGET_REPETITIONS,
+    rpe: 8,
+    note: null,
+  })
+  await completeWorkout({
+    userId: owner.id,
+    sessionId,
+    commandId: newUuidV7(),
+    noPainAttested: true,
+  })
+  const decisions = await getSessionFutureLoadDecisions(owner.id, sessionId)
+  const decision = decisions?.[0]
+  if (!decision) throw new Error('Expected a future-load decision for cache testing.')
+  return { sessionId, decision }
+}
+
+function cachedExplanationInput(input: {
+  readonly sessionId: string
+  readonly decisionId: string
+  readonly cacheKey: string
+}) {
+  return {
+    userId: owner.id,
+    sessionId: input.sessionId,
+    decisionId: input.decisionId,
+    cacheKey: input.cacheKey,
+    prose: 'A validated cached explanation for the stored decision.',
+    modelId: 'qwen3.5-9b-q4_k_m',
+    modelContentDigest: 'a'.repeat(64),
+    servedModelName: 'qwen3.5-9b-q4_k_m',
+    runtimeId: 'llama.cpp@test',
+    runtimeAttestationDigest: 'b'.repeat(64),
+    promptVersion: 'future-load.v2',
+    validatorVersion: 'future-load-validator.v2',
+    factBundleHash: 'c'.repeat(64),
+    generateDurationMs: 1000,
+  }
+}
+
+function deferred() {
+  let resolvePromise: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve
+  })
+  return { promise, resolve: resolvePromise }
 }
 
 async function seedRemainingDraft(input: {
@@ -886,7 +946,11 @@ describe('training PostgreSQL command boundary', () => {
         prose: 'stale inferred paraphrase',
         modelId: 'test-model',
         modelContentDigest: 'a'.repeat(64),
+        servedModelName: 'test-model',
+        runtimeId: 'test-runtime',
+        runtimeAttestationDigest: 'c'.repeat(64),
         promptVersion: 'future-load.v2',
+        validatorVersion: 'future-load-validator.v2',
         factBundleHash: 'b'.repeat(64),
         generateDurationMs: 1000,
       })
@@ -972,7 +1036,12 @@ describe('training PostgreSQL command boundary', () => {
         sessionId,
         decisionId: firstBundle.decision.id,
         deps: {
-          cache: null,
+          cache: createMemoryFutureLoadExplanationCache({
+            activeState: () => ({
+              status: 'invalidated',
+              reason: 'post-completion-pain-report',
+            }),
+          }),
           getConfig: () => ({
             mode: 'local',
             modelId: 'qwen3.5-9b-q4_k_m',
@@ -1001,6 +1070,250 @@ describe('training PostgreSQL command boundary', () => {
         .set({ details: 'correction mode must not escape its transaction' })
         .where(eq(sessionFeedback.sessionId, sessionId)),
     ).rejects.toMatchObject({ cause: { code: '55000' } })
+  })
+
+  it('commits post-completion safety state even when cache cleanup is unavailable', async () => {
+    const { sessionId, setId } = await startedSession()
+    await completeSet({
+      userId: owner.id,
+      sessionId,
+      setId,
+      commandId: newUuidV7(),
+      actualLoadGrams: TEST_TARGET_LOAD_GRAMS,
+      actualRepetitions: TEST_TARGET_REPETITIONS,
+      rpe: 8,
+      note: null,
+    })
+    await completeWorkout({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      noPainAttested: true,
+    })
+    const unavailableCleanup = {
+      ...createMemoryFutureLoadExplanationCache(),
+      deleteBySessionId: async () => {
+        throw new Error('cache relation unavailable after safety commit')
+      },
+    }
+
+    await reportPain(
+      {
+        userId: owner.id,
+        sessionId,
+        commandId: newUuidV7(),
+        details: 'late issue while cache is unavailable',
+      },
+      { explanationCache: unavailableCleanup },
+    )
+
+    const [feedback] = await getDb()
+      .select()
+      .from(sessionFeedback)
+      .where(eq(sessionFeedback.sessionId, sessionId))
+    const [hold] = await getDb()
+      .select()
+      .from(safetyHolds)
+      .where(eq(safetyHolds.userId, owner.id))
+    expect(feedback).toMatchObject({
+      painReported: true,
+      details: 'late issue while cache is unavailable',
+    })
+    expect(hold).toMatchObject({ reasonCode: 'session-pain-reported' })
+  })
+
+  it('fails closed when completed-session feedback is missing', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    await getDb().transaction(async (transaction) => {
+      await transaction.execute(
+        sql`SELECT set_config('indigo.deletion_mode', 'trainee-data', true)`,
+      )
+      await transaction
+        .delete(sessionFeedback)
+        .where(eq(sessionFeedback.sessionId, sessionId))
+    })
+
+    const result = await createPostgresFutureLoadExplanationCache().getIfActive({
+      userId: owner.id,
+      sessionId,
+      decisionId: decision.id,
+      cacheKey: 'missing-feedback',
+    })
+
+    expect(result).toEqual({ status: 'state-unavailable' })
+  })
+
+  it('rolls cache statement failures back to a savepoint after confirming active state', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const cache = createPostgresFutureLoadExplanationCache({
+      testHooks: {
+        beforeCacheStatement: async (transaction) => {
+          await transaction.execute(
+            sql`SELECT * FROM indigo_intentionally_missing_cache_relation`,
+          )
+        },
+      },
+    })
+    const input = cachedExplanationInput({
+      sessionId,
+      decisionId: decision.id,
+      cacheKey: 'savepoint-failure',
+    })
+
+    await expect(cache.getIfActive(input)).resolves.toEqual({
+      status: 'cache-unavailable',
+    })
+    await expect(cache.putIfActive(input)).resolves.toEqual({
+      status: 'cache-unavailable',
+    })
+    const [feedback] = await getDb()
+      .select({ painReported: sessionFeedback.painReported })
+      .from(sessionFeedback)
+      .where(eq(sessionFeedback.sessionId, sessionId))
+    expect(feedback).toEqual({ painReported: false })
+  })
+
+  it('maps an authoritative-state query failure to state-unavailable', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const cache = createPostgresFutureLoadExplanationCache({
+      testHooks: {
+        beforeAuthoritativeState: async (transaction) => {
+          await transaction.execute(
+            sql`SELECT * FROM indigo_intentionally_missing_state_relation`,
+          )
+        },
+      },
+    })
+
+    await expect(
+      cache.getIfActive({
+        userId: owner.id,
+        sessionId,
+        decisionId: decision.id,
+        cacheKey: 'state-failure',
+      }),
+    ).resolves.toEqual({ status: 'state-unavailable' })
+  })
+
+  it('refreshes creation provenance when repairing a same-key cache row', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const input = cachedExplanationInput({
+      sessionId,
+      decisionId: decision.id,
+      cacheKey: 'repair-created-at',
+    })
+    const staleCreatedAt = new Date('2020-01-01T00:00:00.000Z')
+    await getDb()
+      .insert(futureLoadExplanationCache)
+      .values({
+        id: newUuidV7(),
+        ...input,
+        cacheKey: storageKeyFromExplanationCacheKey(input.cacheKey),
+        prose: 'invalid stale content',
+        createdAt: staleCreatedAt,
+      })
+
+    await expect(
+      createPostgresFutureLoadExplanationCache().putIfActive(input),
+    ).resolves.toEqual({ status: 'stored' })
+    const [row] = await getDb()
+      .select({
+        prose: futureLoadExplanationCache.prose,
+        createdAt: futureLoadExplanationCache.createdAt,
+      })
+      .from(futureLoadExplanationCache)
+      .where(
+        eq(
+          futureLoadExplanationCache.cacheKey,
+          storageKeyFromExplanationCacheKey(input.cacheKey),
+        ),
+      )
+    expect(row?.prose).toBe(input.prose)
+    expect(row?.createdAt.getTime()).toBeGreaterThan(staleCreatedAt.getTime())
+  })
+
+  it('serializes publication before pain and purges the published row afterward', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const publicationLocked = deferred()
+    const releasePublication = deferred()
+    const cache = createPostgresFutureLoadExplanationCache({
+      testHooks: {
+        afterActiveState: async (operation) => {
+          if (operation !== 'put') return
+          publicationLocked.resolve()
+          await releasePublication.promise
+        },
+      },
+    })
+    const publication = cache.putIfActive(
+      cachedExplanationInput({
+        sessionId,
+        decisionId: decision.id,
+        cacheKey: 'publication-before-pain',
+      }),
+    )
+    await publicationLocked.promise
+
+    const pain = reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'pain queued behind cache publication',
+    })
+    releasePublication.resolve()
+
+    await expect(publication).resolves.toEqual({ status: 'stored' })
+    await pain
+    const rows = await getDb()
+      .select({ id: futureLoadExplanationCache.id })
+      .from(futureLoadExplanationCache)
+      .where(eq(futureLoadExplanationCache.sessionId, sessionId))
+    expect(rows).toHaveLength(0)
+  })
+
+  it('serializes pain before publication and rejects the queued cache write', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const painLocked = deferred()
+    const releasePain = deferred()
+    const painTransaction = getDb().transaction(async (transaction) => {
+      await transaction.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${owner.id}, 0))`,
+      )
+      await transaction.execute(
+        sql`SELECT set_config(
+          'indigo.session_feedback_write_mode',
+          'post-completion-safety-report',
+          true
+        )`,
+      )
+      await transaction
+        .update(sessionFeedback)
+        .set({ painReported: true, details: 'pain linearized first' })
+        .where(eq(sessionFeedback.sessionId, sessionId))
+      painLocked.resolve()
+      await releasePain.promise
+    })
+    await painLocked.promise
+
+    const publication = createPostgresFutureLoadExplanationCache().putIfActive(
+      cachedExplanationInput({
+        sessionId,
+        decisionId: decision.id,
+        cacheKey: 'pain-before-publication',
+      }),
+    )
+    releasePain.resolve()
+    await painTransaction
+
+    await expect(publication).resolves.toEqual({
+      status: 'invalidated',
+      reason: 'post-completion-pain-report',
+    })
+    const rows = await getDb()
+      .select({ id: futureLoadExplanationCache.id })
+      .from(futureLoadExplanationCache)
+      .where(eq(futureLoadExplanationCache.sessionId, sessionId))
+    expect(rows).toHaveLength(0)
   })
 
   it('creates a source-linked pain hold without coalescing an unrelated eligibility hold', async () => {
