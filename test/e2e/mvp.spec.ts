@@ -151,6 +151,39 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow, 'elements extending beyond the document viewport').toEqual([])
 }
 
+/** Codes-first History contract for future-load decisions (LLM may be off). */
+async function expectFutureLoadHistoryCodes(page: Page): Promise<void> {
+  await expect(page.getByRole('heading', { name: 'Future-load decisions' })).toBeVisible()
+  await expect(
+    page.getByText(
+      'Development policy only. These deterministic outputs are not human-reviewed',
+    ),
+  ).toBeVisible()
+  // At least one stored decision with reason code + rule version label.
+  const reasonCodes = page.locator('code').filter({ hasText: /development\.adjustment\./ })
+  await expect(reasonCodes.first()).toBeVisible()
+  await expect(reasonCodes.first()).toContainText('rule')
+  await expect(
+    page.getByRole('button', { name: 'Explain in plain language' }).first(),
+  ).toBeVisible()
+}
+
+/**
+ * E2E default webServer does not enable INDIGO_LLM_MODE=local, so Explain must
+ * degrade honestly while leaving rule codes visible.
+ */
+async function expectExplainDegradesWhenLlmDisabled(page: Page): Promise<void> {
+  const explain = page.getByRole('button', { name: 'Explain in plain language' }).first()
+  await explain.click()
+  await expect(
+    page.getByText('Plain-language explanations are off on this instance', { exact: false }),
+  ).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('The rule codes above still apply', { exact: false })).toBeVisible()
+  // Codes remain authoritative after the soft failure.
+  await expect(page.locator('code').filter({ hasText: /development\.adjustment\./ }).first()).toBeVisible()
+  await expect(page.getByText('Inferred paraphrase of the stored rule')).toHaveCount(0)
+}
+
 test.beforeEach(async () => {
   await clearApplicationData()
   await closeDb()
@@ -211,6 +244,8 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await expect(page).toHaveURL(/\/history\//)
   await expect(page.getByRole('heading', { name: 'Workout completed.' })).toBeVisible()
   await expect(page.getByText('Persisted immutable completion facts')).toBeVisible()
+  await expectFutureLoadHistoryCodes(page)
+  await expectExplainDegradesWhenLlmDisabled(page)
 
   await page.goto('/today')
   await expect(
