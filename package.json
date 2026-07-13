@@ -28,6 +28,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/db/migrate.ts",
     "db:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/db/preflight.ts",
+    "db:backup-restore-drill": "NODE_ENV=test INDIGO_CONTENT_MODE=development INDIGO_LLM_MODE=disabled node --env-file-if-exists=.env.local --import tsx scripts/db/backup-restore-drill.ts",
     "llm:validate-baseline": "node --import tsx scripts/llm/validate-baseline.ts",
     "llm:preflight": "node --import tsx scripts/llm/preflight.ts",
     "llm:serve": "bash scripts/llm/serve-local.sh",
