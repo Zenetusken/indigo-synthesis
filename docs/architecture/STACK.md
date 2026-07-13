@@ -1,17 +1,18 @@
 # Technology stack
 
-Snapshot date: 2026-07-11
+Verified against `package.json` and the live runtime contract: 2026-07-13
 
-The stack is modern because its parts are current, supported, and reduce system
-boundaries—not because it includes the most tools.
+The stack is intentionally pinned because its parts satisfy the implemented runtime and
+reduce system boundaries—not because every dependency must track the newest available
+release.
 
 | Layer | Choice | Baseline version | Why |
 | --- | --- | --- | --- |
-| Runtime | Node.js LTS | 24 | Supported LTS line; one ordinary self-hosted process |
-| Web | Next.js App Router | 16.2.10 | Current stable full-stack React framework with documented self-hosting |
-| UI runtime | React | 19.2.7 | Current stable React line used by Next 16 |
+| Runtime | Node.js | 24 | Required engine line; one ordinary self-hosted process |
+| Web | Next.js App Router | 16.2.10 | Pinned full-stack React framework with documented self-hosting |
+| UI runtime | React | 19.2.7 | Pinned React line used by the application |
 | Language | TypeScript | 6.0.3 | Stable transition release with ecosystem API compatibility; TS 7.0 was only days old and lacks the prior programmatic API |
-| Database | PostgreSQL | 18 | One mature relational source of truth; current supported major |
+| Database | PostgreSQL | 18 or newer | One mature relational source of truth; enforced by startup preflight |
 | SQL mapping | Drizzle ORM + `pg` | 0.45.2 / 8.22.0 | Typed schema/query layer with committed generated SQL migrations |
 | Authentication | Better Auth | 1.6.23 | Self-hosted database sessions and documented Next.js/PostgreSQL integration |
 | Validation | Zod | 4.4.3 | Boundary parsing and explicit validation results |
@@ -20,7 +21,7 @@ boundaries—not because it includes the most tools.
 | Unit/domain tests | Vitest | 4.1.10 | Fast deterministic engine/domain testing |
 | Browser tests | Playwright | 1.61.1 | Real user journey against application and database |
 | Lint/format | Biome | 2.5.3 | One current tool instead of overlapping ESLint/Prettier stacks |
-| Package manager | pnpm | 10 | Deterministic lockfile and efficient local installs |
+| Package manager | pnpm | 10.7.1 | Exact package-manager pin plus deterministic lockfile |
 
 Package versions are pinned in `package.json` and resolved in `pnpm-lock.yaml`.
 

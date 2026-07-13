@@ -38,9 +38,10 @@ llm/
 tmp/llm-runtime-attestation.json    # live launcher evidence; gitignored, mode 0600
 ```
 
-The binary lock is host-specific by design: it records the supported Ada/CUDA build
-at the configured build path. A different source path or toolchain must be reviewed
-and re-pinned rather than silently treated as equivalent.
+The binary lock is host-specific by design: it records the supported Ada/CUDA `sm_89`
+build at the configured build path. A different GPU architecture, source path, or
+toolchain must be reviewed, rebuilt, and re-pinned rather than silently treated as
+equivalent.
 
 ## Operator sequence
 
@@ -113,6 +114,9 @@ deadline. Alternate directories or longer deadlines are diagnostic experiments, 
 product configuration; the live Playwright and archive commands overwrite inherited
 values with the committed contract.
 
+An unset or exactly empty `INDIGO_LLM_MODE` normalizes to `disabled`. Whitespace-only or
+unknown values remain invalid instead of being guessed.
+
 Only the opt-in live Playwright configuration enables local mode. Default E2E forces
 `INDIGO_LLM_MODE=disabled` even if the parent shell contains adversarial LLM variables.
 
@@ -122,6 +126,14 @@ Only the opt-in live Playwright configuration enables local mode. Default E2E fo
 closed-output prompt v3, validator v4, the committed pack registry, non-empty accepted
 and rejection matrices, adversarial numeric and advice cases, invalidation, fake
 synthesis, and disabled composition.
+
+The merged-tree checkpoint uses baseline `2026-07-13.5`: 43/43 offline checks across nine
+goldens and 21 rejection traps. Its final clean-tree three-run archive recorded live
+availableRate 1.0 in every run, p50 `806 / 807 / 807` ms, p95
+`1177 / 1017 / 1012` ms, and green live History E2E. The archived root tree is byte-equal
+to `99ace8c^{tree}`. This archive is operator-local evidence under the gitignored
+`tmp/llm-runs/` directory, not a versioned repository artifact; later calibration claims
+require a newly verified batch.
 
 The live probe is useful only after full preflight succeeds. A calibrated product-path
 archive requires a clean staged/unstaged/untracked worktree and at least three runs with

@@ -49,13 +49,13 @@ record. No software test can substitute for that approval.
 | J1 — Bootstrap and sign in | Host-issued one-use bootstrap capability, explicit database creation modes, atomic owner credential/installation claim, Better Auth sessions with credential-lifecycle serialization, owner-created local users, and host-local one-use recovery | `identity.integration.test.ts`, `owner-recovery.integration.test.ts`, and the browser journey | Bootstrap issuance and recovery are intentionally host-administrative rather than public reset flows |
 | J2 — Set up a trainee | Units, IANA timezone, goal, experience, three training days, session duration, equipment, starting loads, age/technique attestations, and limitation context | Browser journey plus unit conversion tests | Initial setup is immutable in the current UI; a reviewed profile-change/revision workflow is still future work |
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
-| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after abandonment or durable completed-session invalidation; exact PostgreSQL resume | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session |
+| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after live-source abandonment or completed-source durable invalidation plus abandonment of any already-active affected descendant session; exact PostgreSQL resume | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session |
 | J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set correction ledger/projection; feedback-correction entry from History; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression; trainee completed-set correction entry, richer progress aggregates, and comparison remain later Phase 3 work |
-| J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones | Main and cross-user browser journeys plus portability integration tests | Export is subject-scoped; database/media backup and restore remain operator responsibilities |
+| J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones | Main and cross-user browser journeys plus portability integration tests | Export is subject-scoped; database/media backup and restore remain operator responsibilities |
 
 The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
-`test/integration/`, and `test/e2e/mvp.spec.ts`. Application APIs are not mocked in the
-browser journey.
+`test/integration/`, and `test/e2e/*.spec.ts`. Application APIs are not mocked in the
+browser journeys.
 
 ## Access and recovery (specified 2026-07-12; partially implemented)
 
@@ -76,8 +76,9 @@ review-hardened), which reconciles to the live repository as:
   training data still keys on `userId` (`athlete_profile.userId` is the primary key),
   and cross-account isolation is application-layer only (no RLS).
 
-None of the above is part of the current green suite; it is a specified next slice, not
-implemented behavior.
+Existing host-local owner recovery is covered by the current integration suite. The J7
+trainee-reset path, J9 orientation, browser owner-recovery redemption, and account/profile
+extensions remain a specified next slice rather than implemented behavior.
 
 ## Cross-cutting status
 
@@ -99,15 +100,15 @@ pnpm typecheck
 pnpm test
 pnpm test:integration
 pnpm test:e2e
-INDIGO_CONTENT_MODE=reviewed pnpm build
+INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 ```
 
-At this snapshot, Biome, TypeScript, 424 unit/domain/architecture tests, 105 database
-integration tests, dedicated upgrade proofs, the full default Playwright suite including
-the supervised restart/replay journeys, PostgreSQL preflight/fresh migration across sixteen
-ledger entries and 28 required integrity triggers, and the production build are green.
-The Playwright suite runs against a freshly recreated PostgreSQL database with
-application APIs unmocked.
+At this snapshot, Biome, TypeScript, 497 unit/domain/architecture tests, 106 database
+integration tests, dedicated upgrade proofs, the full 15/15 default Playwright suite
+including the supervised restart/replay journeys, PostgreSQL preflight/fresh migration
+across sixteen ledger entries and 28 required integrity triggers, and the explicit
+LLM-disabled production build are green. The Playwright suite runs against a freshly
+recreated PostgreSQL database with application APIs unmocked.
 
 `pnpm validate` covers static checks, unit/domain tests, and the production-mode build.
 Integration and browser tests remain explicit because they require PostgreSQL and the E2E
@@ -139,11 +140,15 @@ not evidence that the documented boundaries already exist.
 ## Application FactBundle wiring (codes path)
 
 Training application maps completed sessions into contract FactBundles via
-`getFutureLoadFactBundlesForSession`. History always shows decision codes and loads.
-Optional on-demand plain-language explanation uses `explainFutureLoadDecision` + a
-History server action (“Explain in plain language”): inferred only, never blocks first
-paint, degrades when `INDIGO_LLM_MODE=disabled` or GPU/local server is not ready. Operator
-dry-run: `pnpm llm:dry-run-synthesize`. Product process still defaults LLM off.
+`getFutureLoadFactBundlesForSession`. For sessions admitted to History—currently eligible
+content and explicitly revoked releases—History shows stored decision codes and loads.
+Non-revoked development sessions are unavailable in reviewed-mode History. Subject export
+still retains owned session facts, decisions, and cached-explanation provenance regardless
+of current content eligibility. Optional on-demand plain-language explanation uses
+`explainFutureLoadDecision` + a History server action (“Explain in plain language”):
+inferred only, never blocks first paint, degrades when `INDIGO_LLM_MODE=disabled` or the
+GPU/local server is not ready. Operator dry-run: `pnpm llm:dry-run-synthesize`. Product
+process still defaults LLM off.
 
 ## Optional local grounded explanation (infra slice)
 
@@ -170,13 +175,19 @@ language models.
 - live calibrations on this host for Qwen3.5-9B Q4_K_M:
   - **GPU path re-attested 2026-07-13:** driver 580.173.02 / RTX 4070; exact Q4
     digest; pinned llama.cpp commit, launcher, and eight mapped llama/ggml DSOs;
-    literal `n-gpu-layers=all`; ~5.3 GiB live allocation; `/props` and `/models` exact;
+    literal `n-gpu-layers=all`; ~5.3 GiB live allocation; `/props` and `/v1/models` exact;
     `readyForLocalInference=true`.
   - current contract is FactBundle v2 plus closed-output prompt v3 / validator v4 and passes
     **43/43**, including canonical structured-name rejection traps.
-  - historical v3 host runs reached live availableRate **1.0 / 1.0 / 1.0**, p95
-    **992 / 1020 / 1029 ms**, and green live History E2E. Current calibration claims
-    require a fresh clean-commit/tree batch manifest; prior raw runs are diagnostic only.
+  - the final validator-v4 clean-tree archive
+    (`archive-batch-20260713T083416Z-281212.json`) passed all three runs at live
+    availableRate **1.0 / 1.0 / 1.0**, p50 **806 / 807 / 807 ms**, p95
+    **1177 / 1017 / 1012 ms**, offline **43/43**, and green live History E2E. Its source
+    tree `f33c895056567d33dc15015e1367cdf62e7147ef` is exactly the merged
+    `99ace8c^{tree}`; the squash merge changed commit identity, not reviewed source bytes.
+    This manifest is operator-local evidence under gitignored `tmp/llm-runs/`, not a
+    versioned repository artifact. Future calibration claims still require a fresh
+    clean-commit/tree batch manifest; raw runs remain diagnostic only.
   - **Explanation invalidation:** append-only post-completion safety or performed-set
     corrections create authoritative decision/revision invalidations without changing the
     original facts. Explain returns `decision-invalidated`; correction/invalidation commit
@@ -185,7 +196,8 @@ language models.
 
 **History product path (implemented, default off):**
 
-- codes always on completed-session History;
+- codes always on every completed-session History record admitted by the content-
+  eligibility boundary;
 - on-demand “Explain in plain language” via `explainFutureLoadDecision` (inferred only);
 - LLM-off e2e pin in `pnpm test:e2e`; GPU-on pin in `pnpm test:e2e:llm`;
 - operator multi-run archive: `pnpm llm:archive-product-path` (writes `tmp/llm-runs/`).
@@ -193,9 +205,11 @@ language models.
 **Prose cache (implemented):** PostgreSQL `future_load_explanation_cache` stores only
 validation-passing available prose, keyed by contract `explanationCacheKey`, with at most
 one current row per decision. Cache hits skip model preflight/synthesize; History UI
-labels them `cached`. Subject export includes full generation/runtime provenance, and
-subject/instance deletion count and remove the rows. Not part of the immutable training
-ledger.
+labels them `cached`. Revoked content and invalidated decisions retain authoritative
+historical codes while Explain is disabled. Subject export includes full
+generation/runtime provenance even when non-revoked content later becomes ineligible;
+subject/instance deletion count and remove the rows. The cache is not part of the
+immutable training ledger.
 
 **Intentional boundary after this arc:** Program-page Explain and any methodology
 authority change remain separate product work. `INDIGO_LLM_MODE` defaults to `disabled`.

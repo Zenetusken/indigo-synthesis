@@ -132,11 +132,20 @@ pnpm exec playwright install chromium
 cp .env.e2e.example .env.e2e.local
 ```
 
-The suite holds one per-UID, machine-local non-blocking lock across reset and Playwright,
-so a second default/live/worktree run by the same operating-system user fails before it
-can terminate the first run's database connections or bind its ports. The optional
+The canonical `pnpm test:e2e` and `pnpm test:e2e:llm` wrappers hold one per-UID,
+machine-local non-blocking lock across reset and Playwright, so a second
+default/live/worktree run by the same operating-system user fails before it can
+terminate the first run's database connections or bind its ports. The optional
 `INDIGO_E2E_APPLICATION_PORT` and `INDIGO_E2E_SUPERVISOR_PORT` overrides are for
 explicitly isolated diagnostics; the committed defaults remain 3100/3101.
+
+Both checked-in Playwright configurations also validate and pin the disposable database
+target while loading, and per-test application-data cleanup revalidates the original
+administration/target pair immediately before opening a database connection. Direct
+Playwright CLI and VS Code extension runs therefore cannot bypass the destructive-target
+guard. They do not perform the wrapper's serialized drop/recreate step, so use the
+documented `pnpm` commands for canonical evidence and direct invocation only for an
+explicitly isolated diagnostic.
 
 Review `.env.e2e.local` before running the suite. Give it a distinct test-only secret and
 keep its target on the same explicit loopback PostgreSQL host, port, and username as
@@ -239,6 +248,8 @@ if its path still names the opened inode.
   behavior
 - `src/platform/db/` and `drizzle/` — PostgreSQL schema, preflight, and the sole committed
   migration ledger
+- `src/platform/llm/` and `llm/` — optional grounded-language contracts, guarded
+  loopback runtime integration, exact artifact/runtime locks, and operator tooling
 - `test/integration/` and `test/e2e/` — database and real-browser proof
 
 Start with [the product vision](docs/product/VISION.md), then read

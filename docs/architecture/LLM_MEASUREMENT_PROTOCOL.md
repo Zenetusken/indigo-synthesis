@@ -4,6 +4,14 @@ Status: active
 Baseline version: `LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`
 Companion: [ADR 0006](adr/0006-optional-local-grounded-language.md), [explanation contract](EXPLANATION_GENERATION_CONTRACT.md)
 
+Current checkpoint: baseline `2026-07-13.5` is 43/43 across nine golden cases—eight
+eligible plus one invalidated—and 21 rejection traps. The final validator-v4 clean-tree
+archive passed three live runs at availableRate 1.0, p50 `806 / 807 / 807` ms, p95
+`1177 / 1017 / 1012` ms, and green live History E2E. Its archived root tree is byte-equal
+to `99ace8c^{tree}`. The manifest is operator-local evidence under gitignored
+`tmp/llm-runs/`, not a versioned repository artifact; future claims require a newly
+verified batch.
+
 ## Principle
 
 **Measure before product surface.** Do not ship History prose, cache tables, or
@@ -51,7 +59,7 @@ Produced by `pnpm llm:validate-baseline` (and unit tests of the same runner).
 | `golden.caseCount` | Golden FactBundle cases | ≥ 9 |
 | `golden.reasonCodeCoverage` | Distinct reason codes in goldens | Includes development increase/holds/pain-block |
 | `validation.acceptPassRate` | Accepted templates that validate | 1.0 for non-invalidated cases |
-| `validation.rejectPassRate` | Trap samples that fail validation | 1.0 |
+| `validation.rejectPassRate` | Trap samples that fail validation | 1.0, with the explicit non-empty validation-matrix coverage check also green |
 | `synthesize.availablePassRate` | Active cases → `available` via fake | 1.0 |
 | `baselineVersion` | Protocol pin | Matches committed `LLM_BASELINE_VERSION` |
 
@@ -82,7 +90,7 @@ every run; any miss fails the archive.
 ## What is *not* measured yet
 
 - Trainee comprehension (beta survey; Phase 4)
-- A/B of codes-only vs prose (requires UI)
+- A/B of codes-only vs prose (requires a reviewed study design, assignment mechanism, and comprehension instrument; the product UI exists)
 - Token cost, GPU utilization, multi-tenant load
 - Cloud models (out of scope)
 
@@ -131,7 +139,8 @@ every run; any miss fails the archive.
 
 1. ~~Infra + offline baseline~~ (done)
 2. ~~Builder from persisted decisions + metrics emission~~ (done)
-3. ~~Measured live runs on operator hardware~~ (CPU then GPU availableRate=1.0 recorded)
+3. ~~Measured live runs on operator hardware~~ (historical CPU diagnosis preceded the
+   supported GPU calibration; only fully attested GPU evidence counts for product readiness)
 4. ~~Application FactBundle wiring from completed sessions~~ (`getFutureLoadFactBundlesForSession`)
 5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
 6. ~~Product-path multi-run discipline + live latency metrics (H9/H10)~~ (`pnpm llm:archive-product-path`)

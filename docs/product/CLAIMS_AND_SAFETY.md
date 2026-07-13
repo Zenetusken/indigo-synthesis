@@ -95,15 +95,21 @@ Before a reviewed template is published, it must define:
 
 ## Data honesty
 
-Data is categorized as:
+The taxonomy below covers both current data and fields that could be admitted by a future
+reviewed release; it is not a claim that every example is collected today. Data is
+categorized as:
 
 - **System observed:** server-recorded command and completion timestamps.
 - **User-attested performed:** load and repetitions the trainee confirms as performed.
   Each value preserves whether it was copied from a target/prior set, edited, and
   explicitly confirmed.
-- **User reported:** RPE, pain/issues, sleep quality, soreness, motivation, notes.
-- **Derived:** e1RM, volume, adherence, personal-record classification.
-- **Prescribed:** target load, reps, rest, tempo, technique.
+- **User reported:** the current slice accepts RPE, pain/issues, and notes. Sleep quality,
+  soreness, and motivation are taxonomy examples only and are not currently collected.
+- **Derived:** possible future values include e1RM, volume, adherence, and personal-record
+  classification; none of those progress aggregates is implemented in the current slice.
+- **Prescribed:** the current development fixture stores target load, reps, and rest.
+  Tempo and authored technique require a future reviewed content release and are not
+  current prescription fields.
 - **Inferred:** any model output not directly observed or attested by the user.
 
 The UI labels derived and inferred values. No category silently becomes another.

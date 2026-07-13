@@ -17,12 +17,18 @@ remain available with `INDIGO_LLM_MODE=disabled`.
 | model | `qwen3.5-9b-q4_k_m` | Only the digest-locked pack is supported |
 | model settings | committed `llm/models` registry | Sampling, limits, and prompt metadata are reviewed code |
 | weights path | committed `llm/weights` directory | Download, preflight, and launcher resolve the same artifact |
+| CUDA target | `sm_89` (Ada / RTX 40-series) | Other GPU architectures or toolchains require a reviewed rebuild and lock/digest re-pin |
 | context | `4096` tokens | Launcher argv and preflight must match the committed pack limit |
 | timeout | `3000` ms | Interactive explanation budget |
 
 CPU, partial/auto offload, LM Studio, alternate packs, redirecting endpoints, and
 unattested servers can be used for private diagnosis only; none may report product
 readiness.
+
+Every TypeScript LLM HTTP request—completion, `/v1/models`, and `/props`—uses the sole
+`fetchLoopback` network primitive. It validates HTTP(S) loopback immediately before I/O
+and forces `redirect: 'error'`. The architecture suite rejects direct or aliased runtime
+network globals, general HTTP clients, and raw-socket modules everywhere else.
 
 ## RAM and NVIDIA gates
 
@@ -59,7 +65,7 @@ llama-cpp.lock.json ─► source commit / CUDA architecture
                     └► every local llama / ggml / mtmd DSO SHA-256 + size
 serve-local.sh      ─► exact loopback / model / alias / context / all-layer argv
 attestation.json    ─► PID + process start + file identities + all digests
-preflight           ─► /proc exe, argv, exact maps, listener + /props + /models + NVIDIA PID memory
+preflight           ─► /proc exe, argv, exact maps, listener + /props + /v1/models + NVIDIA PID memory
 ```
 
 The launcher writes `tmp/llm-runtime-attestation.json` atomically with mode `0600`
@@ -118,9 +124,10 @@ an aborted batch are diagnostic only; without the verified batch manifest they a
 calibration evidence.
 
 For a one-shot post-reboot bootstrap, `pnpm llm:measure-gpu` checks raw GPU/artifact
-state first, builds if the binary lock is absent, stops only the twice-verified attested
-listener through an exact Linux pidfd, rechecks full model-load RAM after that process
-exits, starts the pinned server, and only then runs full preflight and live measurement.
+state first, builds or rebuilds when the binary or any locked runtime DSO is absent or
+mismatched, stops only the twice-verified attested listener through an exact Linux pidfd,
+rechecks full model-load RAM after that process exits, starts the pinned server, and only
+then runs full preflight and live measurement.
 The per-UID lifecycle lock covers the whole replacement/measurement transition. Logs and
 measurement JSON use mode-0600 temporary files in the owned lock directory. The command
 does not run readiness preflight before the server exists and does not broadly `pkill`
@@ -137,7 +144,7 @@ unrelated processes.
 | endpoint | exact model alias from non-redirecting `/v1/models` |
 | composition | verified runtime identity matches the committed pack |
 | source | clean worktree; one full Git commit/root-tree identity across the batch |
-| offline | every baseline check passes at the current FactBundle-v2/prompt-v3 contract |
+| offline | every baseline check passes at the current FactBundle-v2/prompt-v3/validator-v4 contract |
 | live | every eligible case available within the configured timeout |
 | browser | opt-in live E2E passes with deterministic codes still visible |
 

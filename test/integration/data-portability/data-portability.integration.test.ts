@@ -1379,7 +1379,7 @@ describe('subject export and exact instance reset', () => {
     expect(serialized).not.toContain(memberActor.email)
   })
 
-  it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
+  it('binds every affected live-table count and retains only reset metadata', async () => {
     // Reset must succeed with a live revocation row present: the append-only
     // guard permits its deletion only inside instance-reset mode, and the row
     // must be purged before the authoring user row so the FK actor-unlink

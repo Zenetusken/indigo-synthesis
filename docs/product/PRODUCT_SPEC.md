@@ -212,8 +212,10 @@ J1–J6 acceptance gate.
 - **FR-071** Deletion is explicit, scoped, confirmable, and tested.
 - **FR-071A** Deletion is the explicit exception to historical immutability. A single
   portability workflow orders referential deletion/redaction inside one transaction and
-  retains only a non-personal tombstone containing event ID, actor class, timestamp,
-  schema version, aggregate row counts, and completion digest.
+  retains no personal training content. Subject deletion appends a non-personal
+  tombstone; whole-instance reset also reopens the non-personal installation singleton
+  for bootstrap and preserves non-personal tombstone records containing event ID, actor
+  class, timestamp, schema version, aggregate row counts, and completion digest.
 - **FR-072** No core workflow requires a cloud identity, email provider, object store,
   analytics service, CDN, or model API.
 - **FR-073** Development/demo data is visibly labeled and cannot enter production history.
@@ -225,9 +227,10 @@ J1–J6 acceptance gate.
 
 - **NFR-001 Self-hosting:** one Node process plus one PostgreSQL database; one writable
   directory only if media is enabled.
-- **NFR-001A Secure access:** plain HTTP is supported only on loopback for development.
-  Any phone, LAN, or other non-loopback deployment uses an HTTPS origin and secure
-  cookies through a user-supplied TLS terminator.
+- **NFR-001A Secure access:** loopback-local operation may use plain HTTP. Any phone,
+  LAN, or other non-loopback deployment uses an HTTPS origin and `Secure` cookies
+  through a user-supplied TLS terminator; loopback HTTP cookies remain `HttpOnly` and
+  `SameSite=Lax` but are not marked `Secure`.
 - **NFR-002 Accessibility:** WCAG 2.2 AA, keyboard operation, visible focus, 200% zoom,
   reduced motion, and status beyond color.
 - **NFR-003 Mobile:** 48px workout targets, 16px numeric inputs, safe-area-aware sticky

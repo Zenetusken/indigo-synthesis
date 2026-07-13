@@ -21,6 +21,37 @@ The distinction is deliberate: the technical workflow exists, while every exerci
 volume, load, rest, progression, population, safety, evidence, and rights decision in a
 production release remains blocked until Gate 0 closes.
 
+## Cross-cutting checkpoint — access and recovery
+
+[Access and recovery](product/ACCESS_AND_RECOVERY_SPEC.md) defines a separately gated
+account-security and cold-start slice. It may be implemented independently of methodology
+review, but it does not close Gate 0 or expand the J1–J6 Release 1 acceptance gate by
+implication.
+
+Current checkpoint:
+
+- host-issued owner recovery with CLI redemption, session revocation, and audit is live;
+- owner-created trainee accounts are live; and
+- trainee credential recovery, web owner-recovery redemption, and locked-out sign-in
+  orientation are specified but not implemented.
+
+Deliver:
+
+1. owner-mediated, expiring one-use trainee reset codes with target-scoped credential
+   locking, bounded abuse controls, and session revocation;
+2. a hardened web redemption path for host-issued owner recovery while preserving CLI
+   redemption as the host-trust escape path;
+3. uniform, non-enumerating sign-in/reset/recovery failures and explicit next actions for
+   trainee, owner, and no-account visitors;
+4. fresh owner reauthentication for credential-lifecycle administration; and
+5. unmocked browser/database proof that recovery preserves the subject's training data and
+   revokes affected sessions.
+
+Gate: the end-goal invariants, journey budgets, audit requirements, accessibility checks,
+and operational proof in the access/recovery specification pass. Until then, existing CLI
+owner recovery is shipped infrastructure, while J7 and J9 plus the web portion of J8 remain
+an open product slice.
+
 ## Gate 0 — Product truth
 
 Close the [Methodology v1 decision pack](product/METHODOLOGY_V1_DECISION_PACK.md).

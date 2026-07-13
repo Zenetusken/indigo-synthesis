@@ -15,16 +15,20 @@ Core product operation requires only:
 
 No other service is authoritative or mandatory.
 
+The optional grounded-language path is outside that core topology. When explicitly
+enabled, it adds one host-local, loopback-only llama.cpp HTTP process; PostgreSQL and the
+Node.js application remain authoritative, and every core journey continues to work when
+that process is absent.
+
 ## Network trust boundary
 
 There are two distinct access modes:
 
-- **Local development:** plain HTTP is supported only through the loopback origin
-  `http://127.0.0.1:3000`. The checked-in development command binds that address
-  explicitly.
+- **Loopback-local use:** plain HTTP is supported only through a loopback origin such as
+  `http://127.0.0.1:3000`. Both checked-in runtime commands bind that address explicitly.
 - **Network use:** a phone, LAN client, public hostname, or any non-loopback client must
-  use an externally visible HTTPS origin. Production authentication cookies are always
-  `Secure`.
+  use an externally visible HTTPS origin. Cookies for an HTTPS origin are `Secure`;
+  loopback-HTTP cookies remain `HttpOnly` and `SameSite=Lax` but cannot carry `Secure`.
 
 Network use therefore has an environmental ingress prerequisite: the operator supplies a
 TLS terminator in front of the Node process (or an equivalent HTTPS-capable host layer).
@@ -42,7 +46,10 @@ resolved, avoiding a spoofable or globally shared rate-limit bucket.
 
 ## No mandatory outbound network
 
-After installation, the complete core journey works with outbound network access blocked.
+After installation, the complete core journey is designed to work with outbound network
+access blocked. Source guards and browser request observation cover the current
+implementation, while the retained end-to-end proof in a network-denied environment
+remains an open release gate.
 
 Therefore:
 
@@ -90,11 +97,12 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18, the committed migration ledger including the
-exact canonical 0004 program-ordinal hash, owner bootstrap enforcement, current
-snapshot/revision columns, correction/invalidation structures, append-only content
-release revocations, and the required integrity triggers. `pnpm start` runs this
-preflight before starting the production server. Both
+`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 16 current committed migration
+hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
+enforcement, current snapshot/revision and correction/invalidation structures,
+append-only content-release revocations, the explanation-cache contract, and all 28
+required enabled trigger/table/function bindings. `pnpm start` runs this preflight before
+starting the production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.
@@ -112,7 +120,8 @@ Development content is never a production fallback: a production process rejects
 - Database user insertion requires an explicit transaction-local `bootstrap-owner` or
   `owner-admin` creation mode. Missing and unknown modes fail closed.
 - Public signup remains off after bootstrap.
-- The owner can create or invite local users according to the approved user model.
+- The owner can directly create local users with an initial password that is shared out
+  of band. No invitation or email-delivery flow exists.
 - The current slice has no SMTP or browser password-reset adapter. If the only owner is
   locked out, a host-local administrative command with database access may issue an
   expiring one-use recovery code. Redemption revokes existing sessions and records a
@@ -129,11 +138,15 @@ The complete backup boundary is:
 Export is a product feature, not a database-admin substitute. It includes a schema
 version and enough provenance to interpret programs, sessions, and recommendations.
 
-Deletion is an explicit destruction exception to immutable history. Modules delete or
-redact scoped personal records in referential order inside one transaction; Identity is
-last. The retained system tombstone contains only event metadata, row counts, schema
-version, and a completion digest. Deletion and restore behavior are tested in the first
-release journey and drilled again before beta.
+Deletion is an explicit destruction exception to immutable history. The current Data
+Portability workflow directly deletes or redacts scoped personal records in referential
+order inside one serializable transaction; Identity is last. Subject deletion retains a
+non-personal completion tombstone. Instance reset also retains the cleared singleton
+installation record and any earlier non-personal tombstones, then appends its own
+tombstone. Tombstones contain only event metadata, aggregate row counts, schema version,
+and a completion digest. Subject deletion and instance reset are tested; supported
+backup/restore procedures remain operator responsibility and an open pre-beta release
+gate.
 
 ## Privacy and telemetry
 
@@ -145,7 +158,9 @@ release journey and drilled again before beta.
 
 ## Supported baseline
 
-The first supported topology is one application instance and one PostgreSQL instance.
+The first supported core topology is one application instance and one PostgreSQL
+instance. An explicitly enabled local-language path may add the non-authoritative
+loopback inference process described above.
 Multi-instance cache coordination, HA databases, replicas, failover, and multi-region
 operation are not implicit requirements.
 

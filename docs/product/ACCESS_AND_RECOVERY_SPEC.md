@@ -19,8 +19,8 @@ Implementation status belongs in [MVP status](../MVP_STATUS.md); nothing here we
 A claimed instance greets every visitor with an email/password form and exactly one
 outcome on failure: "The email or password was not accepted." There is no path for:
 
-- a trainee who forgot their password (no reset mechanism exists at all — the only
-  recourse today is owner-side delete/recreate, which destroys training history);
+- a trainee who forgot their password (no reset or owner-administered
+  deletion/recreation path exists, so the account has no supported recovery path today);
 - an owner who forgot their password and does not know that `pnpm owner:recover`
   exists (the mechanism is complete but invisible to the product surface);
 - a person with no account (the page footnote implies self-signup is absent but
@@ -50,16 +50,19 @@ PRODUCT_SPEC:
 
 The nearest FOSS reference for locally-administered access is Pi-hole: a
 self-hosted service with a single local admin credential, application passwords,
-optional TOTP, and no cloud identity. This product keeps Pi-hole's virtues —
-local-only trust, no email dependency, no third-party identity — and goes further
-where Pi-hole stops:
+optional TOTP, and no cloud identity. The current implementation already keeps
+local-only trust, no email dependency, and no third-party identity. The
+administration model specified here goes further where Pi-hole stops:
 
 - **true multi-user**: separate owner and trainee accounts with per-account data
   isolation, not one shared admin secret;
-- **administered lifecycle**: the owner creates, resets, and removes accounts from
-  inside the product, with every step audited to an append-only log;
-- **ephemeral recovery secrets**: one-use, TTL-bound, HMAC-keyed codes instead of
-  static app passwords;
+- **administered lifecycle**: the owner can create trainee accounts today; this spec adds
+  credential reset inside the product, with every credential-lifecycle step audited to
+  an append-only log. Owner-directed member removal is a separate lifecycle decision,
+  not an implemented or implicit part of this recovery slice;
+- **ephemeral recovery secrets**: owner recovery already uses a one-use, TTL-bound,
+  HMAC-keyed code; this spec extends that pattern, with its additional abuse controls, to
+  trainee recovery instead of introducing static app passwords;
 - **host-anchored root of trust**: owner recovery deliberately requires shell
   access to the installation, mirroring bootstrap.
 
@@ -193,7 +196,7 @@ through account deletion.
 ### J8 — Owner credential recovery (host-mediated)
 
 1. Owner runs on the host:
-   `pnpm owner:recover issue --owner-email EMAIL --code-file PATH --ttl-minutes 15`
+   `pnpm owner:recover issue --owner-email EMAIL --code-file ABSOLUTE_PATH --ttl-minutes 15`
    (code written only to a **chmod 0600 owner-only file in an owner-owned directory**
    `[corrected]`).
 2. Owner opens **Sign in → "Can't sign in?" → "I'm the owner and have host access"**
@@ -301,7 +304,7 @@ to before entering anything — today the content-mode label is post-auth only
   lock/latency path for unknown accounts, or move throttling ahead of the existence
   check.
 - **H-transport**: satisfied by the existing origin-level config guard
-  (`config/server.ts` — non-loopback ⇒ HTTPS ⇒ `secureCookies`, cookies
+  (`src/platform/config/server.ts` — non-loopback ⇒ HTTPS ⇒ `secureCookies`, cookies
   `httpOnly`+`SameSite=lax`); `/reset` and `/recover` inherit it with no per-route
   work. Recovery pages carry secrets in **POST bodies only**, never URLs.
 - **H-secret**: codes ≥ 128-bit entropy (`randomBytes(32)`), shown once, digest-only

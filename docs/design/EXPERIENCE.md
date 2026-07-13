@@ -2,9 +2,11 @@
 
 Status: accepted direction; interaction details evolve through tested vertical slices
 
-The live engineering slice implements these flows with a visibly labeled, unreviewed
-development fixture. “Reviewed program” below remains the production target, not a
-description of the bundled fixture. See [MVP status](../MVP_STATUS.md).
+The live engineering slice implements the core path with a visibly labeled, unreviewed
+development fixture. This document distinguishes that current behavior from interaction
+targets that still depend on reviewed content or later product work. “Reviewed program”
+below remains the production target, not a description of the bundled fixture. See
+[MVP status](../MVP_STATUS.md).
 
 ## Design brief
 
@@ -19,20 +21,25 @@ a generic notes app.
 
 ## First vertical-slice information architecture
 
-Primary:
+Current primary navigation:
 
 - **Today** — start or resume, program context, compact workout preview
-- **Program** — phase/week, schedule, prescriptions, and deterministic rationale;
-  optional plain-language Explain remains deferred
+- **Program** — the A/B/C development-fixture schedule, exact prescriptions, release
+  status, and version/hash reproducibility record; phase/week presentation and optional
+  plain-language Explain remain release-target work
 - **History** — completed sessions, factual summaries, correction provenance, stored
-  decisions, and optional grounded explanations
+  decisions, and optional grounded explanations; revoked content and invalidated decisions
+  keep their authoritative codes visible while Explain is disabled
 
-Secondary:
+Current secondary navigation:
 
-- **Settings** — profile, units, account/instance, export, deletion, appearance
+- **Settings** — account facts, read-only training context, owner-created local users,
+  subject export/deletion, and owner-only instance reset. Profile/unit editing and
+  appearance controls are not built.
 
 No empty Community, Nutrition, Recovery, or Profile destination occupies navigation.
 
+The reviewed-content target adds phase/week context and reviewed rationale to Program.
 After the slice passes, Phase 3 expands History with exercise-specific views and adds
 **Progress** for defined PR, e1RM, volume, and adherence trends.
 
@@ -74,9 +81,15 @@ failure with sample advice or random calendar days.
 
 ### First use
 
+Current engineering slice:
+
 Owner bootstrap → sign in → units/timezone → goal/experience → equipment/schedule →
-baselines/limitations → review inputs → instantiate reviewed program → program overview
-→ Today
+baselines/limitations → review inputs → create the visibly unreviewed development program
+→ program overview → Today
+
+The release target replaces only that development-content step with selection and
+instantiation of a licensed, reviewed program release; it does not add an onboarding tour
+or an opaque generator.
 
 No carousel, body-composition demand, mandatory photo, long assessment, or feature tour
 blocks the first program.
@@ -89,14 +102,28 @@ Target: start/resume in at most two actions.
 
 ### Active workout
 
-1. Show exact saved state, elapsed time, and session/exercise progress.
-2. Show current exercise, prescription, guidance, and previous comparable work.
+Current engineering slice:
+
+1. Show the exact persisted session state, start time, optimistic revision, and unresolved
+   set count.
+2. Show each exercise's prescription, rationale code, and previous comparable work when
+   available.
 3. Present ordered sets with target and actual fields.
-4. Complete the defaulted set in one action.
-5. Start a contextual rest timer and preview what comes next.
-6. Allow add/edit/note/substitute without leaving the session context.
-7. Persist each material mutation and announce saved/conflict/error truthfully.
-8. Complete, explicitly handle missing work, then show summary.
+4. Default pending load/repetition inputs from the target and require explicit completion
+   or a reasoned skip.
+5. Show timestamp-derived rest context after a performed set; backgrounding does not pause
+   it.
+6. Accept an optional RPE and note with set completion, plus pause/resume, pain stop, and
+   confirmed abandonment without leaving the session.
+7. Send substitution requests through the authenticated boundary, but fail closed without
+   changing the prescription because no reviewed substitution release is installed.
+8. Persist each material mutation, announce saved/conflict/error truthfully, and complete
+   only after every set is performed or explicitly skipped.
+
+Release-target additions include reviewed authored technique/guidance, approved
+substitution, the separately planned audited completed-set correction entry, and any
+rest controls justified by gym-use evidence. Those target elements remain visible in the
+reference wireframe below but are not claims about the current UI.
 
 ### Post-slice progress (Phase 3)
 
@@ -105,7 +132,11 @@ history and recent PRs
 
 Weekly adherence is relative to prescribed sessions, not consecutive calendar days.
 
-## Active-workout wireframe
+## Active-workout target wireframe
+
+This wireframe preserves the release direction. “Why this?”, technique content, audited
+completed-set correction entry, and `+30s` rest controls are not implemented in the
+engineering slice.
 
 Mobile:
 
@@ -186,7 +217,8 @@ share the production persistence path.
 - 48px minimum workout controls
 - 16px minimum numeric-input text to avoid mobile zoom
 - appropriate numeric keyboard
-- one-handed placement for set completion and timer controls
+- one-handed placement for set completion; any future timer controls must follow the same
+  rule (the current timer is timestamp-derived display only)
 - safe-area-aware sticky bottom action
 - one document scroll root
 - no gesture-only or hover-only behavior
