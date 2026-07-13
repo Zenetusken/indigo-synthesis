@@ -284,9 +284,14 @@ path. `validatorVersion` participates in the key.
 Drop or mark stale when any of:
 
 - adjustment decision is invalidated (e.g. post-completion safety correction);
-- FactBundle hash would change (corrections to sets that rewrite effective facts feeding
-  a *new* decision—historical rows stay immutable; new decisions get new ids);
-- prompt version or model digest changes (lazy rebuild).
+- FactBundle hash changes; or
+- prompt, validator, or model-artifact identity changes.
+
+The cache retains at most one current row per decision. A successful publication under a
+new identity atomically replaces the stale variant instead of accumulating historical
+prose rows. Runtime identity is retained as generation provenance, but a restart of the
+same verified runtime/model contract does not invalidate already validated prose or force
+runtime preflight on a cache hit.
 
 Cached prose is **not** part of the immutable training ledger. Deleting it must not
 delete the adjustment decision.
@@ -294,11 +299,14 @@ delete the adjustment decision.
 ### 7.3 Concurrency and failure semantics
 
 - Cache read and final publication run under the same per-user PostgreSQL advisory lock
-  as `reportPain` and query authoritative completed-session/pain state while locked.
+  as training correction commands and query the authoritative decision-invalidation
+  ledger while locked.
 - Generation happens outside the lock. `putIfActive` is the publication linearization
   point and rechecks state after generation.
-- Post-completion pain commits feedback, hold, receipt, and audit first. Cache purge is
-  post-commit and best effort, so cache failure cannot roll back safety state.
+- Post-completion pain commits an append-only feedback correction, recursive
+  decision/revision invalidations, hold, receipt, and audit first. Performed-set
+  corrections use the same invalidation boundary. Cache purge is post-commit and best
+  effort, so cache failure cannot roll back authoritative state.
 - Cache relation/read/write failure degrades only after a fresh locked active-state
   check; inability to query authoritative state fails closed.
 - A bounded process-local singleflight coalesces identical misses in the supported
@@ -316,10 +324,6 @@ delete the adjustment decision.
 
 No Redis, queue product, or WebSocket is required. The implemented path is explicit lazy
 generation on History with bounded in-process miss coalescing.
-
-1. lazy on read, or  
-2. fire-and-forget in-process work that cannot fail the request, or  
-3. explicit “Generate explanation” control if latency is poor on host hardware.
 
 ## 9. Runtime topology
 

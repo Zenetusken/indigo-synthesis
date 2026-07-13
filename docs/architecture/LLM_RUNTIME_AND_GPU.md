@@ -1,6 +1,6 @@
 # LLM runtime and GPU coherence
 
-Status: operator runbook  
+Status: operator runbook
 Related: [LLM measurement protocol](LLM_MEASUREMENT_PROTOCOL.md),
 [model/runtime locks](../../llm/README.md)
 
@@ -90,6 +90,9 @@ pnpm llm:serve
 In a second shell:
 
 ```sh
+# Archive evidence must identify committed reviewed source.
+git status --short --untracked-files=all  # must print nothing
+
 export INDIGO_LLM_MODE=local
 export INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m
 export INDIGO_LLM_MODEL_SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
@@ -106,9 +109,20 @@ Supported local application config rejects alternate model-settings/weights dire
 and deadlines other than 3,000 ms. The live browser and multi-run archive commands also
 pin those values rather than inheriting a caller's diagnostic environment.
 
+The calibrated archive refuses staged, unstaged, or untracked source changes and
+rechecks the full HEAD commit plus root-tree object around every run. Each verified
+per-run JSON records both object IDs. A successful batch additionally writes an
+`archive-batch-*.json` manifest/summary that proves every run shares the same source,
+model, runtime attestation, and baseline identities. Raw logs or support files left by
+an aborted batch are diagnostic only; without the verified batch manifest they are not
+calibration evidence.
+
 For a one-shot post-reboot bootstrap, `pnpm llm:measure-gpu` checks raw GPU/artifact
-state first, builds if the binary lock is absent, stops only a matching prior listener,
-starts the pinned server, and only then runs full preflight and live measurement. It
+state first, builds if the binary lock is absent, stops only the twice-verified attested
+listener through an exact Linux pidfd, rechecks full model-load RAM after that process
+exits, starts the pinned server, and only then runs full preflight and live measurement.
+The per-UID lifecycle lock covers the whole replacement/measurement transition. Logs and
+measurement JSON use mode-0600 temporary files in the owned lock directory. The command
 does not run readiness preflight before the server exists and does not broadly `pkill`
 unrelated processes.
 
@@ -122,6 +136,7 @@ unrelated processes.
 | runtime | `runtimeEvidence.state=verified` |
 | endpoint | exact model alias from non-redirecting `/v1/models` |
 | composition | verified runtime identity matches the committed pack |
+| source | clean worktree; one full Git commit/root-tree identity across the batch |
 | offline | every baseline check passes at the current FactBundle-v2/prompt-v3 contract |
 | live | every eligible case available within the configured timeout |
 | browser | opt-in live E2E passes with deterministic codes still visible |

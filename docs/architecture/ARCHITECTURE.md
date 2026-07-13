@@ -200,7 +200,7 @@ The methodology engine never calls a model.
 
 The implemented slice includes a loopback adapter, versioned prompt/validator, pinned
 model/runtime provenance, on-demand control, provenance-keyed PostgreSQL cache, and
-linearized late-pain invalidation. It remains optional and disabled by default. See
+linearized correction-ledger invalidation. It remains optional and disabled by default. See
 [ADR 0006](adr/0006-optional-local-grounded-language.md) and the
 [explanation generation contract](EXPLANATION_GENERATION_CONTRACT.md).
 

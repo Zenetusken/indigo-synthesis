@@ -1,7 +1,7 @@
 # LLM layer measurement protocol
 
-Status: active  
-Baseline version: `LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`  
+Status: active
+Baseline version: `LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`
 Companion: [ADR 0006](adr/0006-optional-local-grounded-language.md), [explanation contract](EXPLANATION_GENERATION_CONTRACT.md)
 
 ## Principle
@@ -33,9 +33,10 @@ claim coaching quality or clinical validity.
 | H9 (product path, optional) | History Explain with local GPU yields grounded prose without hiding codes | `pnpm test:e2e:llm` fails or codes-first assertions fail |
 | H10 (product path, optional) | On-demand interactive latency stays within the current explicit budget | Live `latencyMs.p95` exceeds 3.5s, or History click-to-visible exceeds the same E2E budget |
 | H11 (live quality, optional) | Grounding failures remain fail-closed rather than being waved through as noise | Any validation failure is accepted, or the hardened archive rate falls below 1.0 |
-| H12 (integrity) | Post-completion pain invalidates explanation framing and makes cached prose unservable; purge is best-effort cleanup | Explain returns available increase prose or a stale row is reinserted after pain linearizes |
+| H12 (integrity) | Post-completion training corrections invalidate explanation framing and make cached prose unservable; purge is best-effort cleanup | Explain returns available prose or a stale row is reinserted after correction linearizes |
 | H13 (provenance) | Product inference uses the pinned weights, launcher, mapped DSO closure, build, alias, and live GPU PID | Full preflight cannot return a verified runtime identity |
-| H14 (concurrency) | Pain reporting and explanation cache publication are linearizable | A stale paraphrase is served or reinserted after the safety report linearizes |
+| H14 (concurrency) | Training correction and explanation-cache publication are linearizable | A stale paraphrase is served or reinserted after correction linearizes |
+| H15 (source provenance) | Every calibrated product-path run executes from one clean reviewed Git commit and root tree | The worktree is dirty, HEAD/tree changes during the batch, or any run lacks the batch source identity |
 
 ## Metrics (offline, required)
 
@@ -71,10 +72,12 @@ When `INDIGO_LLM_LIVE=1` and a loopback server is up:
 | `live.unreachable` | All failures are runtime-unreachable/timeout | Environment problem, not model quality |
 | `product.e2eOk` | `pnpm test:e2e:llm` exit success | Product-path pin (operator archive only) |
 | `product.e2eDurationMs` | Wall time of the Playwright suite | Informational; includes journey + Explain |
+| `archive.sourceCommit` / `sourceTree` | Full Git commit and root-tree object IDs from a clean worktree | Must equal the verified batch manifest and every other run |
 
 **Do not** treat a single live or e2e success as product readiness. The archive command
-requires at least three runs with the same model and runtime-attestation digests, live
-available rate 1.0, bounded p95, and green E2E on every run; any miss fails the archive.
+requires at least three runs from the same clean source commit/tree with the same model
+and runtime-attestation digests, live available rate 1.0, bounded p95, and green E2E on
+every run; any miss fails the archive.
 
 ## What is *not* measured yet
 
@@ -105,9 +108,16 @@ available rate 1.0, bounded p95, and green E2E on every run; any miss fails the 
 5. **Multi-run archive (required for calibration claims):**
    `RUNS=3 pnpm llm:archive-product-path`
 
-   — writes gitignored `tmp/llm-runs/product-path-*.json`, embeds the verified runtime
-   identity, forcibly pins the committed model registry and 3,000 ms product deadline,
-   and fails unless all three offline/live/E2E runs meet their hard gates
+   Run this only after committing the exact source under review: staged, unstaged, and
+   untracked status must all be empty. The command rechecks that clean HEAD commit and
+   root tree before and after every run. It writes verified per-run
+   `tmp/llm-runs/product-path-*.json` plus an `archive-batch-*.json` manifest/summary,
+   embeds source and runtime identity, forcibly pins the committed model registry and
+   3,000 ms product deadline, and fails unless all three offline/live/E2E runs meet
+   their hard gates and share every source/model/runtime/baseline identity. A failed
+   batch may retain raw logs, baseline/preflight evidence, or its internal `.list`, but
+   it does not publish a verified batch manifest or a verified JSON summary for the
+   failed run.
 6. Do not treat a single green e2e as shipping readiness; re-archive after pack/prompt changes
 
 ### Interpretation rules
@@ -126,5 +136,6 @@ available rate 1.0, bounded p95, and green E2E on every run; any miss fails the 
 5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
 6. ~~Product-path multi-run discipline + live latency metrics (H9/H10)~~ (`pnpm llm:archive-product-path`)
 7. ~~Explanation prose cache~~ (`future_load_explanation_cache`; validation-passing only; subject cascade)
-8. ~~Semantic invalidation~~ (post-completion pain → FactBundle `invalidated`, locked
-   active-state checks, and best-effort session-cache cleanup)
+8. ~~Semantic invalidation~~ (post-completion feedback/performed-set corrections →
+   FactBundle `invalidated`, locked active-state checks, and best-effort session-cache
+   cleanup)

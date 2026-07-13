@@ -196,13 +196,10 @@ test.describe('live GPU History explanations', () => {
     }
 
     await page.getByLabel('Optional factual context').fill('Pain noticed after cooldown.')
-    await page
-      .getByRole('button', { name: 'Record issue and require safety review' })
-      .click()
+    await page.getByRole('button', { name: 'Record safety report' }).click()
     await expect(
-      page.getByRole('heading', { name: 'Safety issue recorded' }),
+      page.getByRole('heading', { name: 'Post-completion safety correction' }),
     ).toBeVisible()
-    await expect(page.getByText('An active safety hold requires review.')).toBeVisible()
     await expect(explain).toBeDisabled()
     await expect(
       decisionItem.getByText(
@@ -211,7 +208,7 @@ test.describe('live GPU History explanations', () => {
     ).toHaveCount(0)
     await expect(
       decisionItem.getByText(
-        /Plain-language explanation unavailable after the late safety report/,
+        /Plain-language explanation unavailable because this decision is no longer active/,
       ),
     ).toBeVisible()
     await expect(reasonCodes.first()).toHaveText(ruleCodeBeforePain)
@@ -219,18 +216,32 @@ test.describe('live GPU History explanations', () => {
     const afterPainClient = await databaseClient()
     try {
       const state = await afterPainClient.query<{
-        pain_reported: boolean
+        original_pain_reported: boolean
+        corrected_pain_reported: boolean
+        invalidated_count: number
         cached_count: number
       }>(
-        `SELECT sf.pain_reported,
+        `SELECT sf.pain_reported AS original_pain_reported,
+          sfc.pain_reported AS corrected_pain_reported,
+          (SELECT count(*)::int FROM adjustment_decision_invalidation adi
+            JOIN adjustment_decision ad ON ad.id = adi.decision_id
+            WHERE ad.session_id = ws.id) AS invalidated_count,
           (SELECT count(*)::int FROM future_load_explanation_cache fec
             WHERE fec.session_id = ws.id) AS cached_count
         FROM workout_session ws
         JOIN session_feedback sf ON sf.session_id = ws.id
+        JOIN training_fact_correction tfc
+          ON tfc.session_id = ws.id AND tfc.correction_kind = 'session-feedback'
+        JOIN session_feedback_correction sfc ON sfc.correction_id = tfc.id
         WHERE ws.id = $1`,
         [sessionId],
       )
-      expect(state.rows[0]).toEqual({ pain_reported: true, cached_count: 0 })
+      expect(state.rows[0]).toEqual({
+        original_pain_reported: false,
+        corrected_pain_reported: true,
+        invalidated_count: await reasonCodes.count(),
+        cached_count: 0,
+      })
     } finally {
       await afterPainClient.end()
     }

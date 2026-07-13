@@ -44,9 +44,11 @@ and re-pinned rather than silently treated as equivalent.
 
 ## Operator sequence
 
-Host prerequisites include Node/pnpm, Python 3, the current Hugging Face `hf` CLI, CUDA
+Host prerequisites include Node/pnpm, Python >=3.10, the current Hugging Face `hf` CLI, CUDA
 build tools, `nvidia-smi`, `curl`, `lsof` (used to prove listener ownership safely), and
-`flock` (used to serialize destructive E2E and calibrated archive work).
+`flock` (used to serialize runtime transitions, destructive E2E, and calibrated archive
+work). Linux `pidfd_open`/`pidfd_send_signal` support is required for attested runtime
+replacement.
 
 ```sh
 pnpm llm:download-qwen35   # exact revision/file; verify digest and size before install
@@ -59,6 +61,9 @@ pnpm llm:preflight         # must report runtime: verified and ready=true
 
 pnpm llm:validate-baseline # required offline contract gate
 pnpm test:e2e:llm          # opt-in live browser path
+
+# Commit the reviewed source first; this must print nothing.
+git status --short --untracked-files=all
 RUNS=3 pnpm llm:archive-product-path
 ```
 
@@ -69,7 +74,10 @@ or selects the first matching file. Existing weights are re-verified before reus
 CPU or partial offload, a mismatched executable, mutable llama/ggml libraries, or an
 uncommitted model digest. It hashes the weights, launcher, and complete project-local
 DSO closure before atomically writing the runtime attestation, then `exec`s the server
-without changing the attested PID/start identity.
+without changing the attested PID/start identity. A per-UID lifecycle lock prevents
+overlapping supported starts until the new process passes full readiness handoff; a live
+but unverified process retains that lock. The final pre-exec gate requires the exact
+artifact size plus 4 GiB in `MemAvailable`.
 
 Preflight additionally verifies:
 
@@ -115,10 +123,13 @@ closed-output prompt v3, validator v3, the committed pack registry, accepted tem
 numeric and advice cases, invalidation, fake synthesis, and disabled composition.
 
 The live probe is useful only after full preflight succeeds. A calibrated product-path
-archive requires at least three runs with one model digest, one runtime-attestation
-digest, a 1.0 live available rate, p95 within the interactive budget tolerance, and a
-green browser journey on every run. The archive command fails instead of warning when
-those conditions are not met.
+archive requires a clean staged/unstaged/untracked worktree and at least three runs with
+one full Git commit/root-tree identity, one model digest, one runtime-attestation digest,
+a 1.0 live available rate, p95 within the interactive budget tolerance, and a green
+browser journey on every run. Verified per-run JSON records the source identity and a
+successful batch publishes an `archive-batch-*.json` manifest/summary. The archive
+command fails instead of warning when those conditions are not met; raw files from an
+aborted batch are not calibration evidence.
 
 ## Adding another model or runtime
 

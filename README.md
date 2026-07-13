@@ -45,7 +45,7 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
 - factual session history and a development-only, bounded future-load decision that
   creates a new revision rather than rewriting completed work;
 - on-demand History explanation through one digest-locked local Q4/CUDA runtime, with a
-  closed grounded-output validator, PostgreSQL cache, and late-pain invalidation;
+  closed grounded-output validator, PostgreSQL cache, and correction-ledger invalidation;
 - versioned subject export with provenance, category hashes, and explicit omissions;
 - previewed member account/data deletion and owner-only full-instance reset, each with
   reauthentication, exact row counts, and a non-personal tombstone; and
@@ -132,11 +132,11 @@ pnpm exec playwright install chromium
 cp .env.e2e.example .env.e2e.local
 ```
 
-The suite holds one host-wide non-blocking lock across reset and Playwright, so a second
-default/live/worktree run fails before it can terminate the first run's database
-connections or bind its ports. The optional `INDIGO_E2E_APPLICATION_PORT` and
-`INDIGO_E2E_SUPERVISOR_PORT` overrides are for explicitly isolated diagnostics; the
-committed defaults remain 3100/3101.
+The suite holds one per-UID, machine-local non-blocking lock across reset and Playwright,
+so a second default/live/worktree run by the same operating-system user fails before it
+can terminate the first run's database connections or bind its ports. The optional
+`INDIGO_E2E_APPLICATION_PORT` and `INDIGO_E2E_SUPERVISOR_PORT` overrides are for
+explicitly isolated diagnostics; the committed defaults remain 3100/3101.
 
 Review `.env.e2e.local` before running the suite. Give it a distinct test-only secret and
 keep its target on the same explicit loopback PostgreSQL host, port, and username as

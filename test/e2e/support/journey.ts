@@ -3,6 +3,7 @@ import { Client } from 'pg'
 import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import { e2eApplicationDataResetTableOrder } from './application-data-reset'
 
 /**
  * Shared J1–J4 helpers for Playwright journeys.
@@ -43,32 +44,11 @@ export async function clearApplicationData(): Promise<void> {
     // immutable decision/lineage rows require the authorized reset mode.
     await client.query('BEGIN')
     await client.query("SET LOCAL indigo.deletion_mode = 'instance-reset'")
-    await client.query('DELETE FROM installation_state')
-    await client.query('DELETE FROM future_load_explanation_cache')
-    await client.query('DELETE FROM training_command_receipt')
-    await client.query('DELETE FROM program_revision_lineage')
-    await client.query('DELETE FROM workout_session')
-    await client.query('DELETE FROM program')
-    await client.query('DELETE FROM adjustment_decision')
-    await client.query('DELETE FROM performed_set')
-    await client.query('DELETE FROM session_exercise')
-    await client.query('DELETE FROM session_feedback')
-    await client.query('DELETE FROM set_prescription')
-    await client.query('DELETE FROM exercise_prescription')
-    await client.query('DELETE FROM planned_workout')
-    await client.query('DELETE FROM program_revision')
-    await client.query('DELETE FROM safety_hold')
-    await client.query('DELETE FROM strength_baseline')
-    await client.query('DELETE FROM athlete_equipment')
-    await client.query('DELETE FROM athlete_training_day')
-    await client.query('DELETE FROM athlete_profile')
-    await client.query('DELETE FROM audit_event')
-    await client.query('DELETE FROM deletion_plan')
-    await client.query('DELETE FROM verification')
-    await client.query('DELETE FROM session')
-    await client.query('DELETE FROM account')
-    await client.query('DELETE FROM "user"')
-    await client.query('DELETE FROM deletion_tombstone')
+    for (const tableName of e2eApplicationDataResetTableOrder) {
+      // The names come exclusively from the checked-in reset manifest. Quote each
+      // identifier so reserved names such as "user" stay unambiguous.
+      await client.query(`DELETE FROM "${tableName}"`)
+    }
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)
@@ -166,12 +146,18 @@ export async function generateAndActivate(page: Page): Promise<void> {
 export async function completeAllSetsAtTarget(page: Page, rpe = '8'): Promise<void> {
   let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
   expect(remaining).toBeGreaterThan(0)
+  const draftStatus = page
+    .getByRole('status')
+    .filter({ hasText: 'Draft saved · revision' })
+  await expect(draftStatus).toBeVisible()
   while (remaining > 0) {
+    const previousDraftStatus = await draftStatus.textContent()
+    expect(previousDraftStatus).not.toBeNull()
     const button = page.getByRole('button', { name: 'Complete set' }).first()
     const form = button.locator('xpath=ancestor::form')
     await form.getByLabel('RPE (optional)').fill(rpe)
     await button.click()
-    await expect(page.getByText(/Draft saved in PostgreSQL/)).toBeVisible()
+    await expect(draftStatus).not.toHaveText(previousDraftStatus ?? '')
     await expect(page.getByRole('button', { name: 'Complete set' })).toHaveCount(
       remaining - 1,
     )

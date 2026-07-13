@@ -123,6 +123,11 @@ Gate:
 - no duplicate aggregate truth;
 - performance measurements justify any read model.
 
+Checkpoint: append-only correction of completed sets and completion feedback, recursive
+decision/revision invalidation, factual History correction provenance, and optional
+host-local explanations are implemented. Exercise-specific aggregates, e1RM/PR/volume/
+adherence definitions, and program comparison remain open, so Phase 3 is not closed.
+
 ## Phase 4 — Small private beta
 
 - real self-host installation by a second person;

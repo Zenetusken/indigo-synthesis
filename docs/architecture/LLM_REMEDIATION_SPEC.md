@@ -1,8 +1,8 @@
 # LLM grounded-explanation remediation specification
 
-Status: implementation gate  
-Date: 2026-07-13  
-Scope: `feat/llm-modular-inference-layer` after `ea13717`
+Status: implemented
+Date: 2026-07-13
+Scope: `feat/llm-modular-inference-layer`
 
 ## Purpose
 
@@ -44,8 +44,9 @@ training decisions.
 - Trainee-authored free text is not sent to the language model.
 - A cache hit is accepted only after the current validator passes it under the current
   validator version and FactBundle.
-- A completed-session pain report linearizes against cache reads/writes and generated
-  responses. An Explain operation that linearizes after pain cannot return active prose.
+- A completed-session training correction linearizes against cache reads/writes and
+  generated responses. An Explain operation that linearizes after invalidation cannot
+  return active prose.
 - Optional cache failure cannot roll back or reject an authoritative pain report.
 - Product generation requires a verified artifact digest, exact served-model identity,
   loopback-only transport without redirects, and supported-runtime evidence. Unverified
@@ -83,7 +84,8 @@ training decisions.
 ### Cache and invalidation
 
 - PostgreSQL cache reads and final writes acquire the same per-user advisory lock used by
-  `reportPain`, and re-read completed-session feedback while holding it.
+  correction commands, and re-read the authoritative decision-invalidation ledger while
+  holding it.
 - Generation happens outside the user lock. A final `putIfActive` transaction is the
   linearization point; it either stores under active state or returns invalidated.
 - Cache hits use `getIfActive`, validate the returned prose again, and purge rejected rows
@@ -94,7 +96,9 @@ training decisions.
 - Cache read/write/delete failures degrade to a miss or no-cache success when authoritative
   state can still be confirmed in a fresh transaction. State-check failure fails closed to
   codes-only UI.
-- `reportPain` commits feedback, hold, receipt, and audit before best-effort cache cleanup.
+- `reportPain` commits an append-only feedback correction, recursive decision/revision
+  invalidations, hold, receipt, and audit before best-effort cache cleanup. Performed-set
+  corrections use the same invalidation/cache boundary.
 
 ### Model and runtime identity
 
@@ -149,13 +153,13 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 | LATE SAFETY REPORT                                          |
 | Record pain or a safety issue from this completed session.  |
 | [Optional factual context_______________________________]   |
-| [Record issue and require safety review]                    |
+| [Record safety report]                                     |
 +-------------------------------------------------------------+
 ```
 
 - The action name and result copy remain consistent.
-- Existing reported-pain state replaces the form with a persistent warning and disables
-  explanation generation.
+- A successful report appends a correction, replaces the form with correction provenance,
+  and disables explanation generation for every invalidated decision.
 - The control is keyboard accessible, mobile-safe, and uses an explicit live error region.
 - Browser coverage completes a workout, generates/caches prose, submits late pain from
   History, and verifies invalidation copy plus absence of cached/active prose.

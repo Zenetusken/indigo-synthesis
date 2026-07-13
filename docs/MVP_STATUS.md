@@ -49,8 +49,8 @@ record. No software test can substitute for that approval.
 | J1 — Bootstrap and sign in | Host-issued one-use bootstrap capability, explicit database creation modes, atomic owner credential/installation claim, Better Auth sessions with credential-lifecycle serialization, owner-created local users, and host-local one-use recovery | `identity.integration.test.ts`, `owner-recovery.integration.test.ts`, and the browser journey | Bootstrap issuance and recovery are intentionally host-administrative rather than public reset flows |
 | J2 — Set up a trainee | Units, IANA timezone, goal, experience, three training days, session duration, equipment, starting loads, age/technique attestations, and limitation context | Browser journey plus unit conversion tests | Initial setup is immutable in the current UI; a reviewed profile-change/revision workflow is still future work |
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
-| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after abandonment; exact PostgreSQL resume | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens the abandoned session, and completed-session holds stay blocked pending H1 invalidation |
-| J5 — Complete and learn | Transactional completion, immutable completed sets/history/decisions, terminal feedback guards, a fail-closed post-completion pain-report path, and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, and completion-replay integration | H1's append-only feedback correction and recursive decision/revision invalidation remain Phase 3; the current hold cannot be resolved until that safety precedence exists |
+| J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after abandonment or durable completed-session invalidation; exact PostgreSQL resume | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session |
+| J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set and feedback corrections; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression; richer progress aggregates and comparison remain later Phase 3 work |
 | J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones | Main and cross-user browser journeys plus portability integration tests | Export is subject-scoped; database/media backup and restore remain operator responsibilities |
 
 The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
@@ -84,10 +84,10 @@ implemented behavior.
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
 | Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, a source guard against runtime outbound clients/remote assets, and browser request observation | Run and retain the complete browser proof in an environment whose outbound network is actually denied |
-| Database integrity | Fourteen Drizzle migration entries, canonical 0004 ledger provenance, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, terminal-history and published-prescription guards, audit immutability, terminal/monotonic feedback enforcement, immutable hold provenance, append-only hold-resolution and content-release revocation records, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
+| Database integrity | Sixteen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
-| Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with abandonment prerequisite and no medical-clearance implication, completed-source resolution blocked pending H1, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
+| Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with live-source abandonment or completed-source durable-invalidation prerequisite, no medical-clearance implication, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
 | Accessibility/mobile | Semantic server-rendered UI plus targeted Playwright proof at 390×844 for reflow, 200% text sizing, 48px controls, skip-link/focus visibility, keyboard form order and focus continuation, changing polite save status, distinct titles, reduced motion, and no horizontal overflow | Independent WCAG 2.2 AA review, manual screen-reader certification, and representative physical-device testing |
 | Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, and executable guards for domain purity, dependency direction, platform independence, runtime outbound clients/remote assets, and an acyclic module graph | Extend enforcement to schema/table ownership and resolve the cross-module gateway debt below |
 
@@ -102,9 +102,9 @@ pnpm test:e2e
 INDIGO_CONTENT_MODE=reviewed pnpm build
 ```
 
-At this snapshot, Biome, TypeScript, 262 unit/domain/architecture tests, 89 database
-integration tests, dedicated upgrade proofs, the 15-path Playwright suite including the
-supervised restart/replay journeys, PostgreSQL preflight/fresh migration across fourteen
+At this snapshot, Biome, TypeScript, 424 unit/domain/architecture tests, 105 database
+integration tests, dedicated upgrade proofs, the full default Playwright suite including
+the supervised restart/replay journeys, PostgreSQL preflight/fresh migration across sixteen
 ledger entries and 28 required integrity triggers, and the production build are green.
 The Playwright suite runs against a freshly recreated PostgreSQL database with
 application APIs unmocked.
@@ -152,7 +152,7 @@ dry-run: `pnpm llm:dry-run-synthesize`. Product process still defaults LLM off.
 structured grounded generation as the only accepted product path for optional local
 language models.
 
-**Implemented (platform only, default disabled):**
+**Implemented (optional product layer, default disabled):**
 
 - model-agnostic `src/platform/llm` ports, registry, validation gate, and composition;
 - one supported, exact-artifact model pack under `llm/models/*/settings.json`
@@ -174,15 +174,14 @@ language models.
     `readyForLocalInference=true`.
   - current contract is FactBundle v2 plus closed-output prompt/validator v3 and passes
     **36/36**.
-  - the hardened v3 archive passed three same-digest/same-attestation runs: live
-    availableRate **1.0 / 1.0 / 1.0**, p95 **992 / 1020 / 1029 ms**, and live History
-    E2E green in **14.124 / 16.057 / 13.647 s**. The archive fails on drift rather than
-    recording a warning.
-  - **Explanation invalidation:** completed sessions with post-completion
-    `session_feedback.painReported=true` mark FactBundles `invalidated` with reason
-    `post-completion-pain-report` (ledger rows immutable). Explain returns
-    `decision-invalidated`; authoritative state commits first, then cache cleanup runs
-    post-commit and best-effort. Locked reads/publication make any residual row inert.
+  - historical v3 host runs reached live availableRate **1.0 / 1.0 / 1.0**, p95
+    **992 / 1020 / 1029 ms**, and green live History E2E. Current calibration claims
+    require a fresh clean-commit/tree batch manifest; prior raw runs are diagnostic only.
+  - **Explanation invalidation:** append-only post-completion safety or performed-set
+    corrections create authoritative decision/revision invalidations without changing the
+    original facts. Explain returns `decision-invalidated`; correction/invalidation commit
+    first, then cache cleanup runs post-commit and best-effort. Locked reads/publication
+    make any residual row inert.
 
 **History product path (implemented, default off):**
 
@@ -192,13 +191,15 @@ language models.
 - operator multi-run archive: `pnpm llm:archive-product-path` (writes `tmp/llm-runs/`).
 
 **Prose cache (implemented):** PostgreSQL `future_load_explanation_cache` stores only
-validation-passing available prose, keyed by contract `explanationCacheKey`. Cache hits
-skip model preflight/synthesize; History UI labels them `cached`. Cascades with user,
-session, and decision deletion. Not part of the immutable training ledger.
+validation-passing available prose, keyed by contract `explanationCacheKey`, with at most
+one current row per decision. Cache hits skip model preflight/synthesize; History UI
+labels them `cached`. Subject export includes full generation/runtime provenance, and
+subject/instance deletion count and remove the rows. Not part of the immutable training
+ledger.
 
-**Still open:** Program-page Explain, non-pain invalidation sources (if any), any
-methodology authority change. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
-**coaching** remains deferred. CI does not require GGUF weights.
+**Intentional boundary after this arc:** Program-page Explain and any methodology
+authority change remain separate product work. `INDIGO_LLM_MODE` defaults to `disabled`.
+LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 
 ## Production-release blockers
 
