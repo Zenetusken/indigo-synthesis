@@ -28,6 +28,7 @@ pnpm llm:download-qwen35    # Q4_K_M → llm/weights/
 pnpm llm:serve              # LM Studio (lms) or llama-server on loopback
 pnpm llm:load               # load a model into the server
 pnpm llm:validate-baseline  # offline contract gate
+pnpm test:e2e:llm           # opt-in browser path (GPU + serve required)
 ```
 
 Default OpenAI-compatible endpoint for packs: **`http://127.0.0.1:1234/v1`** (LM Studio).

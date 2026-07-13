@@ -23,6 +23,7 @@
     "test:integration": "NODE_ENV=test INDIGO_CONTENT_MODE=development node --env-file-if-exists=.env.local ./node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
     "test:e2e:prepare": "NODE_ENV=test node --env-file-if-exists=.env.local --env-file-if-exists=.env.e2e.local --import tsx scripts/db/reset-e2e.ts",
     "test:e2e": "pnpm test:e2e:prepare && node --env-file-if-exists=.env.local --env-file-if-exists=.env.e2e.local ./node_modules/@playwright/test/cli.js test",
+    "test:e2e:llm": "pnpm test:e2e:prepare && node --env-file-if-exists=.env.local --env-file-if-exists=.env.e2e.local ./node_modules/@playwright/test/cli.js test -c playwright.llm.config.ts",
     "owner:bootstrap": "node --env-file-if-exists=.env.local --import tsx scripts/identity/bootstrap-owner.ts",
     "owner:recover": "node --env-file-if-exists=.env.local --import tsx scripts/identity/recover-owner.ts",
     "db:generate": "drizzle-kit generate",

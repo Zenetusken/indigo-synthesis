@@ -107,7 +107,15 @@ pnpm llm:preflight      # requireGpu=true; gpu.state must be ready
 pnpm llm:build-cuda
 pnpm llm:serve          # fails closed without healthy nvidia-smi
 INDIGO_LLM_LIVE=1 pnpm llm:validate-baseline --json
+
+# Browser product path (History Explain with MODE=local + GPU):
+pnpm test:e2e:llm
 ```
+
+`pnpm test:e2e` keeps `INDIGO_LLM_MODE=disabled` and never requires a GPU.  
+`pnpm test:e2e:llm` is operator-only: it starts the Next e2e supervisor with
+`INDIGO_LLM_MODE=local`, `INDIGO_LLM_REQUIRE_GPU=true`, and the loopback endpoint,
+then asserts grounded History prose (or honest soft failure) after a completed workout.
 
 ## Coherence checklist
 

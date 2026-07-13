@@ -21,6 +21,8 @@ if (!databaseUrl || !authSecret) {
 export default defineConfig({
   testDir: './test/e2e',
   testMatch: '**/*.spec.ts',
+  // Live GPU/LLM suite is opt-in via playwright.llm.config.ts (`pnpm test:e2e:llm`).
+  testIgnore: ['**/llm-live.spec.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -50,6 +52,8 @@ export default defineConfig({
       INDIGO_NEXT_DIST_DIR: e2eNextDistDir,
       INDIGO_CONTENT_MODE: 'development',
       NEXT_TELEMETRY_DISABLED: '1',
+      // Default product path: LLM stays off so CI/default e2e never needs a GPU.
+      INDIGO_LLM_MODE: process.env.INDIGO_LLM_MODE ?? 'disabled',
     },
   },
 })

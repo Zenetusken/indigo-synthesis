@@ -45,8 +45,10 @@ export function createExplanationGenerationPort(
       }
 
       const settings = options.modelSettings
+      // Per-request budget wins (interactive History may pass a higher timeout than
+      // pack defaults used when composing the generator).
       const timeoutMs =
-        options.timeoutMs ?? request.timeoutMs ?? settings.limits.timeoutMs
+        request.timeoutMs ?? options.timeoutMs ?? settings.limits.timeoutMs
       const messages = buildFutureLoadMessages(bundle)
       const hash = factBundleHash(bundle)
 

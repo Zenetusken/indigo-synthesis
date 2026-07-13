@@ -1,137 +1,28 @@
 import { expect, type Page, test } from '@playwright/test'
-import { Client } from 'pg'
 import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
-import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
+import {
+  bindE2eProcessEnv,
+  bootstrapAndSignIn,
+  clearApplicationData,
+  completeSetup,
+  databaseClient,
+  generateAndActivate,
+  e2eOwner as owner,
+  todayIso,
+} from './support/journey'
 import {
   readE2eSupervisorState,
   restartE2eApplication,
 } from './support/supervisor-client'
 
 // Server-side modules read DATABASE_URL and BETTER_AUTH_SECRET; the E2E harness
-// exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET. Point
-// the test process at the same database and secret before any server-side import
-// resolves its configuration.
-process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
-process.env.BETTER_AUTH_SECRET = process.env.E2E_BETTER_AUTH_SECRET
-resetServerConfigForTests()
-
-const owner = {
-  name: 'E2E Owner',
-  email: 'owner@example.test',
-  password: 'correct-horse-battery-staple',
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-async function databaseClient(): Promise<Client> {
-  const connectionString = process.env.E2E_DATABASE_URL
-  if (!connectionString) throw new Error('E2E_DATABASE_URL is required.')
-  const client = new Client({ connectionString })
-  await client.connect()
-  return client
-}
-
-async function clearApplicationData(): Promise<void> {
-  const client = await databaseClient()
-  try {
-    await client.query(
-      'TRUNCATE TABLE deletion_tombstone, installation_state, "user" CASCADE',
-    )
-  } finally {
-    await client.end()
-  }
-}
-
-async function bootstrapAndSignIn(page: Page): Promise<void> {
-  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
-  await closeDb()
-
-  await page.goto('/')
-  await expect(
-    page.getByRole('heading', { name: 'Initialize this instance.' }),
-  ).toBeVisible()
-  await page.getByLabel('Host-issued bootstrap code').fill(issued.code)
-  await page.getByLabel('Name').fill(owner.name)
-  await page.getByLabel('Local sign-in email').fill(owner.email)
-  await page.locator('input[name="password"]').fill(owner.password)
-  await page.getByLabel('Confirm password').fill(owner.password)
-  await page.getByRole('button', { name: 'Create owner account' }).click()
-
-  await expect(page).toHaveURL(/\/sign-in\?created=1/)
-  await page.getByLabel('Email').fill(owner.email)
-  await page.getByLabel('Password').fill(owner.password)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page).toHaveURL(/\/setup$/)
-}
-
-async function completeSetup(
-  page: Page,
-  restriction: 'none' | 'present' | 'uncertain' = 'none',
-  units: 'metric' | 'imperial' = 'metric',
-): Promise<void> {
-  await page.getByLabel('Display units').selectOption(units)
-  await page.getByLabel('IANA timezone').fill('UTC')
-  await page.getByLabel('I confirm that I am at least 18 years old.').check()
-  await page
-    .getByLabel(
-      'I confirm that I already know how to perform the listed exercises safely.',
-    )
-    .check()
-
-  const weekdayInputs = page.locator('input[name="weekdays"]')
-  for (let index = 0; index < (await weekdayInputs.count()); index += 1) {
-    const input = weekdayInputs.nth(index)
-    if (await input.isChecked()) await input.uncheck()
-  }
-  const currentDay = new Date().getUTCDay()
-  const chosenDays = [currentDay, (currentDay + 2) % 7, (currentDay + 4) % 7]
-  for (const day of chosenDays) {
-    await page.locator(`input[name="weekdays"][value="${day}"]`).check()
-  }
-
-  await page
-    .getByLabel(
-      restriction === 'none'
-        ? 'No current restriction or uncertainty'
-        : restriction === 'present'
-          ? 'Yes, I have a current restriction'
-          : 'I am uncertain',
-    )
-    .check()
-  if (restriction !== 'none') {
-    await page
-      .getByLabel('Trainee-reported context (required for “yes” or “uncertain”)')
-      .fill('User-reported test restriction')
-  }
-
-  const startingLoads = page.locator('input[name^="load-"]')
-  for (let index = 0; index < (await startingLoads.count()); index += 1) {
-    await startingLoads.nth(index).fill('60')
-  }
-
-  await page.getByRole('button', { name: 'Save setup and review program' }).click()
-  await expect(page).toHaveURL(/\/program$/)
-}
-
-async function generateAndActivate(page: Page): Promise<void> {
-  await page.getByLabel('Program start date').fill(todayIso())
-  await page.getByRole('button', { name: 'Create development program' }).click()
-  await expect(
-    page.getByRole('heading', { name: 'Two-cycle A/B/C fixture' }),
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'Activate development program' }).click()
-  await expect(page).toHaveURL(/\/today$/)
-  await expect(
-    page.getByRole('heading', { name: /Session [ABC] is scheduled/ }),
-  ).toBeVisible()
-}
+// exposes the real target as E2E_DATABASE_URL and E2E_BETTER_AUTH_SECRET.
+bindE2eProcessEnv()
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => {
@@ -160,7 +51,9 @@ async function expectFutureLoadHistoryCodes(page: Page): Promise<void> {
     ),
   ).toBeVisible()
   // At least one stored decision with reason code + rule version label.
-  const reasonCodes = page.locator('code').filter({ hasText: /development\.adjustment\./ })
+  const reasonCodes = page
+    .locator('code')
+    .filter({ hasText: /development\.adjustment\./ })
   await expect(reasonCodes.first()).toBeVisible()
   await expect(reasonCodes.first()).toContainText('rule')
   await expect(
@@ -176,11 +69,20 @@ async function expectExplainDegradesWhenLlmDisabled(page: Page): Promise<void> {
   const explain = page.getByRole('button', { name: 'Explain in plain language' }).first()
   await explain.click()
   await expect(
-    page.getByText('Plain-language explanations are off on this instance', { exact: false }),
+    page.getByText('Plain-language explanations are off on this instance', {
+      exact: false,
+    }),
   ).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('The rule codes above still apply', { exact: false })).toBeVisible()
+  await expect(
+    page.getByText('The rule codes above still apply', { exact: false }),
+  ).toBeVisible()
   // Codes remain authoritative after the soft failure.
-  await expect(page.locator('code').filter({ hasText: /development\.adjustment\./ }).first()).toBeVisible()
+  await expect(
+    page
+      .locator('code')
+      .filter({ hasText: /development\.adjustment\./ })
+      .first(),
+  ).toBeVisible()
   await expect(page.getByText('Inferred paraphrase of the stored rule')).toHaveCount(0)
 }
 

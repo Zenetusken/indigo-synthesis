@@ -85,7 +85,9 @@ runs with the same `modelContentDigest` before considering a UI enablement exper
 1. Install weights + start loopback server (`llm/README.md`)
 2. `INDIGO_LLM_LIVE=1 INDIGO_LLM_ENDPOINT=… INDIGO_LLM_MODEL_ID=… pnpm llm:validate-baseline --json > /tmp/llm-live.json`
 3. Record `modelContentDigest`, baseline version, available rate, failure reasons
-4. Do not enable product UI solely from one run
+4. Product browser path (after offline + live baseline look healthy): `pnpm test:e2e:llm`  
+   — real J1–J6 completion → History → Explain with GPU local mode; codes stay authoritative
+5. Do not treat a single green e2e as shipping readiness; re-run after pack/prompt changes
 
 ### Interpretation rules
 
@@ -100,5 +102,5 @@ runs with the same `modelContentDigest` before considering a UI enablement exper
 2. ~~Builder from persisted decisions + metrics emission~~ (done)
 3. ~~Measured live runs on operator hardware~~ (CPU then GPU availableRate=1.0 recorded)
 4. ~~Application FactBundle wiring from completed sessions~~ (`getFutureLoadFactBundlesForSession`)
-5. History read-path experiment (codes always; prose only if measured local stack healthy)
+5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
 6. Cache only after prose is product-visible and invalidation rules are defined

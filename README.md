@@ -108,6 +108,16 @@ pnpm test:e2e
 INDIGO_CONTENT_MODE=reviewed pnpm build
 ```
 
+Optional operator-only suite for the local GPU language layer (not part of the normal
+gate; requires a healthy NVIDIA GPU and a loopback model server — see
+`docs/architecture/LLM_RUNTIME_AND_GPU.md`):
+
+```sh
+pnpm llm:preflight
+pnpm llm:serve   # separate terminal, CUDA offload
+pnpm test:e2e:llm
+```
+
 `pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The
 database-backed suites are intentionally separate because they require PostgreSQL.
 

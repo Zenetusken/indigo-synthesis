@@ -49,4 +49,23 @@ describe('clean-clone operator contract', () => {
       'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
     )
   })
+
+  it('keeps live GPU LLM Playwright opt-in and separate from default e2e', () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    const defaultE2e = manifest.scripts?.['test:e2e'] ?? ''
+    const llmE2e = manifest.scripts?.['test:e2e:llm'] ?? ''
+
+    expect(defaultE2e).toContain('playwright')
+    expect(defaultE2e).not.toContain('playwright.llm.config')
+    expect(llmE2e).toContain('playwright.llm.config.ts')
+
+    const playwrightConfig = readFileSync(
+      resolve(projectRoot, 'playwright.config.ts'),
+      'utf8',
+    )
+    expect(playwrightConfig).toContain('llm-live.spec.ts')
+    expect(playwrightConfig).toMatch(/testIgnore/)
+  })
 })
