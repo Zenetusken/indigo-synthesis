@@ -306,6 +306,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await page.getByLabel('Name').fill('Second Trainee')
   await page.getByLabel('Local sign-in email').fill('second@example.test')
   await page.getByLabel('Initial password').fill('second-user-password')
+  await page.getByLabel('Current owner password').fill(owner.password)
   await page.getByRole('button', { name: 'Create local user' }).click()
   await expect(page.getByText('Local user second@example.test created.')).toBeVisible()
 
@@ -359,6 +360,7 @@ test('owner deletes only trainee data and keeps installation login continuity', 
     .getByLabel('Local sign-in email')
     .fill('retained-browser-member@example.test')
   await page.getByLabel('Initial password').fill('retained-browser-member-password')
+  await page.getByLabel('Current owner password').fill(owner.password)
   await page.getByRole('button', { name: 'Create local user' }).click()
   await expect(
     page.getByText('Local user retained-browser-member@example.test created.'),
@@ -815,6 +817,7 @@ test('a second local user cannot read the owner workout or export', async ({ pag
   await page.getByLabel('Name').fill('Isolated Member')
   await page.getByLabel('Local sign-in email').fill('isolated@example.test')
   await page.getByLabel('Initial password').fill('isolated-user-password')
+  await page.getByLabel('Current owner password').fill(owner.password)
   await page.getByRole('button', { name: 'Create local user' }).click()
   await expect(page.getByText('Local user isolated@example.test created.')).toBeVisible()
   await page.getByRole('button', { name: 'Sign out' }).click()

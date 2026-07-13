@@ -43,6 +43,13 @@ export class LocalUserEmailConflictError extends Error {
   }
 }
 
+export class LocalUserCredentialError extends Error {
+  constructor(readonly code: string) {
+    super('The owner credential was not accepted for local-user creation.')
+    this.name = 'LocalUserCredentialError'
+  }
+}
+
 export async function createLocalUser(
   actor: AuthenticatedActor,
   input: CreateLocalUserInput,

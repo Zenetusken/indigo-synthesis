@@ -63,14 +63,16 @@
   min-width: 0;
 }
 
-.form label {
+.form label,
+.resetForm label {
   display: grid;
   font-weight: 700;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.form input {
+.form input,
+.resetForm input {
   background: var(--paper-raised);
   border: 1px solid var(--steel);
   border-radius: var(--radius-sm);
@@ -134,6 +136,52 @@
   grid-template-columns: 1fr 1fr;
   min-width: 0;
   padding: var(--space-2) 0;
+}
+
+.userList li > div:first-child {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.userList small {
+  color: var(--steel);
+}
+
+.resetControl summary {
+  color: var(--indigo-deep);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 3rem;
+  padding-block: 0.75rem;
+}
+
+.resetForm {
+  display: grid;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+}
+
+.resetWarning {
+  background: var(--warning-soft);
+  border-inline-start: var(--accent-edge) solid var(--warning);
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.resetCode {
+  background: var(--verified-soft);
+  border-inline-start: var(--accent-edge) solid var(--verified);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.resetCode code {
+  background: var(--rack-ink);
+  color: var(--paper-raised);
+  font-family: var(--font-data);
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
 }
 
 .userList li > * {

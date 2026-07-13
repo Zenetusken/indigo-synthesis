@@ -39,6 +39,7 @@ import {
   exercisePrescriptions,
   futureLoadExplanationCache,
   installationState,
+  memberResetStates,
   performedSetCorrections,
   performedSets,
   plannedWorkouts,
@@ -56,6 +57,7 @@ import {
   trainingFactCorrections,
   user,
   verification,
+  webRecoveryRateLimitBuckets,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -1291,6 +1293,23 @@ describe('subject export and exact instance reset', () => {
     })
     await generateDraftProgram(memberActor.userId, '2026-07-11')
     const memberResolvedHold = await seedResolvedHoldForSubject(memberActor.userId)
+    const memberResetVerificationId = newUuidV7()
+    const memberResetIssuedAt = new Date('2026-07-13T12:00:00.000Z')
+    await getDb()
+      .insert(verification)
+      .values({
+        id: memberResetVerificationId,
+        identifier: `indigo:member-reset:${memberActor.userId}`,
+        value: 'member-reset-v1:fixture-digest',
+        expiresAt: new Date('2026-07-13T12:15:00.000Z'),
+      })
+    await getDb().insert(memberResetStates).values({
+      targetUserId: memberActor.userId,
+      activeVerificationId: memberResetVerificationId,
+      lastIssuedAt: memberResetIssuedAt,
+      createdAt: memberResetIssuedAt,
+      updatedAt: memberResetIssuedAt,
+    })
     const foreignAuditId = newUuidV7()
     await getDb().insert(auditEvents).values({
       id: foreignAuditId,
@@ -1306,6 +1325,8 @@ describe('subject export and exact instance reset', () => {
     expect(plan.counts).toMatchObject({
       users: 1,
       authAccounts: 1,
+      authVerifications: 1,
+      memberResetStates: 1,
       athleteProfiles: 1,
       programs: 1,
       programRevisions: 1,
@@ -1353,6 +1374,14 @@ describe('subject export and exact instance reset', () => {
       .select()
       .from(workoutSessions)
       .where(eq(workoutSessions.id, memberResolvedHold.sessionId))
+    const [deletedMemberResetState] = await getDb()
+      .select()
+      .from(memberResetStates)
+      .where(eq(memberResetStates.targetUserId, memberActor.userId))
+    const [deletedMemberVerification] = await getDb()
+      .select()
+      .from(verification)
+      .where(eq(verification.id, memberResetVerificationId))
     const [tombstone] = await getDb()
       .select()
       .from(deletionTombstones)
@@ -1369,6 +1398,8 @@ describe('subject export and exact instance reset', () => {
     expect(deletedMemberHold).toBeUndefined()
     expect(deletedMemberResolution).toBeUndefined()
     expect(deletedMemberWorkout).toBeUndefined()
+    expect(deletedMemberResetState).toBeUndefined()
+    expect(deletedMemberVerification).toBeUndefined()
     expect(tombstone).toMatchObject({
       actorClass: 'trainee',
       scope: 'trainee-data',
@@ -1391,15 +1422,43 @@ describe('subject export and exact instance reset', () => {
       contentVersion: '0.0.1-development',
       reason: 'Reset coverage requires a live revocation.',
     })
+    const [ownerRecoveryVerification] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.identifier, `indigo:owner-recovery:${actor.userId}`))
+    if (!ownerRecoveryVerification) {
+      throw new Error('Instance-reset fixture has no owner-recovery verification.')
+    }
+    const persistenceFixtureAt = new Date('2026-07-13T12:00:00.000Z')
+    await getDb().insert(memberResetStates).values({
+      targetUserId: actor.userId,
+      activeVerificationId: ownerRecoveryVerification.id,
+      lastIssuedAt: persistenceFixtureAt,
+      createdAt: persistenceFixtureAt,
+      updatedAt: persistenceFixtureAt,
+    })
+    await getDb()
+      .insert(webRecoveryRateLimitBuckets)
+      .values({
+        scope: 'owner-recovery:address',
+        bucketKey: 'a'.repeat(64),
+        windowStartedAt: persistenceFixtureAt,
+        attemptCount: 1,
+        lastAttemptAt: persistenceFixtureAt,
+        createdAt: persistenceFixtureAt,
+        updatedAt: persistenceFixtureAt,
+      })
 
     const stalePlan = await createInstanceResetPlan(actor)
-    expect(Object.keys(stalePlan.counts)).toHaveLength(33)
+    expect(Object.keys(stalePlan.counts)).toHaveLength(35)
     expect(stalePlan.counts).toMatchObject({
       installationStates: 1,
       users: 1,
       authAccounts: 1,
       authVerifications: 1,
       destructiveReauthenticationStates: 0,
+      memberResetStates: 1,
+      webRecoveryRateLimitBuckets: 1,
       athleteProfiles: 1,
       athleteTrainingDays: 1,
       athleteEquipment: 1,
@@ -1509,6 +1568,8 @@ describe('subject export and exact instance reset', () => {
         (SELECT count(*) FROM content_release_revocation) +
         (SELECT count(*) FROM future_load_explanation_cache) +
         (SELECT count(*) FROM destructive_reauthentication_state) +
+        (SELECT count(*) FROM member_reset_state) +
+        (SELECT count(*) FROM web_recovery_rate_limit_bucket) +
         (SELECT count(*) FROM audit_event) +
         (SELECT count(*) FROM deletion_plan)
       )::int AS "liveRows"

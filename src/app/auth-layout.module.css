@@ -29,6 +29,21 @@
   text-transform: uppercase;
 }
 
+.wordmarkText strong,
+.wordmarkText small {
+  display: block;
+}
+
+.wordmarkText small {
+  color: var(--steel);
+  font-family: var(--font-data);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  margin-top: var(--space-1);
+  text-transform: uppercase;
+}
+
 .heading p,
 .footnote {
   color: var(--steel);
@@ -51,6 +66,54 @@
   background: var(--verified-soft);
   border-inline-start: var(--accent-edge) solid var(--verified);
   padding: var(--space-4);
+}
+
+.recoveryDisclosure {
+  margin-block-start: calc(-1 * var(--space-2));
+}
+
+.recoveryOptions {
+  display: grid;
+}
+
+.recoveryOption {
+  min-width: 0;
+}
+
+.recoveryOption + .recoveryOption {
+  border-block-start: 1px solid var(--hairline);
+  margin-block-start: var(--space-5);
+  padding-block-start: var(--space-5);
+}
+
+.recoveryOption h2 {
+  font-size: var(--text-lg);
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.recoveryOption p {
+  margin: var(--space-2) 0;
+}
+
+.recoveryLink {
+  color: var(--indigo-deep);
+  display: inline-block;
+  font-weight: 700;
+  margin-block-start: var(--space-1);
+}
+
+.recoveryCommand {
+  background: var(--rack-ink);
+  border-inline-start: var(--accent-edge) solid var(--plate-yellow);
+  color: var(--paper-raised);
+  display: block;
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  margin: var(--space-3) 0;
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  white-space: normal;
 }
 
 .footnote {

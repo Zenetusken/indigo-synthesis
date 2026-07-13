@@ -231,6 +231,69 @@ describe('architecture boundaries', () => {
     )
   })
 
+  it('keeps credential recovery session, route, and ingress boundaries fail-closed', () => {
+    const sessionReaders = filesMatching(sourceRoot, /\.tsx?$/)
+      .filter((path) => !/\.test\.tsx?$/.test(path))
+      .filter((path) => readFileSync(path, 'utf8').includes('.api.getSession('))
+      .map(projectPath)
+    expect(sessionReaders).toEqual(['src/modules/identity/server/actor.ts'])
+
+    const actor = readFileSync(
+      resolve(sourceRoot, 'modules/identity/server/actor.ts'),
+      'utf8',
+    )
+    expect(actor).toContain('disableCookieCache: true')
+
+    const auth = readFileSync(
+      resolve(sourceRoot, 'modules/identity/infrastructure/auth.ts'),
+      'utf8',
+    )
+    expect(auth).toContain('disableSignUp: true')
+    expect(auth).toContain("enabled: config.nodeEnv === 'production'")
+    expect(auth).toMatch(/customRules:\s*\{\s*'\/sign-in\/email':\s*false\s*\}/)
+    expect(auth).not.toMatch(/\b(?:bearer|refreshToken|jwt)\b/i)
+    expect(auth).toMatch(/plugins:\s*\[nextCookies\(\)\]/)
+
+    const publicCredentialRoutes = filesMatching(resolve(sourceRoot, 'app'), /route\.ts$/)
+      .map(projectPath)
+      .filter((path) => /sign.?up|role/i.test(path))
+    expect(publicCredentialRoutes).toEqual([])
+
+    const authHandler = readFileSync(
+      resolve(sourceRoot, 'modules/identity/server/auth-handler.ts'),
+      'utf8',
+    )
+    const serverConfig = readFileSync(
+      resolve(sourceRoot, 'platform/config/server.ts'),
+      'utf8',
+    )
+    expect(authHandler).toContain('allowDirectLoopback: !config.secureCookies')
+    for (const request of ['GET /get-session', 'POST /sign-in/email', 'POST /sign-out']) {
+      expect(authHandler).toContain(`'${request}'`)
+    }
+    expect(authHandler).toContain('redactBrowserSessionToken')
+    for (const path of [
+      '/change-email',
+      '/change-password',
+      '/delete-user',
+      '/get-access-token',
+      '/list-sessions',
+      '/request-password-reset',
+      '/reset-password',
+      '/revoke-other-sessions',
+      '/revoke-session',
+      '/revoke-sessions',
+      '/set-password',
+      '/sign-up/email',
+      '/update-user',
+    ]) {
+      expect(auth).toContain(`'${path}'`)
+    }
+    expect(serverConfig).toContain(
+      'Plain HTTP is supported only for a loopback application origin.',
+    )
+  })
+
   it('keeps domain policies independent of frameworks and infrastructure', () => {
     const forbiddenDependencies = [
       'next',

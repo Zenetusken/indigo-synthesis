@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { inputLoadToGrams } from '@/modules/athletes/domain/units'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireActorForWorkout } from '@/modules/identity/server/actor'
 import {
   abandonWorkout,
   completeSet,
@@ -43,8 +43,8 @@ function captureFormValues(formData: FormData, names: string[]): Record<string, 
 export async function completeSetAction(
   formData: FormData,
 ): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
 
   try {
     const profile = await getAthleteProfile(actor.userId)
@@ -81,8 +81,8 @@ export async function completeSetAction(
 }
 
 export async function skipSetAction(formData: FormData): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await skipSet({
       userId: actor.userId,
@@ -105,8 +105,8 @@ export async function skipSetAction(formData: FormData): Promise<WorkoutActionRe
 export async function proposeExerciseSubstitutionAction(
   formData: FormData,
 ): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await proposeExerciseSubstitution({
       userId: actor.userId,
@@ -130,8 +130,8 @@ export async function proposeExerciseSubstitutionAction(
 }
 
 export async function pauseAction(formData: FormData): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await setSessionPaused(actor.userId, sessionId, true)
   } catch (error) {
@@ -145,8 +145,8 @@ export async function pauseAction(formData: FormData): Promise<WorkoutActionResu
 }
 
 export async function resumeAction(formData: FormData): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await setSessionPaused(actor.userId, sessionId, false)
   } catch (error) {
@@ -160,8 +160,8 @@ export async function resumeAction(formData: FormData): Promise<WorkoutActionRes
 }
 
 export async function reportPainAction(formData: FormData): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await reportPain({
       userId: actor.userId,
@@ -183,8 +183,8 @@ export async function reportPainAction(formData: FormData): Promise<WorkoutActio
 export async function completeWorkoutAction(
   formData: FormData,
 ): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   try {
     await completeWorkout({
       userId: actor.userId,
@@ -205,8 +205,8 @@ export async function completeWorkoutAction(
 export async function abandonWorkoutAction(
   formData: FormData,
 ): Promise<WorkoutActionResult> {
-  const actor = await requireActor()
   const sessionId = String(formData.get('sessionId') ?? '')
+  const actor = await requireActorForWorkout(sessionId)
   const reason = String(formData.get('reason') ?? '')
   try {
     await abandonWorkout(actor.userId, sessionId, reason)

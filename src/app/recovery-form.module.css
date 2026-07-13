@@ -1,0 +1,17 @@
+.form {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.form input {
+  background: var(--paper-raised);
+  border: 1px solid var(--steel);
+  border-radius: var(--radius-sm);
+  min-height: 3rem;
+  padding: 0.7rem var(--space-3);
+  width: 100%;
+}
+
+.form input:focus-visible {
+  border-color: var(--indigo-enamel);
+}

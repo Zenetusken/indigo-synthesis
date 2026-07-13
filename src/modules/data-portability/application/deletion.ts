@@ -1,7 +1,10 @@
 import { and, eq, gt, sql } from 'drizzle-orm'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { assertOwner } from '@/modules/identity/application/actor'
-import { withCredentialLifecycleLock } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
+import {
+  withCredentialLifecycleLock,
+  withExclusiveCredentialLifecycleFence,
+} from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import {
   type CanonicalValue,
   canonicalSha256,
@@ -22,6 +25,7 @@ import {
   exercisePrescriptions,
   futureLoadExplanationCache,
   installationState,
+  memberResetStates,
   performedSetCorrections,
   performedSets,
   plannedWorkouts,
@@ -41,6 +45,7 @@ import {
   trainingFactCorrections,
   user,
   verification,
+  webRecoveryRateLimitBuckets,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -57,6 +62,8 @@ export type InstanceResetCounts = {
   readonly authAccounts: number
   readonly authVerifications: number
   readonly destructiveReauthenticationStates: number
+  readonly memberResetStates: number
+  readonly webRecoveryRateLimitBuckets: number
   readonly athleteProfiles: number
   readonly athleteTrainingDays: number
   readonly athleteEquipment: number
@@ -98,6 +105,7 @@ export type SubjectDeletionCounts = {
   readonly authSessions: number
   readonly authAccounts: number
   readonly authVerifications: number
+  readonly memberResetStates: number
   readonly athleteProfiles: number
   readonly athleteTrainingDays: number
   readonly athleteEquipment: number
@@ -150,7 +158,7 @@ async function withDestructiveReauthentication<T>(input: {
   readonly password: string
   readonly command: () => Promise<T>
 }): Promise<T> {
-  return withCredentialLifecycleLock(input.actor.userId, async () => {
+  const command = async () => {
     const outcome = await verifyDestructiveReauthentication({
       userId: input.actor.userId,
       purpose: input.purpose,
@@ -185,7 +193,11 @@ async function withDestructiveReauthentication<T>(input: {
       )
     }
     return input.command()
-  })
+  }
+
+  return input.purpose === 'instance-reset'
+    ? withExclusiveCredentialLifecycleFence(command)
+    : withCredentialLifecycleLock(input.actor.userId, command)
 }
 
 type Executable = {
@@ -207,6 +219,9 @@ async function countInstanceRows(
         FROM destructive_reauthentication_state drs
         JOIN account dra ON dra.id = drs.account_id
         WHERE dra.user_id <> ${actorUserId}) AS "destructiveReauthenticationStates",
+      (SELECT count(*)::int FROM member_reset_state) AS "memberResetStates",
+      (SELECT count(*)::int
+        FROM web_recovery_rate_limit_bucket) AS "webRecoveryRateLimitBuckets",
       (SELECT count(*)::int FROM athlete_profile) AS "athleteProfiles",
       (SELECT count(*)::int FROM athlete_training_day) AS "athleteTrainingDays",
       (SELECT count(*)::int FROM athlete_equipment) AS "athleteEquipment",
@@ -249,6 +264,7 @@ async function countSubjectRows(
   preserveIdentity: boolean,
 ): Promise<SubjectDeletionCounts> {
   const recoveryIdentifier = `indigo:owner-recovery:${userId}`
+  const memberResetIdentifier = `indigo:member-reset:${userId}`
   const result = await database.execute<SubjectDeletionCounts>(sql`
     SELECT
       CASE WHEN ${preserveIdentity} THEN 0 ELSE
@@ -259,8 +275,12 @@ async function countSubjectRows(
         (SELECT count(*)::int FROM account WHERE user_id = ${userId}) END AS "authAccounts",
       CASE WHEN ${preserveIdentity} THEN 0 ELSE
         (SELECT count(*)::int FROM verification
-          WHERE identifier = ${email} OR identifier = ${recoveryIdentifier})
+          WHERE identifier = ${email}
+            OR identifier = ${recoveryIdentifier}
+            OR identifier = ${memberResetIdentifier})
         END AS "authVerifications",
+      (SELECT count(*)::int FROM member_reset_state
+        WHERE target_user_id = ${userId}) AS "memberResetStates",
       (SELECT count(*)::int FROM athlete_profile WHERE user_id = ${userId}) AS "athleteProfiles",
       (SELECT count(*)::int FROM athlete_training_day WHERE user_id = ${userId}) AS "athleteTrainingDays",
       (SELECT count(*)::int FROM athlete_equipment WHERE user_id = ${userId}) AS "athleteEquipment",
@@ -653,6 +673,9 @@ export async function executeSubjectDeletion(input: {
           await transaction
             .delete(auditEvents)
             .where(eq(auditEvents.subjectUserId, input.actor.userId))
+          await transaction
+            .delete(memberResetStates)
+            .where(eq(memberResetStates.targetUserId, input.actor.userId))
           if (input.actor.role === 'owner') {
             // H4: trainee-data deletion is independent from installation ownership. The
             // owner credential and authenticated sessions remain usable so the same local
@@ -662,9 +685,11 @@ export async function executeSubjectDeletion(input: {
               .where(eq(deletionPlans.userId, input.actor.userId))
           } else {
             const recoveryIdentifier = `indigo:owner-recovery:${input.actor.userId}`
+            const memberResetIdentifier = `indigo:member-reset:${input.actor.userId}`
             await transaction.delete(verification).where(
               sql`${verification.identifier} = ${input.actor.email}
-              OR ${verification.identifier} = ${recoveryIdentifier}`,
+              OR ${verification.identifier} = ${recoveryIdentifier}
+              OR ${verification.identifier} = ${memberResetIdentifier}`,
             )
             await transaction
               .delete(session)
@@ -814,6 +839,8 @@ export async function executeInstanceReset(input: {
           await transaction.delete(deletionPlans)
 
           await transaction.delete(destructiveReauthenticationStates)
+          await transaction.delete(memberResetStates)
+          await transaction.delete(webRecoveryRateLimitBuckets)
           await transaction.delete(verification)
           await transaction.delete(session)
           await transaction.delete(account)

@@ -1,5 +1,6 @@
 'use client'
 
+import type { Route } from 'next'
 import { useRouter } from 'next/navigation'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { authClient } from './auth-client'
@@ -8,7 +9,7 @@ import styles from './identity-forms.module.css'
 const rejectedCredentialMessage = 'The email or password was not accepted.'
 const interruptedSignInMessage = 'Sign-in did not complete. Try again.'
 
-export function SignInForm() {
+export function SignInForm({ returnTo = '/' }: { returnTo?: string }) {
   const router = useRouter()
   const errorRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -40,7 +41,7 @@ export function SignInForm() {
         return
       }
 
-      router.push('/')
+      router.push(returnTo as Route)
       router.refresh()
     } catch {
       setError(interruptedSignInMessage)
