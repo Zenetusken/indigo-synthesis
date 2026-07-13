@@ -77,12 +77,12 @@
 .form select,
 .form textarea {
   background: var(--paper-raised);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--steel);
   border-radius: var(--radius-sm);
   color: var(--rack-ink);
   font: inherit;
   min-height: 3rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.7rem var(--space-3);
   width: 100%;
 }
 

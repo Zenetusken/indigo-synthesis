@@ -105,7 +105,7 @@ describe('invalidated workout continuation', () => {
       screen.getByRole('heading', { name: 'This workout progression was invalidated.' }),
     ).toBeVisible()
     expect(screen.getByText('60 kg × 5')).toBeVisible()
-    expect(screen.getByText('Session blocked · 1 unresolved sets')).toBeVisible()
+    expect(screen.getByText('Session blocked · 1 unresolved set')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Abandon workout' })).toBeVisible()
 
     for (const name of [

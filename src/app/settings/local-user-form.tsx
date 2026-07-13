@@ -1,6 +1,7 @@
 'use client'
 
 import { useActionState } from 'react'
+import { ActionButton } from '@/components'
 import { createLocalUserAction, type LocalUserActionState } from './actions'
 import styles from './settings.module.css'
 
@@ -48,9 +49,9 @@ export function LocalUserForm() {
           />
         </label>
       </div>
-      <button className={styles.primaryButton} type="submit" disabled={pending}>
+      <ActionButton variant="primary" type="submit" busy={pending}>
         {pending ? 'Creating local user…' : 'Create local user'}
-      </button>
+      </ActionButton>
     </form>
   )
 }

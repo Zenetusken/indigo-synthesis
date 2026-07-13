@@ -3,8 +3,10 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { InlineStatus, PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
+import { formatCalendarDate } from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
 import { requireActor } from '@/modules/identity/server/actor'
+import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getTodayState } from '@/modules/training/application/workouts'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import { startWorkoutAction } from './actions'
@@ -60,7 +62,7 @@ export default async function TodayPage({
       : null
 
   return (
-    <ProductFrame current="today">
+    <ProductFrame current="today" accountActions={<SignOutButton />}>
       <div className={styles.content}>
         <PageHeading
           eyebrow="Today"
@@ -160,7 +162,7 @@ export default async function TodayPage({
                 : 'Scheduled workout blocked in this content mode.'}
             </h2>
             <p>
-              {state.workout.scheduledDate} ·{' '}
+              {formatCalendarDate(state.workout.scheduledDate)} ·{' '}
               {state.contentEligibility.eligible
                 ? 'Unreviewed development fixture'
                 : 'The persisted content release is not eligible for new training entries.'}
@@ -206,7 +208,7 @@ export default async function TodayPage({
             <p>Rest is part of the program, not a missed-day score.</p>
             <p className={styles.next}>
               {state.nextWorkout
-                ? `Next: ${state.nextWorkout.name} on ${state.nextWorkout.date}`
+                ? `Next: ${state.nextWorkout.name} on ${formatCalendarDate(state.nextWorkout.date)}`
                 : 'No later workout exists in this revision.'}
             </p>
           </section>
@@ -234,7 +236,7 @@ export default async function TodayPage({
             </p>
             <p className={styles.next}>
               {state.nextWorkout
-                ? `Next: ${state.nextWorkout.name} on ${state.nextWorkout.date}`
+                ? `Next: ${state.nextWorkout.name} on ${formatCalendarDate(state.nextWorkout.date)}`
                 : 'No later workout exists in this revision.'}
             </p>
           </section>

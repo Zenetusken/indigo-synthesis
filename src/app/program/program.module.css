@@ -40,22 +40,11 @@
 
 .generateForm input {
   background: var(--paper-raised);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--steel);
   border-radius: var(--radius-sm);
   font: 500 var(--text-base) / 1 var(--font-data);
   min-height: 3rem;
-  padding: 0.75rem;
-}
-
-.primaryButton {
-  background: var(--indigo-enamel);
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: white;
-  cursor: pointer;
-  font-weight: 700;
-  min-height: 3rem;
-  padding: 0.8rem 1.2rem;
+  padding: 0.7rem var(--space-3);
 }
 
 .sheet {

@@ -91,12 +91,12 @@
 
 .holdForm input[type="text"] {
   background: var(--paper-raised);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--steel);
   border-radius: var(--radius-sm);
   color: var(--rack-ink);
   min-height: 3rem;
   min-width: 0;
-  padding: 0.65rem 0.75rem;
+  padding: 0.7rem var(--space-3);
   width: 100%;
 }
 

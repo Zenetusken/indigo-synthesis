@@ -1,6 +1,7 @@
 'use client'
 
 import { useActionState, useEffect, useId, useReducer, useRef, useState } from 'react'
+import { ActionButton } from '@/components'
 import { resolveSafetyHoldAction, type SafetyHoldResolutionActionState } from './actions'
 import styles from './today.module.css'
 
@@ -110,9 +111,9 @@ export function SafetyHoldResolutionForm({
           />
           <span>I understand that this product does not assess or clear symptoms.</span>
         </label>
-        <button className={styles.primaryAction} disabled={isPending} type="submit">
+        <ActionButton variant="primary" type="submit" busy={isPending}>
           {isPending ? 'Resolving safety hold…' : 'Resolve safety hold'}
-        </button>
+        </ActionButton>
       </form>
     </div>
   )
