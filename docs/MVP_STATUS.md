@@ -141,8 +141,9 @@ not evidence that the documented boundaries already exist.
 Training application can map a completed session’s stored future-load decisions into
 contract FactBundles via `getFutureLoadFactBundlesForSession` (query enrichment + pure
 mapper over session snapshots). History remains **codes-only**; no trainee prose UI.
-Unit + integration validation cover the mapper. LLM generation stays optional and
-disabled by default.
+Unit + integration validation cover the mapper. Operator dry-run:
+`pnpm llm:dry-run-synthesize` (disposable DB → FactBundles → live GPU synthesize). LLM
+generation stays optional and disabled by default in the product process.
 
 ## Optional local grounded explanation (infra slice)
 

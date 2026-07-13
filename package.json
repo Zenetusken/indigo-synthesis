@@ -36,6 +36,7 @@
     "llm:build-cuda": "bash scripts/llm/build-cuda-server.sh",
     "llm:measure-gpu": "bash scripts/llm/measure-gpu.sh",
     "llm:reboot-cuda": "bash scripts/llm/reboot-cuda-stack.sh",
+    "llm:dry-run-synthesize": "NODE_ENV=test INDIGO_CONTENT_MODE=development node --env-file-if-exists=.env.local --import tsx scripts/llm/dry-run-session-synthesize.ts",
     "validate": "NEXT_TELEMETRY_DISABLED=1 pnpm check && pnpm typecheck && pnpm test && INDIGO_CONTENT_MODE=reviewed pnpm build"
   },
   "dependencies": {
