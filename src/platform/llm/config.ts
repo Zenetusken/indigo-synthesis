@@ -10,11 +10,22 @@ const llmConfigSchema = z
     INDIGO_LLM_MODELS_DIR: z.string().min(1).optional(),
     INDIGO_LLM_WEIGHTS_DIR: z.string().min(1).optional(),
     INDIGO_LLM_ENDPOINT: z.string().url().optional(),
-    INDIGO_LLM_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).optional(),
+    INDIGO_LLM_TIMEOUT_MS: z.coerce.number().int().min(100).max(600_000).optional(),
     INDIGO_LLM_MODEL_SHA256: z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
+    /**
+     * Product policy: local inference requires a healthy NVIDIA GPU. Default true.
+     * Set INDIGO_LLM_REQUIRE_GPU=false only for emergency offline diagnosis.
+     */
+    INDIGO_LLM_REQUIRE_GPU: z
+      .enum(['true', 'false', '1', '0'])
+      .optional()
+      .transform((value) => {
+        if (value === undefined) return true
+        return value === 'true' || value === '1'
+      }),
   })
   .superRefine((input, context) => {
     if (input.INDIGO_LLM_MODE === 'local' && !input.INDIGO_LLM_MODEL_ID) {
@@ -60,6 +71,8 @@ export type LlmRuntimeConfig = {
   readonly endpointOverride: string | null
   readonly timeoutMsOverride: number | null
   readonly modelSha256Override: string | null
+  /** When true (default), local mode is only ready if nvidia-smi reports a healthy GPU. */
+  readonly requireGpu: boolean
 }
 
 export class InvalidLlmConfigurationError extends Error {
@@ -100,6 +113,7 @@ export function parseLlmConfig(
     endpointOverride: parsed.data.INDIGO_LLM_ENDPOINT ?? null,
     timeoutMsOverride: parsed.data.INDIGO_LLM_TIMEOUT_MS ?? null,
     modelSha256Override: parsed.data.INDIGO_LLM_MODEL_SHA256 ?? null,
+    requireGpu: parsed.data.INDIGO_LLM_REQUIRE_GPU,
   }
 }
 

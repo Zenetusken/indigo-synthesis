@@ -8,7 +8,24 @@ describe('parseLlmConfig', () => {
     expect(parseLlmConfig({})).toMatchObject({
       mode: 'disabled',
       modelId: null,
+      requireGpu: true,
     })
+  })
+
+  it('defaults requireGpu true and accepts false for diagnosis only', () => {
+    expect(
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'local',
+        INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+      }).requireGpu,
+    ).toBe(true)
+    expect(
+      parseLlmConfig({
+        INDIGO_LLM_MODE: 'local',
+        INDIGO_LLM_MODEL_ID: 'qwen3.5-9b-q4_k_m',
+        INDIGO_LLM_REQUIRE_GPU: 'false',
+      }).requireGpu,
+    ).toBe(false)
   })
 
   it('requires model id when local', () => {

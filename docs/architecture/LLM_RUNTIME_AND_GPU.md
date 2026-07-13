@@ -16,6 +16,18 @@ A 9B Q4_K_M GGUF is ~5.7–6.5 GB on disk and needs roughly **model size + ≥4 
 
 Check: `pnpm llm:preflight` (reads `/proc/meminfo`).
 
+## Product policy: GPU only
+
+The Indigo LLM layer **must not** run product inference on CPU.
+
+| Control | Default | Effect |
+| --- | --- | --- |
+| `INDIGO_LLM_REQUIRE_GPU` | `true` | Preflight is not ready unless `nvidia-smi` is healthy |
+| `INDIGO_LLM_N_GPU_LAYERS` | `-1` | Serve refuses to start with `0` when GPU is required |
+| `pnpm llm:serve` | GPU assert | Exits 2 if NVML/driver mismatch or no GPU |
+
+Emergency diagnosis only: `INDIGO_LLM_REQUIRE_GPU=false` (never a release path).
+
 ## GPU coherence (NVIDIA on Pop!_OS)
 
 ### Healthy state
@@ -78,27 +90,23 @@ architecture `qwen35` as of this writing.
 - No cloud model dependency.
 - Architecture tests allow fetch only in the loopback LLM adapter + preflight.
 
-## Operator sequence
+## Operator sequence (GPU-only)
 
 ```sh
-# 1) Host health
-pnpm llm:preflight
+# If preflight shows driver mismatch:
+pnpm llm:reboot-cuda    # or: sudo reboot
 
-# 2) If GPU = mismatch → reboot, then preflight again
+# After reboot — one-shot GPU measure:
+cd ~/project/indigo-synthesis
+git checkout feat/llm-modular-inference-layer
+pnpm llm:measure-gpu
+# builds CUDA llama-server if needed, serves ngl=-1, live baseline JSON
 
-# 3) Weights for the Indigo pack
-pnpm llm:download-qwen35
-
-# 4) Server + model
-pnpm llm:serve
-pnpm llm:load            # or lms load <key> -y
-
-# 5) Contract + optional live metrics
-pnpm llm:validate-baseline
-INDIGO_LLM_LIVE=1 \
-INDIGO_LLM_ENDPOINT=http://127.0.0.1:1234/v1 \
-INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m \
-pnpm llm:validate-baseline --json
+# Manual steps:
+pnpm llm:preflight      # requireGpu=true; gpu.state must be ready
+pnpm llm:build-cuda
+pnpm llm:serve          # fails closed without healthy nvidia-smi
+INDIGO_LLM_LIVE=1 pnpm llm:validate-baseline --json
 ```
 
 ## Coherence checklist
@@ -106,12 +114,12 @@ pnpm llm:validate-baseline --json
 | Piece | Healthy signal |
 | --- | --- |
 | RAM | `sufficientForApproxModelBytes=true` |
-| GPU | `gpu.state=ready` (or CPU path accepted knowingly) |
-| Weights | file under `llm/weights/` or model listed in LM Studio |
-| Server | `endpoint.reachable=true` on loopback |
-| Pack | `servedModelName` matches a `/v1/models` id (or override endpoint model) |
+| GPU | `gpu.state=ready` (**required** for product local mode) |
+| Weights | file under `llm/weights/` |
+| Server | `endpoint.reachable=true` on loopback **with CUDA offload** |
+| Pack | `servedModelName` matches a `/v1/models` id |
 | Offline baseline | `pnpm llm:validate-baseline` PASS |
-| Live | `availableRate` recorded with model digest |
+| Live GPU measure | `availableRate=1.0` + `nvidia-smi` shows model VRAM |
 
-Until the offline baseline is green and live runs are archived per the measurement
-protocol, do not enable trainee-facing prose UI.
+Until offline baseline is green **and** a GPU live measure is archived, do not enable
+trainee-facing prose UI.

@@ -33,6 +33,9 @@
     "llm:serve": "bash scripts/llm/serve-local.sh",
     "llm:load": "bash scripts/llm/load-model.sh",
     "llm:download-qwen35": "bash scripts/llm/download-qwen35.sh",
+    "llm:build-cuda": "bash scripts/llm/build-cuda-server.sh",
+    "llm:measure-gpu": "bash scripts/llm/measure-gpu.sh",
+    "llm:reboot-cuda": "bash scripts/llm/reboot-cuda-stack.sh",
     "validate": "NEXT_TELEMETRY_DISABLED=1 pnpm check && pnpm typecheck && pnpm test && INDIGO_CONTENT_MODE=reviewed pnpm build"
   },
   "dependencies": {

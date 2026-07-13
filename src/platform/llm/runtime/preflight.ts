@@ -49,11 +49,13 @@ export type LlmPreflightReport = {
   readonly checkedAt: string
   readonly mode: LlmRuntimeConfig['mode']
   readonly modelId: string | null
+  readonly requireGpu: boolean
   readonly pack: ModelSettings | null
   readonly memory: MemoryStatus
   readonly gpu: GpuStatus
   readonly weights: WeightsStatus | null
   readonly endpoint: EndpointStatus
+  /** True only when the product may enable local inference under current policy. */
   readonly readyForLocalInference: boolean
   readonly blockers: readonly string[]
   readonly recommendations: readonly string[]
@@ -251,45 +253,56 @@ export async function runLlmPreflight(
   const gpu = await probeGpu()
   const weights = probeWeights(config, pack)
   const endpointUrl =
-    config.endpointOverride ?? pack?.runtime.defaultEndpoint ?? 'http://127.0.0.1:1234/v1'
+    config.endpointOverride ?? pack?.runtime.defaultEndpoint ?? 'http://127.0.0.1:8080/v1'
   const endpoint = await probeEndpoint(endpointUrl)
 
   const blockers: string[] = []
   const recommendations: string[] = []
+  const requireGpu = config.requireGpu
 
   if (config.mode === 'disabled') {
     recommendations.push(
-      'INDIGO_LLM_MODE=disabled (product default). Set local when ready to probe.',
+      'INDIGO_LLM_MODE=disabled (product default). Set local when GPU preflight is ready.',
     )
   }
   if (!memory.sufficientForApproxModelBytes) {
     blockers.push('Insufficient MemAvailable for the configured model size + headroom')
     recommendations.push('Close browsers/IDE tabs or free swap before loading a 9B GGUF')
   }
-  if (gpu.state === 'mismatch') {
-    blockers.push('GPU driver/library version mismatch — CUDA inference blocked')
+
+  if (requireGpu) {
+    if (gpu.state === 'ready') {
+      recommendations.push(
+        'GPU ready — local inference must use CUDA offload (INDIGO_LLM_N_GPU_LAYERS=-1)',
+      )
+    } else if (gpu.state === 'mismatch') {
+      blockers.push(
+        'GPU required but driver/library mismatch — reboot to reload NVIDIA modules',
+      )
+      recommendations.push(
+        'Reboot, then: nvidia-smi && pnpm llm:build-cuda && pnpm llm:serve && pnpm llm:measure-gpu',
+      )
+    } else {
+      blockers.push(`GPU required but not ready (${gpu.state})`)
+      recommendations.push(
+        'Fix NVIDIA stack until nvidia-smi succeeds; CPU inference is not permitted for the product LLM layer',
+      )
+    }
+  } else if (gpu.state !== 'ready') {
     recommendations.push(
-      'Reboot to load the installed NVIDIA module (DKMS 580.173) replacing the still-loaded 580.159 kernel module',
+      'INDIGO_LLM_REQUIRE_GPU=false — CPU diagnosis only; not a production path',
     )
-  } else if (gpu.state === 'ready') {
-    recommendations.push(
-      'GPU ready — prefer CUDA-backed llama-server / LM Studio CUDA runtime',
-    )
-  } else {
-    recommendations.push('GPU not ready — CPU-only inference is possible but slower')
   }
+
   if (weights && !weights.present) {
-    recommendations.push(
-      `Place pack weights at ${weights.path} or load the equivalent model in LM Studio`,
-    )
+    blockers.push(`Weights missing at ${weights.path}`)
+    recommendations.push('Run: pnpm llm:download-qwen35')
   }
   if (!endpoint.reachable) {
     blockers.push(`Inference endpoint unreachable: ${endpoint.endpoint}`)
-    recommendations.push(
-      'Run: pnpm llm:serve  (starts LM Studio loopback server) or llama-server',
-    )
+    recommendations.push('Run: pnpm llm:serve  (GPU-only llama-server on loopback :8080)')
   } else if (endpoint.models.length === 0) {
-    recommendations.push('Server is up but no models loaded — run: pnpm llm:load')
+    recommendations.push('Server is up but no models loaded')
   }
 
   const servedName = pack?.runtime.servedModelName
@@ -301,26 +314,25 @@ export async function runLlmPreflight(
       (id) =>
         id === servedName ||
         id.includes(servedName) ||
-        id.toLowerCase().includes('qwen3.5-9b') ||
-        id.toLowerCase().includes('qwen2.5-7b'),
+        id.toLowerCase().includes('qwen3.5-9b'),
     )
   ) {
     recommendations.push(
-      `Loaded models do not match pack servedModelName "${servedName}". Load the pack model or point INDIGO_LLM_MODEL_ID / served name at a loaded id.`,
+      `Loaded models do not match pack servedModelName "${servedName}".`,
     )
   }
 
-  // GPU mismatch blocks CUDA only; CPU local inference is fine when the endpoint is up.
-  const hardBlockers = blockers.filter((b) => !b.startsWith('GPU driver'))
   const readyForLocalInference =
-    hardBlockers.length === 0 &&
+    blockers.length === 0 &&
     endpoint.reachable &&
-    memory.sufficientForApproxModelBytes
+    memory.sufficientForApproxModelBytes &&
+    (!requireGpu || gpu.state === 'ready')
 
   return {
     checkedAt: new Date().toISOString(),
     mode: config.mode,
     modelId: config.modelId,
+    requireGpu,
     pack,
     memory,
     gpu,
@@ -336,7 +348,7 @@ export function formatLlmPreflightReport(report: LlmPreflightReport): string {
   const lines = [
     'LLM runtime preflight',
     `  checkedAt=${report.checkedAt}`,
-    `  mode=${report.mode} modelId=${report.modelId ?? '(none)'}`,
+    `  mode=${report.mode} modelId=${report.modelId ?? '(none)'} requireGpu=${report.requireGpu}`,
     `  memory: ${report.memory.detail} sufficient=${report.memory.sufficientForApproxModelBytes}`,
     `  gpu: ${report.gpu.state}${
       report.gpu.state === 'ready'

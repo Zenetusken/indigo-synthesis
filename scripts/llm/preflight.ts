@@ -27,10 +27,8 @@ async function main(): Promise<void> {
     console.log(formatLlmPreflightReport(report))
   }
 
-  // Exit 0 if host can serve local inference (CPU path OK even when GPU mismatched).
-  // Exit 2 if hard blockers prevent any local inference.
-  const hard = report.blockers.filter((b) => !b.startsWith('GPU driver'))
-  if (hard.length > 0 && !report.endpoint.reachable) {
+  // Exit 2 when product-ready local inference is blocked (including GPU required).
+  if (!report.readyForLocalInference && report.blockers.length > 0) {
     process.exitCode = 2
   }
 }
