@@ -30,6 +30,8 @@ claim coaching quality or clinical validity.
 | H6 | Invalidated / blocked-from-generation paths stay fail-closed | Invalidated case becomes `available` |
 | H7 | Builder maps persisted decision rows to FactBundles without inventing loads | Builder unit tests fail or labels ≠ `formatLoad` |
 | H8 (live, optional) | A local model can produce validation-passing prose for golden cases | Live available rate = 0 with healthy server (informational until target set) |
+| H9 (product path, optional) | History Explain with local GPU yields grounded prose without hiding codes | `pnpm test:e2e:llm` fails or codes-first assertions fail |
+| H10 (product path, optional) | On-demand interactive latency is tolerable (not gym-critical) | Live `latencyMs.p95` / e2e action times explode relative to prior archive on same digest |
 
 ## Metrics (offline, required)
 
@@ -59,11 +61,16 @@ When `INDIGO_LLM_LIVE=1` and a loopback server is up:
 | `live.availableCount` | Cases with validation-passing model prose | Operator calibration sample |
 | `live.unavailableCount` | Cases that failed generation or validation | Break down by `reason` |
 | `live.availableRate` | available / eligible active cases | Not a shipping gate until a target is chosen after N runs |
-| `live.latencyMs.p50` / `p95` | Per-case synthesize latency | Informational; gym path must not await model |
+| `live.latencyMs.p50` / `p95` | Per-case synthesize wall time (ms) | Informational; gym path must not await model |
+| `live.latencyMs.samples` | Raw per-case ms | Archive for drift comparison |
+| `live.modelContentDigest` | Digest used for the probe | Pin multi-run comparison |
 | `live.unreachable` | All failures are runtime-unreachable/timeout | Environment problem, not model quality |
+| `product.e2eOk` | `pnpm test:e2e:llm` exit success | Product-path pin (operator archive only) |
+| `product.e2eDurationMs` | Wall time of the Playwright suite | Informational; includes journey + Explain |
 
-**Do not** treat a single live success as product readiness. Prefer ≥3 independent live
-runs with the same `modelContentDigest` before considering a UI enablement experiment.
+**Do not** treat a single live or e2e success as product readiness. Prefer ≥3 independent
+product-path archives with the same `modelContentDigest` (`pnpm llm:archive-product-path`
+with `RUNS=3`) before considering cache or broader enablement experiments.
 
 ## What is *not* measured yet
 
@@ -84,10 +91,12 @@ runs with the same `modelContentDigest` before considering a UI enablement exper
 
 1. Install weights + start loopback server (`llm/README.md`)
 2. `INDIGO_LLM_LIVE=1 INDIGO_LLM_ENDPOINT=… INDIGO_LLM_MODEL_ID=… pnpm llm:validate-baseline --json > /tmp/llm-live.json`
-3. Record `modelContentDigest`, baseline version, available rate, failure reasons
-4. Product browser path (after offline + live baseline look healthy): `pnpm test:e2e:llm`  
-   — real J1–J6 completion → History → Explain with GPU local mode; codes stay authoritative
-5. Do not treat a single green e2e as shipping readiness; re-run after pack/prompt changes
+3. Record `modelContentDigest`, baseline version, available rate, `latencyMs.p50/p95`, failure reasons
+4. Product browser path: `pnpm test:e2e:llm`  
+   — real J1–J6 → History → Explain with GPU local mode; codes stay authoritative
+5. **Multi-run archive (preferred):** `RUNS=3 pnpm llm:archive-product-path`  
+   — writes gitignored `tmp/llm-runs/product-path-*.json` combining offline + live + e2e
+6. Do not treat a single green e2e as shipping readiness; re-archive after pack/prompt changes
 
 ### Interpretation rules
 
@@ -103,4 +112,5 @@ runs with the same `modelContentDigest` before considering a UI enablement exper
 3. ~~Measured live runs on operator hardware~~ (CPU then GPU availableRate=1.0 recorded)
 4. ~~Application FactBundle wiring from completed sessions~~ (`getFutureLoadFactBundlesForSession`)
 5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
-6. Cache only after prose is product-visible and invalidation rules are defined
+6. ~~Product-path multi-run discipline + live latency metrics (H9/H10)~~ (`pnpm llm:archive-product-path`)
+7. Cache only after multi-run product path is archived and invalidation rules are defined

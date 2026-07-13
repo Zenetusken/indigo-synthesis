@@ -160,7 +160,7 @@ language models.
 - loopback-only OpenAI-compatible adapter for host-local servers (e.g. llama-server);
 - calibrated **offline** golden baseline (`pnpm llm:validate-baseline`) plus optional live
   probe when a loopback server is running;
-- measurement protocol and JSON metrics snapshot
+- measurement protocol and JSON metrics snapshot including live `latencyMs.p50/p95`
   ([LLM_MEASUREMENT_PROTOCOL.md](architecture/LLM_MEASUREMENT_PROTOCOL.md));
 - pure `buildFutureLoadFactBundle` from persisted decision fields (caller supplies
   `formatLoad` labels);
@@ -173,12 +173,22 @@ language models.
     `llama-server` with `n-gpu-layers=-1`, ~6.1 GiB VRAM in use, offline 28/28, live
     **availableRate=1.0** (8/8 eligible; invalidated case correctly unavailable). Product
     policy remains GPU-only for local inference (`INDIGO_LLM_REQUIRE_GPU=true`).
+  - **Product-path multi-run (same digest, `RUNS=3 pnpm llm:archive-product-path`):**
+    offline 28/28 ×3; `test:e2e:llm` ok ×3 (~14.3–14.7s suite); live latency p50 ~1.2s,
+    p95 ~1.5s; live availableRate **1.0 / 0.75 / 1.0** (run 2: two `validation-failed`
+    on goldens). Product e2e still green when goldens flake—cache must store only
+    validation-passing prose and never lower the gate.
 
-**Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations, or
-any methodology authority. History continues to show structured reason codes only.
-`INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML **coaching** remains deferred. CI does
-not require GGUF weights; live probe is operator calibration. Product UI waits on
-protocol gates plus a healthy post-reboot GPU path if CUDA is desired.
+**History product path (implemented, default off):**
+
+- codes always on completed-session History;
+- on-demand “Explain in plain language” via `explainFutureLoadDecision` (inferred only);
+- LLM-off e2e pin in `pnpm test:e2e`; GPU-on pin in `pnpm test:e2e:llm`;
+- operator multi-run archive: `pnpm llm:archive-product-path` (writes `tmp/llm-runs/`).
+
+**Still open:** prose **cache** / migration (contract §7), Program-page Explain, any
+methodology authority change. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
+**coaching** remains deferred. CI does not require GGUF weights.
 
 ## Production-release blockers
 

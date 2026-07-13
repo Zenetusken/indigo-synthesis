@@ -27,8 +27,9 @@ pnpm llm:preflight          # RAM, NVIDIA status, weights, loopback /v1/models
 pnpm llm:download-qwen35    # Q4_K_M → llm/weights/
 pnpm llm:serve              # LM Studio (lms) or llama-server on loopback
 pnpm llm:load               # load a model into the server
-pnpm llm:validate-baseline  # offline contract gate
+pnpm llm:validate-baseline  # offline contract gate (+ live when INDIGO_LLM_LIVE=1)
 pnpm test:e2e:llm           # opt-in browser path (GPU + serve required)
+RUNS=3 pnpm llm:archive-product-path  # multi-run offline+live+e2e → tmp/llm-runs/
 ```
 
 Default OpenAI-compatible endpoint for packs: **`http://127.0.0.1:1234/v1`** (LM Studio).

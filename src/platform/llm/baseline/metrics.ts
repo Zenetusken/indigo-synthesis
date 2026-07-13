@@ -29,8 +29,26 @@ export type LlmMeasurementSnapshot = {
     readonly availableRate: number | null
     readonly endpoint: string | null
     readonly modelId: string | null
+    readonly modelContentDigest: string | null
     readonly summary: string
     readonly failureReasons: Readonly<Record<string, number>>
+    /** Per-case synthesize wall times (ms); H10 interactive calibration. */
+    readonly latencyMs: null | {
+      readonly sampleCount: number
+      readonly p50: number | null
+      readonly p95: number | null
+      readonly samples: readonly number[]
+    }
+  }
+  /**
+   * Product browser path (`pnpm test:e2e:llm`). Optional; filled by archive scripts.
+   * Not a CI gate.
+   */
+  readonly product?: null | {
+    readonly e2eOk: boolean | null
+    readonly e2eDurationMs: number | null
+    readonly suite: 'test:e2e:llm'
+    readonly note: string
   }
 }
 
@@ -65,6 +83,7 @@ export function buildMeasurementSnapshot(input: {
   readonly offline: OfflineBaselineReport
   readonly offlineDurationMs: number
   readonly live: LiveProbeReport | null
+  readonly product?: LlmMeasurementSnapshot['product']
 }): LlmMeasurementSnapshot {
   const allReasonCodes = [
     ...new Set(GOLDEN_BASELINE_CASES.map((c) => c.factBundle.grounding.reasonCode)),
@@ -91,6 +110,8 @@ export function buildMeasurementSnapshot(input: {
           (c.reason === 'runtime-unreachable' || c.reason === 'timeout'),
       )
 
+    const latency = input.live.latency
+
     live = {
       ran: true,
       unreachable,
@@ -99,8 +120,17 @@ export function buildMeasurementSnapshot(input: {
       availableRate: eligible.length === 0 ? null : availableEligible / eligible.length,
       endpoint: input.live.endpoint,
       modelId: input.live.modelId,
+      modelContentDigest: input.live.modelContentDigest,
       summary: input.live.summary,
       failureReasons,
+      latencyMs: latency
+        ? {
+            sampleCount: latency.sampleCount,
+            p50: latency.p50Ms,
+            p95: latency.p95Ms,
+            samples: latency.samplesMs,
+          }
+        : null,
     }
   }
 
@@ -124,6 +154,7 @@ export function buildMeasurementSnapshot(input: {
       synthesizeAvailablePassRate: rates.synthesizeAvailablePassRate,
     },
     live,
+    product: input.product ?? null,
   }
 }
 
@@ -139,12 +170,26 @@ export function formatMeasurementSummary(snapshot: LlmMeasurementSnapshot): stri
   ]
   if (snapshot.live) {
     const l = snapshot.live
+    const lat = l.latencyMs
     lines.push(
       `  live.ran=${l.ran} unreachable=${l.unreachable} availableRate=${l.availableRate ?? 'n/a'} (${l.availableCount} available)`,
+      `  live.modelContentDigest=${l.modelContentDigest ?? 'n/a'}`,
+      lat
+        ? `  live.latencyMs.p50=${lat.p50 ?? 'n/a'} p95=${lat.p95 ?? 'n/a'} n=${lat.sampleCount}`
+        : '  live.latencyMs=(none)',
       `  live.summary=${l.summary}`,
     )
   } else {
     lines.push('  live=(not run)')
+  }
+  if (snapshot.product) {
+    const p = snapshot.product
+    lines.push(
+      `  product.suite=${p.suite} e2eOk=${p.e2eOk ?? 'n/a'} e2eDurationMs=${p.e2eDurationMs ?? 'n/a'}`,
+      `  product.note=${p.note}`,
+    )
+  } else {
+    lines.push('  product=(not run)')
   }
   return lines.join('\n')
 }

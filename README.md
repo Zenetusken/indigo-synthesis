@@ -116,6 +116,7 @@ gate; requires a healthy NVIDIA GPU and a loopback model server — see
 pnpm llm:preflight
 pnpm llm:serve   # separate terminal, CUDA offload
 pnpm test:e2e:llm
+RUNS=3 pnpm llm:archive-product-path   # multi-run archive → tmp/llm-runs/
 ```
 
 `pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The

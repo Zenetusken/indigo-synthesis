@@ -16,7 +16,9 @@ export {
 } from './baseline/metrics'
 export {
   formatLiveProbeReport,
+  type LiveLatencyStats,
   type LiveProbeReport,
+  percentileMs,
   runLiveProbe,
 } from './baseline/run-live-probe'
 export {

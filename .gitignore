@@ -18,3 +18,6 @@ test-results/
 *.gguf
 llm/weights/**
 !llm/weights/.gitkeep
+
+# Operator LLM measurement archives (product-path multi-run)
+tmp/
