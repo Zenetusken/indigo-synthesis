@@ -69,14 +69,18 @@ test.describe('live GPU History explanations', () => {
     await completeAllSetsAtTarget(page, '8')
     await completeWorkoutToHistory(page)
 
-    await expect(page.getByRole('heading', { name: 'Future-load decisions' })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: 'Future-load decisions' }),
+    ).toBeVisible()
     await expect(
       page.getByText(
         'Development policy only. These deterministic outputs are not human-reviewed',
       ),
     ).toBeVisible()
 
-    const reasonCodes = page.locator('code').filter({ hasText: /development\.adjustment\./ })
+    const reasonCodes = page
+      .locator('code')
+      .filter({ hasText: /development\.adjustment\./ })
     await expect(reasonCodes.first()).toBeVisible()
     await expect(reasonCodes.first()).toContainText('rule')
 

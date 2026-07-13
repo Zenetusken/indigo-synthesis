@@ -19,12 +19,14 @@ import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
 } from '@/modules/programs/domain/executable-prescription'
+import { explainFutureLoadDecision } from '@/modules/training/application/future-load-explanation'
 import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   abandonWorkout,
   completeSet,
   completeWorkout,
   getCompletedSessions,
+  getSessionFutureLoadDecisions,
   getTodayState,
   getWorkoutSession,
   reportPain,
@@ -46,6 +48,7 @@ import {
   adjustmentDecisions,
   auditEvents,
   exercisePrescriptions,
+  futureLoadExplanationCache,
   performedSets,
   plannedWorkouts,
   programRevisionInvalidations,
@@ -864,6 +867,30 @@ describe('training PostgreSQL command boundary', () => {
       getDb().delete(sessionFeedback).where(eq(sessionFeedback.sessionId, sessionId)),
     ).rejects.toMatchObject({ cause: { code: '55000' } })
 
+    const decisions = await getSessionFutureLoadDecisions(owner.id, sessionId)
+    expect(decisions).not.toBeNull()
+    expect(decisions?.length).toBeGreaterThan(0)
+    const firstDecision = decisions?.[0]
+    expect(firstDecision).toBeDefined()
+    if (!firstDecision) throw new Error('expected future-load decision')
+
+    // Simulate a pre-pain cached paraphrase, then post-completion pain must purge it.
+    await getDb()
+      .insert(futureLoadExplanationCache)
+      .values({
+        id: newUuidV7(),
+        userId: owner.id,
+        sessionId,
+        decisionId: firstDecision.id,
+        cacheKey: 'test-stale-key',
+        prose: 'stale inferred paraphrase',
+        modelId: 'test-model',
+        modelContentDigest: 'a'.repeat(64),
+        promptVersion: 'future-load.v1',
+        factBundleHash: 'b'.repeat(64),
+        generateDurationMs: 1000,
+      })
+
     await reportPain({
       userId: owner.id,
       sessionId,
@@ -920,6 +947,53 @@ describe('training PostgreSQL command boundary', () => {
         coalescedWithExistingHold: false,
       },
     })
+
+    const cacheRows = await getDb()
+      .select()
+      .from(futureLoadExplanationCache)
+      .where(eq(futureLoadExplanationCache.sessionId, sessionId))
+    expect(cacheRows).toHaveLength(0)
+
+    const bundles = await getFutureLoadFactBundlesForSession(owner.id, sessionId)
+    expect(bundles.status).toBe('available')
+    if (bundles.status === 'available') {
+      expect(bundles.bundles.length).toBeGreaterThan(0)
+      for (const entry of bundles.bundles) {
+        expect(entry.factBundle.decision.invalidated).toBe(true)
+        expect(entry.factBundle.decision.invalidationReason).toBe(
+          'post-completion-pain-report',
+        )
+      }
+      const firstBundle = bundles.bundles[0]
+      expect(firstBundle).toBeDefined()
+      if (!firstBundle) throw new Error('expected fact bundle')
+      const explanation = await explainFutureLoadDecision({
+        userId: owner.id,
+        sessionId,
+        decisionId: firstBundle.decision.id,
+        deps: {
+          cache: null,
+          getConfig: () => ({
+            mode: 'local',
+            modelId: 'qwen3.5-9b-q4_k_m',
+            modelsDir: 'llm/models',
+            weightsDir: 'llm/weights',
+            endpointOverride: 'http://127.0.0.1:8080/v1',
+            timeoutMsOverride: 1000,
+            modelSha256Override: 'a'.repeat(64),
+            requireGpu: true,
+          }),
+          compose: () => {
+            throw new Error('compose must not run when invalidated')
+          },
+        },
+      })
+      expect(explanation).toMatchObject({
+        status: 'unavailable',
+        reason: 'decision-invalidated',
+      })
+    }
+
     await expect(
       getDb()
         .update(sessionFeedback)

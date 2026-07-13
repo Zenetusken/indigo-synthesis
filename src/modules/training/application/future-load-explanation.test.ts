@@ -350,6 +350,65 @@ describe('explainFutureLoadDecision', () => {
     expect(preflight).toHaveBeenCalledTimes(1)
   })
 
+  it('returns decision-invalidated without model or cache hit after pain', async () => {
+    const synthesize = vi.fn()
+    const cache = createMemoryFutureLoadExplanationCache()
+    await cache.put({
+      userId,
+      sessionId,
+      decisionId,
+      cacheKey: 'stale',
+      prose: 'stale increase paraphrase',
+      modelId: 'qwen3.5-9b-q4_k_m',
+      modelContentDigest: 'b'.repeat(64),
+      promptVersion: FUTURE_LOAD_PROMPT_VERSION,
+      factBundleHash: 'a'.repeat(64),
+      generateDurationMs: 1000,
+    })
+
+    const bundles = sampleBundleResult()
+    if (bundles.status !== 'available') throw new Error('expected available')
+    const invalidatedBundle = {
+      ...bundles,
+      bundles: bundles.bundles.map((entry) => ({
+        ...entry,
+        factBundle: {
+          ...entry.factBundle,
+          decision: {
+            ...entry.factBundle.decision,
+            invalidated: true,
+            invalidationReason: 'post-completion-pain-report',
+            painReported: true,
+          },
+        },
+      })),
+    }
+
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache,
+        getBundles: async () => invalidatedBundle,
+        getConfig: localConfig,
+        compose: () => {
+          throw new Error('compose should not run when invalidated')
+        },
+        preflight: async () => {
+          throw new Error('preflight should not run when invalidated')
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'decision-invalidated',
+    })
+    expect(synthesize).not.toHaveBeenCalled()
+    expect(await cache.getByCacheKey('stale')).toBeNull()
+  })
+
   it('maps synthesis failure without inventing prose', async () => {
     const result = await explainFutureLoadDecision({
       userId,

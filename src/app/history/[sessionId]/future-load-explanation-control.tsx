@@ -18,6 +18,11 @@ function unavailableMessage(
       return 'This decision could not be loaded for explanation.'
     case 'fact-bundle-failed':
       return 'This decision cannot be explained from incomplete stored facts. The rule codes above still apply.'
+    case 'decision-invalidated':
+      return (
+        result.detail ??
+        'This decision is no longer active for explanation. The rule codes above still apply.'
+      )
     case 'synthesis-failed':
       return 'Could not produce a grounded explanation. The rule codes above still apply.'
     default:

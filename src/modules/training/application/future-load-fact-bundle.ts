@@ -64,13 +64,36 @@ function mapSetFact(
   }
 }
 
+/** Stable presentation invalidation when post-completion pain supersedes active framing. */
+export const POST_COMPLETION_PAIN_INVALIDATION_REASON = 'post-completion-pain-report'
+
+/**
+ * Derives explanation invalidation without rewriting immutable adjustment_decision rows.
+ * Post-completion pain means "active increase/hold" prose is no longer honest framing.
+ */
+export function isFutureLoadExplanationInvalidated(session: WorkoutSessionView):
+  | { readonly invalidated: true; readonly invalidationReason: string }
+  | {
+      readonly invalidated: false
+      readonly invalidationReason: null
+    } {
+  if (session.status === 'completed' && session.feedback?.painReported === true) {
+    return {
+      invalidated: true,
+      invalidationReason: POST_COMPLETION_PAIN_INVALIDATION_REASON,
+    }
+  }
+  return { invalidated: false, invalidationReason: null }
+}
+
 /**
  * Maps a typed future-load decision view + session snapshot into the platform
  * PersistedFutureLoadDecision DTO. Does not invent loads or reason codes.
  *
  * Note: decision evaluation at complete currently hardcodes painReported=false into the
  * methodology call; we still surface session.feedback.painReported on the FactBundle for
- * honesty without rewriting the stored reasonCode.
+ * honesty without rewriting the stored reasonCode. Post-completion pain invalidates
+ * explanation generation only (ledger rows stay immutable).
  */
 export function toPersistedFutureLoadDecision(input: {
   readonly decision: FutureLoadDecisionView
@@ -88,8 +111,7 @@ export function toPersistedFutureLoadDecision(input: {
     )
   }
 
-  // Invalidation records are not on this branch's schema yet.
-  const invalidated = false
+  const { invalidated, invalidationReason } = isFutureLoadExplanationInvalidated(session)
 
   return {
     decisionId: decision.id,
@@ -110,7 +132,7 @@ export function toPersistedFutureLoadDecision(input: {
     methodologyVersion: decision.methodologyVersion,
     painReported: session.feedback?.painReported ?? null,
     invalidated,
-    invalidationReason: null,
+    invalidationReason,
     setFacts: exercise.sets.map(mapSetFact),
   }
 }

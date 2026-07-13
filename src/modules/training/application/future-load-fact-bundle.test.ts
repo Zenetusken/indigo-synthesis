@@ -102,8 +102,26 @@ describe('toPersistedFutureLoadDecision', () => {
     })
     expect(persisted.painReported).toBe(false)
     expect(persisted.invalidated).toBe(false)
+    expect(persisted.invalidationReason).toBeNull()
     expect(persisted.engineVersion).toBe('0.1.0-development')
     expect(persisted.methodologyId).toBe('development.methodology-fixture')
+  })
+
+  it('marks explanations invalidated when completed session has post-completion pain', () => {
+    const persisted = toPersistedFutureLoadDecision({
+      decision: baseDecision(),
+      session: baseSession({
+        feedback: { painReported: true, details: 'late report' },
+      }),
+      units: 'metric',
+      contentMode: 'development',
+    })
+    expect(persisted.painReported).toBe(true)
+    expect(persisted.invalidated).toBe(true)
+    expect(persisted.invalidationReason).toBe('post-completion-pain-report')
+    // Ledger fields unchanged.
+    expect(persisted.reasonCode).toBe('development.adjustment.increase')
+    expect(persisted.decision).toBe('increase')
   })
 
   it('maps unavailable to persisted decision kind unavailable (builder → blocked)', () => {

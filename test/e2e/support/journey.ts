@@ -129,10 +129,7 @@ export async function generateAndActivate(page: Page): Promise<void> {
 }
 
 /** Complete every open set at target load with the given RPE (default 8 → increase). */
-export async function completeAllSetsAtTarget(
-  page: Page,
-  rpe = '8',
-): Promise<void> {
+export async function completeAllSetsAtTarget(page: Page, rpe = '8'): Promise<void> {
   let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
   expect(remaining).toBeGreaterThan(0)
   while (remaining > 0) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeasurementSnapshot, formatMeasurementSummary } from './metrics'
-import { percentileMs } from './run-live-probe'
 import type { LiveProbeReport } from './run-live-probe'
+import { percentileMs } from './run-live-probe'
 import type { OfflineBaselineReport } from './run-offline-baseline'
 
 describe('percentileMs', () => {

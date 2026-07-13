@@ -62,6 +62,7 @@ import {
   athleteProfiles,
   auditEvents,
   exercisePrescriptions,
+  futureLoadExplanationCache,
   performedSetCorrections,
   performedSets,
   plannedWorkouts,
@@ -1588,6 +1589,7 @@ export async function reportPain(rawInput: {
     if (!(await claimCommandReceipt(transaction, input.commandId, receiptRequest))) return
 
     const now = new Date()
+    const wasCompleted = session.status === 'completed'
     if (session.status === 'active') {
       await transaction
         .update(workoutSessions)
@@ -1659,8 +1661,7 @@ export async function reportPain(rawInput: {
       entityType: 'workout-session',
       entityId: input.sessionId,
       metadata: {
-        action:
-          session.status === 'completed' ? 'post-completion-hold' : 'paused-and-held',
+        action: wasCompleted ? 'post-completion-hold' : 'paused-and-held',
         coalescedWithExistingHold: Boolean(existingHold),
         correctionId,
         invalidatedDecisionCount: invalidation?.decisionIds.length ?? 0,
@@ -1668,6 +1669,14 @@ export async function reportPain(rawInput: {
         pausedAffectedSessionCount: invalidation?.pausedSessionIds.length ?? 0,
       },
     })
+
+    // Non-ledger: drop cached paraphrases when a completed-session correction
+    // permanently invalidates the decisions they described.
+    if (wasCompleted) {
+      await transaction
+        .delete(futureLoadExplanationCache)
+        .where(eq(futureLoadExplanationCache.sessionId, input.sessionId))
+    }
   })
 }
 
@@ -1918,6 +1927,13 @@ export async function resolveSafetyHold(rawInput: {
         acknowledged: input.acknowledged,
       },
     })
+
+    // Non-ledger: drop cached paraphrases when post-completion pain invalidates framing.
+    if (wasCompleted) {
+      await transaction
+        .delete(futureLoadExplanationCache)
+        .where(eq(futureLoadExplanationCache.sessionId, input.sessionId))
+    }
   })
 }
 

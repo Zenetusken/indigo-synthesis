@@ -175,9 +175,13 @@ language models.
     policy remains GPU-only for local inference (`INDIGO_LLM_REQUIRE_GPU=true`).
   - **Product-path multi-run (same digest, `RUNS=3 pnpm llm:archive-product-path`):**
     offline 28/28 ×3; `test:e2e:llm` ok ×3 (~14.3–14.7s suite); live latency p50 ~1.2s,
-    p95 ~1.5s; live availableRate **1.0 / 0.75 / 1.0** (run 2: two `validation-failed`
-    on goldens). Product e2e still green when goldens flake—cache must store only
-    validation-passing prose and never lower the gate.
+    p95 ~1.5s. Earlier sample included availableRate **0.75** once (`validation-failed`);
+    integrity re-measure (2026-07-13 post-cache) hit **1.0 / 1.0 / 1.0**. Gate never
+    loosened—cache stores only validation-passing prose.
+  - **Explanation invalidation:** completed sessions with post-completion
+    `session_feedback.painReported=true` mark FactBundles `invalidated` with reason
+    `post-completion-pain-report` (ledger rows immutable). Explain returns
+    `decision-invalidated`; cache rows for the session are deleted inside `reportPain`.
 
 **History product path (implemented, default off):**
 
@@ -191,9 +195,9 @@ validation-passing available prose, keyed by contract `explanationCacheKey`. Cac
 skip model preflight/synthesize; History UI labels them `cached`. Cascades with user,
 session, and decision deletion. Not part of the immutable training ledger.
 
-**Still open:** Program-page Explain, decision.invalidated FactBundle wiring for active
-correction invalidation, any methodology authority change. `INDIGO_LLM_MODE` defaults to
-`disabled`. LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
+**Still open:** Program-page Explain, non-pain invalidation sources (if any), any
+methodology authority change. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
+**coaching** remains deferred. CI does not require GGUF weights.
 
 ## Production-release blockers
 

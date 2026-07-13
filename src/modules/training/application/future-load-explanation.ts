@@ -1,8 +1,8 @@
-import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   createPostgresFutureLoadExplanationCache,
   type FutureLoadExplanationCachePort,
 } from '@/modules/training/application/future-load-explanation-cache'
+import { getFutureLoadFactBundlesForSession } from '@/modules/training/application/future-load-fact-bundle'
 import {
   composeLlmStack,
   explanationCacheKey,
@@ -19,6 +19,7 @@ export type FutureLoadExplanationUnavailableReason =
   | 'llm-not-ready'
   | 'decision-not-found'
   | 'fact-bundle-failed'
+  | 'decision-invalidated'
   | 'synthesis-failed'
 
 export type FutureLoadExplanationResult =
@@ -107,6 +108,22 @@ export async function explainFutureLoadDecision(input: {
       status: 'unavailable',
       reason: 'decision-not-found',
       detail: 'No future-load decision matches this identifier for the session.',
+      durationMs: elapsed(),
+    }
+  }
+
+  // Semantic invalidation (e.g. post-completion pain): never serve model or cache prose.
+  if (item.factBundle.decision.invalidated) {
+    if (cache) {
+      await cache.deleteBySessionId(input.sessionId)
+    }
+    return {
+      status: 'unavailable',
+      reason: 'decision-invalidated',
+      detail:
+        item.factBundle.decision.invalidationReason === 'post-completion-pain-report'
+          ? 'A post-completion pain report was recorded. Stored rule codes remain; plain-language paraphrases of the prior decision are not offered.'
+          : 'This decision is no longer active for explanation. The rule codes above still apply.',
       durationMs: elapsed(),
     }
   }

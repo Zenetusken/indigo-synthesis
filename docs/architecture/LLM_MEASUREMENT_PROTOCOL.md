@@ -32,6 +32,8 @@ claim coaching quality or clinical validity.
 | H8 (live, optional) | A local model can produce validation-passing prose for golden cases | Live available rate = 0 with healthy server (informational until target set) |
 | H9 (product path, optional) | History Explain with local GPU yields grounded prose without hiding codes | `pnpm test:e2e:llm` fails or codes-first assertions fail |
 | H10 (product path, optional) | On-demand interactive latency is tolerable (not gym-critical) | Live `latencyMs.p95` / e2e action times explode relative to prior archive on same digest |
+| H11 (live quality, optional) | Residual live `validation-failed` is sampling noise, not a broken gate | Offline reject matrix fails or availableRate stays 0 with healthy server |
+| H12 (integrity) | Post-completion pain invalidates explanation framing and purges cache | Explain still returns available increase prose after post-completion pain |
 
 ## Metrics (offline, required)
 
@@ -114,3 +116,4 @@ with `RUNS=3`) before considering cache or broader enablement experiments.
 5. ~~History read-path experiment~~ (codes always; on-demand Explain; `pnpm test:e2e` LLM-off + `pnpm test:e2e:llm` GPU-on)
 6. ~~Product-path multi-run discipline + live latency metrics (H9/H10)~~ (`pnpm llm:archive-product-path`)
 7. ~~Explanation prose cache~~ (`future_load_explanation_cache`; validation-passing only; subject cascade)
+8. ~~Semantic invalidation~~ (post-completion pain → FactBundle `invalidated` + session cache purge)

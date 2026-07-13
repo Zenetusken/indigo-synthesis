@@ -30,6 +30,8 @@ export type FutureLoadExplanationCachePort = {
     readonly generateDurationMs: number
   }) => Promise<void>
   readonly deleteByDecisionId: (decisionId: string) => Promise<void>
+  /** Drop all cached prose for a session (e.g. post-completion pain invalidation). */
+  readonly deleteBySessionId: (sessionId: string) => Promise<void>
 }
 
 /**
@@ -92,11 +94,21 @@ export function createPostgresFutureLoadExplanationCache(): FutureLoadExplanatio
         .delete(futureLoadExplanationCache)
         .where(eq(futureLoadExplanationCache.decisionId, decisionId))
     },
+
+    async deleteBySessionId(sessionId) {
+      const db = getDb()
+      await db
+        .delete(futureLoadExplanationCache)
+        .where(eq(futureLoadExplanationCache.sessionId, sessionId))
+    },
   }
 }
 
 export function createMemoryFutureLoadExplanationCache(): FutureLoadExplanationCachePort {
-  const byKey = new Map<string, CachedFutureLoadExplanation & { decisionId: string }>()
+  const byKey = new Map<
+    string,
+    CachedFutureLoadExplanation & { decisionId: string; sessionId: string }
+  >()
   return {
     async getByCacheKey(cacheKey) {
       const hit = byKey.get(cacheKey)
@@ -114,6 +126,7 @@ export function createMemoryFutureLoadExplanationCache(): FutureLoadExplanationC
       if (byKey.has(input.cacheKey)) return
       byKey.set(input.cacheKey, {
         decisionId: input.decisionId,
+        sessionId: input.sessionId,
         prose: input.prose,
         modelId: input.modelId,
         modelContentDigest: input.modelContentDigest,
@@ -127,11 +140,18 @@ export function createMemoryFutureLoadExplanationCache(): FutureLoadExplanationC
         if (value.decisionId === decisionId) byKey.delete(key)
       }
     },
+    async deleteBySessionId(sessionId) {
+      for (const [key, value] of byKey) {
+        if (value.sessionId === sessionId) byKey.delete(key)
+      }
+    },
   }
 }
 
 /** Test helper: subject-scoped wipe when cascading user delete is not under test. */
-export async function deleteFutureLoadExplanationCacheForUser(userId: string): Promise<void> {
+export async function deleteFutureLoadExplanationCacheForUser(
+  userId: string,
+): Promise<void> {
   const db = getDb()
   await db
     .delete(futureLoadExplanationCache)
