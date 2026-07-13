@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveInstanceResetPlan } from '@/modules/data-portability/application/deletion'
 import { requireActor } from '@/modules/identity/server/actor'
+import { deletionCategoryLabel } from '../deletion-category-label'
 import { createResetPreviewAction, resetInstanceAction } from './actions'
 import styles from './delete.module.css'
 
@@ -71,7 +72,7 @@ export default async function DeleteSettingsPage({
             <dl className={styles.counts}>
               {Object.entries(plan.counts).map(([category, value]) => (
                 <div key={category}>
-                  <dt>{category}</dt>
+                  <dt>{deletionCategoryLabel(category)}</dt>
                   <dd>{value}</dd>
                 </div>
               ))}

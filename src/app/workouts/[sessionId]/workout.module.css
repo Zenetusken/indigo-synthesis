@@ -87,7 +87,7 @@
 .error,
 .invalidationStop,
 .safetyStop {
-  border-inline-start: 0.35rem solid var(--danger);
+  border-inline-start: var(--accent-edge) solid var(--danger);
   display: grid;
   gap: var(--space-2);
   max-width: 100%;
@@ -173,6 +173,11 @@
   gap: var(--space-1);
 }
 
+.substitutionDisclosure {
+  border-block: 0;
+  margin-block-start: var(--space-3);
+}
+
 .substitutionProof strong,
 .substitutionUnavailable strong {
   font: 700 var(--text-xs) / 1.4 var(--font-data);
@@ -187,7 +192,7 @@
 }
 
 .substitutionUnavailable {
-  border-inline-start: 0.25rem solid var(--plate-yellow);
+  border-inline-start: var(--accent-edge) solid var(--plate-yellow);
   outline: none;
   padding: var(--space-3) var(--space-4);
 }
@@ -239,7 +244,7 @@
   align-items: center;
   background: var(--paper);
   border: 1px solid var(--hairline-strong);
-  border-inline-start: 0.35rem solid var(--plate-yellow);
+  border-inline-start: var(--accent-edge) solid var(--plate-yellow);
   display: flex;
   gap: var(--space-6);
   justify-content: space-between;
@@ -356,6 +361,12 @@
   display: grid;
   gap: var(--space-3);
   grid-template-columns: repeat(3, minmax(5rem, 1fr));
+}
+
+/* Load/reps/RPE fill the three columns; the note field spans the full row
+   instead of orphaning into a single narrow cell. */
+.setForm label:nth-of-type(4) {
+  grid-column: 1 / -1;
 }
 
 .setForm label,

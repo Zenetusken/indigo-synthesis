@@ -2515,22 +2515,26 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
   if (!contentEligibility.eligible && contentEligibility.code !== 'content.revoked') {
     return null
   }
-  return getDb()
-    .select({
-      ...getTableColumns(adjustmentDecisions),
-      invalidatedAt: adjustmentDecisionInvalidations.createdAt,
-      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
-      invalidationReason: trainingFactCorrections.reason,
-    })
-    .from(adjustmentDecisions)
-    .leftJoin(
-      adjustmentDecisionInvalidations,
-      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
-    )
-    .leftJoin(
-      trainingFactCorrections,
-      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
-    )
-    .where(eq(adjustmentDecisions.sessionId, sessionId))
-    .orderBy(asc(adjustmentDecisions.exerciseCode))
+  return (
+    getDb()
+      .select({
+        ...getTableColumns(adjustmentDecisions),
+        invalidatedAt: adjustmentDecisionInvalidations.createdAt,
+        invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+        invalidationReason: trainingFactCorrections.reason,
+      })
+      .from(adjustmentDecisions)
+      .leftJoin(
+        adjustmentDecisionInvalidations,
+        eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+      )
+      .leftJoin(
+        trainingFactCorrections,
+        eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+      )
+      .where(eq(adjustmentDecisions.sessionId, sessionId))
+      // Present decisions in the order they were produced during completion (which
+      // follows the workout's exercise order), with a stable code tiebreak.
+      .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+  )
 }

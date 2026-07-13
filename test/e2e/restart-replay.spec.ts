@@ -222,6 +222,8 @@ test('replays real set and completion actions across restarts while substitution
   await completeSetupAndStartWorkout(page)
   const sessionId = await currentSessionId()
 
+  // The substitution proposal is collapsed behind a disclosure; open the first one.
+  await page.getByText('Request a substitution').first().click()
   const substitutionForm = page
     .getByRole('button', { name: 'Propose substitute' })
     .first()

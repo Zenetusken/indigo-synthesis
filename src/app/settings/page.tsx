@@ -55,18 +55,24 @@ export default async function SettingsPage() {
           </p>
         </section>
 
-        <section className={styles.section}>
-          <h2>Local users</h2>
-          <ul className={styles.userList}>
-            {localUsers.map((localUser) => (
-              <li key={localUser.id}>
-                <strong>{localUser.name}</strong>
-                <span>{localUser.email}</span>
-              </li>
-            ))}
-          </ul>
-          {actor.role === 'owner' ? <LocalUserForm /> : null}
-        </section>
+        {actor.role === 'owner' ? (
+          <section className={styles.section}>
+            <h2>Local users</h2>
+            {localUsers.length > 0 ? (
+              <ul className={styles.userList}>
+                {localUsers.map((localUser) => (
+                  <li key={localUser.id}>
+                    <strong>{localUser.name}</strong>
+                    <span>{localUser.email}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No additional local users yet.</p>
+            )}
+            <LocalUserForm />
+          </section>
+        ) : null}
 
         <section className={styles.section}>
           <h2>Data export</h2>
