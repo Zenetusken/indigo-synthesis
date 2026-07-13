@@ -232,7 +232,7 @@ describe('runtime attestation', () => {
     })
   })
 
-  it('requires the exact context length in the runtime command policy', async () => {
+  it('requires canonical GPU and context literals in the runtime command policy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'indigo-command-policy-'))
     temporaryDirectories.push(directory)
     const weightsPath = join(directory, 'qwen.gguf')
@@ -269,5 +269,16 @@ describe('runtime attestation', () => {
     expect(runtimeCommandMatchesPolicy([...command, '--ctx-size', '8192'], policy)).toBe(
       false,
     )
+    for (const contextLookalike of ['04096', '+4096', '4096.0', '4.096e3']) {
+      expect(
+        runtimeCommandMatchesPolicy([...command.slice(0, -1), contextLookalike], policy),
+      ).toBe(false)
+    }
+    const gpuLayersIndex = command.indexOf('all')
+    for (const gpuLayersLookalike of ['-2', 'ALL', 'all ']) {
+      const lookalikeCommand = [...command]
+      lookalikeCommand[gpuLayersIndex] = gpuLayersLookalike
+      expect(runtimeCommandMatchesPolicy(lookalikeCommand, policy)).toBe(false)
+    }
   })
 })

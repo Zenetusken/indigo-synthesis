@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { getTableName, isTable } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
+import * as databaseSchema from '@/platform/db/schema'
+import { e2eApplicationDataResetTableOrder } from '../e2e/support/application-data-reset'
 
 const projectRoot = process.cwd()
 
@@ -69,6 +72,59 @@ describe('clean-clone operator contract', () => {
     )
     expect(playwrightConfig).toContain('llm-live.spec.ts')
     expect(playwrightConfig).toMatch(/testIgnore/)
+  })
+
+  it('keeps every application table in the production-aligned E2E clear order', () => {
+    const schemaTables = Object.values(databaseSchema)
+      .filter(isTable)
+      .map((table) => getTableName(table))
+      .sort()
+    const e2eTables = [...e2eApplicationDataResetTableOrder]
+
+    expect(new Set(e2eTables).size).toBe(e2eTables.length)
+    expect([...e2eTables].sort()).toEqual(schemaTables)
+
+    const deletionSource = readFileSync(
+      resolve(projectRoot, 'src/modules/data-portability/application/deletion.ts'),
+      'utf8',
+    )
+    const instanceResetStart = deletionSource.indexOf(
+      'export async function executeInstanceReset',
+    )
+    expect(instanceResetStart).toBeGreaterThan(-1)
+    const productionTableExports = [
+      ...deletionSource
+        .slice(instanceResetStart)
+        .matchAll(/await transaction\s*\.delete\((\w+)\)/g),
+    ].map((match) => match[1])
+    const tableNameByExport = new Map<string, string>()
+    for (const [exportName, table] of Object.entries(databaseSchema)) {
+      if (isTable(table)) tableNameByExport.set(exportName, getTableName(table))
+    }
+    const productionTables = productionTableExports.map((exportName) => {
+      const tableName = tableNameByExport.get(exportName)
+      if (!tableName) {
+        throw new Error(`Unknown schema table export in instance reset: ${exportName}`)
+      }
+      return tableName
+    })
+
+    // Production preserves the singleton and prior non-identifying tombstones; E2E
+    // deliberately removes both to provide a clean owner-bootstrap fixture.
+    expect(e2eTables).toEqual([
+      'installation_state',
+      ...productionTables,
+      'deletion_tombstone',
+    ])
+
+    const restartReplay = readFileSync(
+      resolve(projectRoot, 'test/e2e/restart-replay.spec.ts'),
+      'utf8',
+    )
+    expect(restartReplay).not.toContain('TRUNCATE TABLE')
+    expect(restartReplay).toContain(
+      "import { clearApplicationData } from './support/journey'",
+    )
   })
 
   it('scrubs dynamic-loader injection from the supported LLM launcher', () => {

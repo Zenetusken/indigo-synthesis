@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 indigo_host_lock_dir() {
-  # Fixed parent keeps the lock host-wide even when worktrees inherit different
-  # XDG_RUNTIME_DIR/TMPDIR values. The per-UID leaf is atomically created below.
+  # A fixed parent keeps each user's namespace stable across worktrees even when
+  # XDG_RUNTIME_DIR/TMPDIR differ. The per-UID leaf is atomically created below.
   local parent="/tmp"
   local directory="$parent/indigo-synthesis-locks-${UID}"
   if mkdir -m 700 "$directory" 2>/dev/null; then

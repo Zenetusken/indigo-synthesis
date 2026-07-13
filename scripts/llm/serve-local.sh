@@ -6,6 +6,25 @@ set -euo pipefail
 PORT="${INDIGO_LLM_PORT:-8080}"
 HOST="${INDIGO_LLM_HOST:-127.0.0.1}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/scripts/lib/host-lock.sh"
+source "$ROOT/scripts/lib/llm-runtime.sh"
+if (( $# > 0 )); then
+  if (( $# != 2 )) || [[ "$1" != "--check-inherited-lifecycle-lock" ]]; then
+    echo "FATAL: unsupported serve-local argument" >&2
+    exit 2
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "FATAL: flock is required to validate an inherited lifecycle lock" >&2
+    exit 2
+  fi
+  if [[ "${INDIGO_LLM_LIFECYCLE_LOCK_FD:-}" != "9" ]]; then
+    echo "FATAL: inherited LLM lifecycle lock must use fd 9" >&2
+    exit 2
+  fi
+  indigo_validate_inherited_llm_lifecycle_lock "$2" 9
+  echo "Inherited LLM lifecycle lock is valid"
+  exit 0
+fi
 if [[ -n "${INDIGO_LLM_WEIGHTS:-}" ]]; then
   echo "FATAL: INDIGO_LLM_WEIGHTS is unsupported; use the committed llm/weights artifact path" >&2
   exit 2
@@ -42,6 +61,44 @@ if [[ "$NGL" != "all" ]]; then
 fi
 if [[ "$REQUIRE_GPU" == "false" || "$REQUIRE_GPU" == "0" ]]; then
   echo "FATAL: supported local inference requires CUDA; use an ad-hoc command for diagnosis" >&2
+  exit 2
+fi
+
+if ! command -v flock >/dev/null 2>&1; then
+  echo "FATAL: flock is required to serialize LLM runtime transitions" >&2
+  exit 2
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "FATAL: curl is required to verify the LLM runtime handoff" >&2
+  exit 2
+fi
+LOCK_DIR="$(indigo_host_lock_dir)"
+LIFECYCLE_LOCK="$LOCK_DIR/llm-runtime-lifecycle.lock"
+LIFECYCLE_LOCK_FD=9
+OWNS_LIFECYCLE_LOCK=false
+if [[ -n "${INDIGO_LLM_LIFECYCLE_LOCK_FD:-}" ]]; then
+  if [[ "$INDIGO_LLM_LIFECYCLE_LOCK_FD" != "$LIFECYCLE_LOCK_FD" ]]; then
+    echo "FATAL: inherited LLM lifecycle lock must use fd $LIFECYCLE_LOCK_FD" >&2
+    exit 2
+  fi
+  indigo_validate_inherited_llm_lifecycle_lock \
+    "$LIFECYCLE_LOCK" \
+    "$LIFECYCLE_LOCK_FD"
+else
+  exec 9>"$LIFECYCLE_LOCK"
+  if ! flock -n "$LIFECYCLE_LOCK_FD"; then
+    echo "FATAL: another LLM runtime transition is active ($LIFECYCLE_LOCK)" >&2
+    exit 75
+  fi
+  export INDIGO_LLM_LIFECYCLE_LOCK_FD="$LIFECYCLE_LOCK_FD"
+  OWNS_LIFECYCLE_LOCK=true
+fi
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "FATAL: lsof is required to prevent duplicate local model starts" >&2
+  exit 2
+fi
+if [[ -n "$(lsof -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)" ]]; then
+  echo "FATAL: $HOST:$PORT already has a listener; use pnpm llm:measure-gpu for an attested replacement" >&2
   exit 2
 fi
 
@@ -104,9 +161,44 @@ node --import tsx scripts/llm/write-runtime-attestation.ts \
   --weights "$WEIGHTS" \
   --output "$ATTESTATION_PATH"
 
+if [[ "$OWNS_LIFECYCLE_LOCK" == "true" ]]; then
+  LAUNCHER_PID=$$
+  (
+    set +e
+    for _ in $(seq 1 180); do
+      if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+        flock -u "$LIFECYCLE_LOCK_FD"
+        exit 0
+      fi
+      if curl -sf "http://$HOST:$PORT/v1/models" >/dev/null 2>&1 && \
+        INDIGO_LLM_MODE=local \
+        INDIGO_LLM_REQUIRE_GPU=true \
+        INDIGO_LLM_MODEL_ID="$MODEL_ID" \
+        INDIGO_LLM_MODEL_SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \
+        INDIGO_LLM_ENDPOINT="http://$HOST:$PORT/v1" \
+        INDIGO_LLM_TIMEOUT_MS=3000 \
+        INDIGO_LLM_MODELS_DIR="$ROOT/llm/models" \
+        INDIGO_LLM_WEIGHTS_DIR="$ROOT/llm/weights" \
+        INDIGO_LLM_ATTESTATION_PATH="$ATTESTATION_PATH" \
+        node --import tsx scripts/llm/preflight.ts --json >/dev/null 2>&1; then
+        flock -u "$LIFECYCLE_LOCK_FD"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "ERROR: runtime handoff is still unverified after 180 seconds; retaining lifecycle lock until PID $LAUNCHER_PID exits" >&2
+    indigo_hold_llm_lifecycle_lock_until_exit \
+      "$LAUNCHER_PID" \
+      "$LIFECYCLE_LOCK_FD"
+  ) &
+fi
+
 echo "Starting GPU llama-server"
 echo "  bin=$LLAMA_BIN"
 echo "  model=$WEIGHTS alias=$ALIAS host=$HOST port=$PORT ngl=$NGL ctx=$CTX"
+# This is intentionally after attestation hashing and immediately before process
+# launch. Every supported start therefore has exact artifact bytes + 4 GiB free.
+indigo_assert_llm_model_load_memory "$ROOT"
 exec "$LLAMA_BIN" \
   --model "$WEIGHTS" \
   --host "$HOST" \

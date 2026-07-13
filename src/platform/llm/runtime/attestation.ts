@@ -177,15 +177,15 @@ export function runtimeCommandMatchesPolicy(
 ): boolean {
   const commandWeights = commandOption(command, '--model', '-m')
   const commandGpuLayers = commandOption(command, '--n-gpu-layers', '-ngl')
-  const normalizedCommandGpuLayers =
-    commandGpuLayers === 'all' ? -2 : Number(commandGpuLayers)
+  const commandContextTokens = commandOption(command, '--ctx-size', '-c')
   return (
     commandWeights === policy.weightsRealpath &&
     commandOption(command, '--alias', '-a') === policy.servedModelName &&
-    normalizedCommandGpuLayers === policy.gpuLayers &&
+    policy.gpuLayers === -2 &&
+    commandGpuLayers === 'all' &&
     commandOption(command, '--host') === policy.host &&
     commandOption(command, '--port') === policy.port &&
-    Number(commandOption(command, '--ctx-size', '-c')) === policy.contextTokens
+    commandContextTokens === policy.contextTokens.toString(10)
   )
 }
 

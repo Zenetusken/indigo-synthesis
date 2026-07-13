@@ -5,6 +5,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+source scripts/lib/host-lock.sh
+source scripts/lib/llm-runtime.sh
+
+if ! command -v flock >/dev/null 2>&1; then
+  echo "FATAL: flock is required to serialize LLM runtime transitions" >&2
+  exit 2
+fi
+LOCK_DIR="$(indigo_host_lock_dir)"
+LIFECYCLE_LOCK="$LOCK_DIR/llm-runtime-lifecycle.lock"
+exec 9>"$LIFECYCLE_LOCK"
+if ! flock -n 9; then
+  echo "FATAL: another LLM runtime transition is active ($LIFECYCLE_LOCK)" >&2
+  exit 75
+fi
+export INDIGO_LLM_LIFECYCLE_LOCK_FD=9
+trap 'flock -u 9 2>/dev/null || true' EXIT
+umask 077
 
 export INDIGO_LLM_REQUIRE_GPU=true
 export INDIGO_LLM_MODE=local
@@ -25,7 +42,7 @@ export INDIGO_LLM_PORT=8080
 echo "=== 1) GPU health ==="
 nvidia-smi
 echo "Loaded module: $(cat /sys/module/nvidia/version)"
-echo "MemAvailable: $(awk '/MemAvailable/ {printf \"%.1f GiB\\n\", $2/1024/1024}' /proc/meminfo)"
+echo "MemAvailable: $(awk '/MemAvailable/ {printf "%.1f GiB\n", $2/1024/1024}' /proc/meminfo)"
 
 echo "=== 2) Ensure pinned CUDA llama-server binary ==="
 LOCKED_BINARY_SHA256="$(node -p "JSON.parse(require('fs').readFileSync('llm/runtime/llama-cpp.lock.json', 'utf8')).serverBinarySha256")"
@@ -55,32 +72,29 @@ if ! command -v lsof >/dev/null 2>&1; then
   echo "FATAL: lsof is required to verify listener ownership safely" >&2
   exit 2
 fi
-LISTENER_PID="$(lsof -t -iTCP:8080 -sTCP:LISTEN 2>/dev/null | head -1 || true)"
-if [[ -n "$LISTENER_PID" ]]; then
-  LISTENER_EXE="$(readlink -f "/proc/$LISTENER_PID/exe" 2>/dev/null || true)"
-  EXPECTED_EXE="$(readlink -f "$INDIGO_LLAMA_SERVER")"
-  LISTENER_COMMAND="$(tr '\0' ' ' < "/proc/$LISTENER_PID/cmdline" 2>/dev/null || true)"
-  if [[ "$LISTENER_EXE" != "$EXPECTED_EXE" || "$LISTENER_COMMAND" != *"qwen3.5-9b-q4_k_m.gguf"* ]]; then
-    echo "FATAL: :8080 is owned by an unrelated process; refusing to kill PID $LISTENER_PID" >&2
-    exit 2
-  fi
-  kill "$LISTENER_PID"
-  for _ in $(seq 1 20); do
-    kill -0 "$LISTENER_PID" 2>/dev/null || break
-    sleep 0.25
-  done
-  if kill -0 "$LISTENER_PID" 2>/dev/null; then
-    echo "FATAL: prior matching listener PID $LISTENER_PID did not stop" >&2
-    exit 2
-  fi
+mapfile -t LISTENER_PIDS < <(lsof -t -iTCP:8080 -sTCP:LISTEN 2>/dev/null | sort -u)
+if (( ${#LISTENER_PIDS[@]} > 1 )); then
+  echo "FATAL: :8080 reports multiple listener PIDs; refusing shutdown" >&2
+  printf '  pid=%s\n' "${LISTENER_PIDS[@]}" >&2
+  exit 2
+fi
+if (( ${#LISTENER_PIDS[@]} == 1 )); then
+  node --import tsx scripts/llm/stop-attested-runtime.ts \
+    --root "$ROOT" \
+    --attestation "$INDIGO_LLM_ATTESTATION_PATH" \
+    --listener-pid "${LISTENER_PIDS[0]}"
 fi
 if [[ -n "$(lsof -t -iTCP:8080 -sTCP:LISTEN 2>/dev/null || true)" ]]; then
   echo "FATAL: :8080 is still occupied after the owned-listener stop" >&2
   exit 2
 fi
 
+# Re-evaluate full model-load headroom after the old model has actually exited.
+indigo_assert_llm_model_load_memory "$ROOT"
+
 echo "=== 4) Start pinned GPU server (background) ==="
-LOG=/tmp/indigo-llama-gpu.log
+LOG="$(mktemp "$LOCK_DIR/llama-gpu-log.XXXXXX")"
+chmod 600 "$LOG"
 nohup bash scripts/llm/serve-local.sh >"$LOG" 2>&1 &
 SERVER_PID=$!
 echo "server pid=$SERVER_PID log=$LOG"
@@ -121,7 +135,8 @@ echo "=== 6) GPU memory after model load ==="
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv
 
 echo "=== 7) Live baseline measurement (JSON) ==="
-OUT="/tmp/indigo-llm-gpu-measure-$(date -u +%Y%m%dT%H%M%SZ).json"
+OUT="$(mktemp "$LOCK_DIR/llm-gpu-measure.XXXXXX.json")"
+chmod 600 "$OUT"
 # Invoke the TypeScript entrypoint directly so the archive is pure JSON rather than
 # pnpm's command banner followed by JSON.
 INDIGO_LLM_LIVE=1 node --import tsx scripts/llm/validate-baseline.ts --json | tee "$OUT"

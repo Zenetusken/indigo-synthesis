@@ -1,15 +1,5 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import {
-  chmod,
-  mkdir,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  writeFile,
-} from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseArgs, promisify } from 'node:util'
 import {
@@ -17,6 +7,7 @@ import {
   parseProcessStartTimeTicks,
   type RuntimeAttestationPayload,
 } from '../../src/platform/llm/runtime/attestation'
+import { assertStableFileIdentity, hashStableFileIdentity } from './stable-file-identity'
 
 type ArtifactLock = {
   readonly schemaVersion: 1
@@ -46,31 +37,6 @@ type RuntimeLock = {
 }
 
 const execFileAsync = promisify(execFile)
-
-async function sha256File(path: string): Promise<string> {
-  const hash = createHash('sha256')
-  await new Promise<void>((resolvePromise, reject) => {
-    const input = createReadStream(path)
-    input.on('data', (chunk) => hash.update(chunk))
-    input.on('error', reject)
-    input.on('end', resolvePromise)
-  })
-  return hash.digest('hex')
-}
-
-async function fileIdentity(path: string, sha256: string) {
-  const canonicalPath = await realpath(path)
-  const metadata = await stat(canonicalPath, { bigint: true })
-  if (!metadata.isFile()) throw new Error(`${canonicalPath} is not a regular file`)
-  return {
-    realpath: canonicalPath,
-    device: metadata.dev.toString(10),
-    inode: metadata.ino.toString(10),
-    sizeBytes: Number(metadata.size),
-    mtimeMs: Number(metadata.mtimeMs),
-    sha256,
-  }
-}
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf8')) as T
@@ -106,11 +72,11 @@ const runtimeLock = await readJson<RuntimeLock>(
 
 const pid = Number(required(values.pid, 'pid'))
 const gpuLayersInput = required(values['gpu-layers'], 'gpu-layers')
-const gpuLayers = gpuLayersInput === 'all' ? -2 : Number(gpuLayersInput)
 if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('--pid must be positive')
-if (gpuLayers !== -2) {
+if (gpuLayersInput !== 'all') {
   throw new Error('--gpu-layers must be all for product readiness')
 }
+const gpuLayers = -2 as const
 
 const binary = required(values.binary, 'binary')
 const weights = required(values.weights, 'weights')
@@ -141,31 +107,24 @@ if (basename(weights) !== artifactLock.installedFilename) {
   )
 }
 
-const weightsMetadata = await stat(weights)
-if (weightsMetadata.size !== artifactLock.sizeBytes) {
-  throw new Error(
-    `Weights size ${weightsMetadata.size} does not match lock ${artifactLock.sizeBytes}`,
-  )
-}
-
-const [weightsSha256, binarySha256, processStat] = await Promise.all([
-  sha256File(weights),
-  sha256File(binary),
+const [weightsIdentity, runtimeIdentity, processStat] = await Promise.all([
+  hashStableFileIdentity(weights, 'Model weights'),
+  hashStableFileIdentity(binary, 'llama-server binary'),
   readFile(`/proc/${pid}/stat`, 'utf8'),
 ])
-const binaryMetadata = await stat(binary)
 if (
-  binarySha256 !== runtimeLock.serverBinarySha256 ||
-  binaryMetadata.size !== runtimeLock.serverBinarySizeBytes
+  runtimeIdentity.sha256 !== runtimeLock.serverBinarySha256 ||
+  runtimeIdentity.sizeBytes !== runtimeLock.serverBinarySizeBytes
 ) {
   throw new Error(
     'llama-server binary digest or size does not match the pinned runtime lock',
   )
 }
-if (weightsSha256 !== artifactLock.sha256) {
-  throw new Error(
-    `Weights SHA-256 ${weightsSha256} does not match lock ${artifactLock.sha256}`,
-  )
+if (
+  weightsIdentity.sha256 !== artifactLock.sha256 ||
+  weightsIdentity.sizeBytes !== artifactLock.sizeBytes
+) {
+  throw new Error(`Weights digest or size does not match the committed artifact lock`)
 }
 
 const configuredDigest = process.env.INDIGO_LLM_MODEL_SHA256
@@ -173,18 +132,16 @@ if (configuredDigest && configuredDigest !== artifactLock.sha256) {
   throw new Error('INDIGO_LLM_MODEL_SHA256 disagrees with the committed artifact lock')
 }
 
-const [runtimeIdentity, weightsIdentity] = await Promise.all([
-  fileIdentity(binary, binarySha256),
-  fileIdentity(weights, weightsSha256),
-])
 const runtimeDirectory = dirname(runtimeIdentity.realpath)
 const runtimeLibraries = await Promise.all(
   runtimeLock.runtimeLibraries.map(async (lockedLibrary) => {
     const path = join(runtimeDirectory, lockedLibrary.filename)
-    const sha256 = await sha256File(path)
-    const identity = await fileIdentity(path, sha256)
+    const identity = await hashStableFileIdentity(
+      path,
+      `Runtime library ${lockedLibrary.filename}`,
+    )
     if (
-      sha256 !== lockedLibrary.sha256 ||
+      identity.sha256 !== lockedLibrary.sha256 ||
       identity.sizeBytes !== lockedLibrary.sizeBytes
     ) {
       throw new Error(
@@ -194,6 +151,20 @@ const runtimeLibraries = await Promise.all(
     return { filename: lockedLibrary.filename, ...identity }
   }),
 )
+
+// All expensive hashes are complete. Revalidate every launch path together so a
+// replacement during a later file's hash cannot pair stale content with new stat data.
+await Promise.all([
+  assertStableFileIdentity(binary, runtimeIdentity, 'llama-server binary'),
+  assertStableFileIdentity(weights, weightsIdentity, 'Model weights'),
+  ...runtimeLibraries.map((library) =>
+    assertStableFileIdentity(
+      join(runtimeDirectory, library.filename),
+      library,
+      `Runtime library ${library.filename}`,
+    ),
+  ),
+])
 
 const payload: RuntimeAttestationPayload = {
   schemaVersion: 1,
