@@ -103,7 +103,7 @@ pnpm test:e2e
 INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 ```
 
-At this snapshot, Biome, TypeScript, 497 unit/domain/architecture tests, 106 database
+At this snapshot, Biome, TypeScript, 502 unit/domain/architecture tests, 106 database
 integration tests, dedicated upgrade proofs, the full 15/15 default Playwright suite
 including the supervised restart/replay journeys, PostgreSQL preflight/fresh migration
 across sixteen ledger entries and 28 required integrity triggers, and the explicit

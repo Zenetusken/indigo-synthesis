@@ -2601,6 +2601,13 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
     })
     .from(adjustmentDecisions)
     .leftJoin(
+      sessionExercises,
+      and(
+        eq(sessionExercises.sessionId, adjustmentDecisions.sessionId),
+        eq(sessionExercises.exerciseCode, adjustmentDecisions.exerciseCode),
+      ),
+    )
+    .leftJoin(
       adjustmentDecisionInvalidations,
       eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
     )
@@ -2609,7 +2616,7 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
       eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
     )
     .where(eq(adjustmentDecisions.sessionId, sessionId))
-    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+    .orderBy(asc(sessionExercises.ordinal), asc(adjustmentDecisions.exerciseCode))
 }
 
 /**
@@ -2686,7 +2693,7 @@ export async function getSessionFutureLoadDecisions(
       eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
     )
     .where(eq(adjustmentDecisions.sessionId, sessionId))
-    .orderBy(asc(adjustmentDecisions.createdAt), asc(adjustmentDecisions.exerciseCode))
+    .orderBy(asc(sessionExercises.ordinal), asc(adjustmentDecisions.exerciseCode))
 
   return rows.map((row) => ({
     id: row.id,

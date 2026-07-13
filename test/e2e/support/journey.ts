@@ -86,7 +86,10 @@ export async function clearApplicationData(): Promise<void> {
   }
 }
 
-export async function bootstrapAndSignIn(page: Page): Promise<void> {
+export async function bootstrapAndSignIn(
+  page: Page,
+  options: { readonly verifyClaimGuard?: boolean } = {},
+): Promise<void> {
   const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
   await closeDb()
 
@@ -102,6 +105,27 @@ export async function bootstrapAndSignIn(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Create owner account' }).click()
 
   await expect(page).toHaveURL(/\/sign-in\?created=1/)
+  if (options.verifyClaimGuard) {
+    // Bootstrap renders a prefetched wordmark link to `/` while the instance is open.
+    // After claim, that client navigation must use the invalidated closed-instance tree.
+    await page.getByRole('link', { name: 'Indigo Synthesis' }).click()
+    await expect(page).toHaveURL(/\/sign-in$/)
+    await expect(
+      page.getByRole('heading', { name: 'Initialize this instance.' }),
+    ).toHaveCount(0)
+
+    const guarded = await page.request.get('/bootstrap', { maxRedirects: 0 })
+    expect(guarded.status()).toBe(307)
+    expect(guarded.headers().location).toBe('/sign-in')
+
+    // An App Router RSC redirect may be logged as a 200 envelope. A document request
+    // must still redirect, and browser navigation must never resurrect bootstrap UI.
+    await page.goto('/bootstrap')
+    await expect(page).toHaveURL(/\/sign-in$/)
+    await expect(
+      page.getByRole('heading', { name: 'Initialize this instance.' }),
+    ).toHaveCount(0)
+  }
   await page.getByLabel('Email').fill(e2eOwner.email)
   await page.getByLabel('Password').fill(e2eOwner.password)
   await page.getByRole('button', { name: 'Sign in' }).click()

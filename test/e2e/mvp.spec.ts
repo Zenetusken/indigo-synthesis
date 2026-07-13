@@ -110,7 +110,7 @@ test('rejects bootstrap with an invalid or missing code', async ({ page }) => {
 })
 
 test('completes the unmocked J1–J6 development journey', async ({ page }) => {
-  await bootstrapAndSignIn(page)
+  await bootstrapAndSignIn(page, { verifyClaimGuard: true })
   await completeSetup(page)
   await generateAndActivate(page)
 
@@ -150,6 +150,13 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   ).toBeVisible()
   await expect(page.getByText('development.back-squat', { exact: true })).toHaveCount(0)
   await expectFutureLoadHistoryCodes(page)
+  await expect(
+    page.locator('section[aria-labelledby="adjustment-heading"] li strong'),
+  ).toHaveText([
+    'Back squat — development fixture',
+    'Bench press — development fixture',
+    'Barbell row — development fixture',
+  ])
   await expectExplainDegradesWhenLlmDisabled(page)
 
   await page.goto('/today')
