@@ -1,15 +1,15 @@
 # LLM grounded-explanation remediation specification
 
-Status: implemented
+Status: implemented and merged; historical closure record for PR #6 and follow-up PR #7
 Date: 2026-07-13
-Scope: `feat/llm-modular-inference-layer`
+Scope: merged grounded-explanation arc on `main`
 
 ## Purpose
 
-Close the audited safety, provenance, concurrency, portability, product-path, and operator
-contract gaps before the optional grounded-explanation branch can continue. This work does
-not expand model authority: deterministic methodology rows and reason codes remain the only
-training decisions.
+This document records how the audited safety, provenance, concurrency, portability,
+product-path, and operator-contract gaps were closed before the optional
+grounded-explanation slice was accepted. The merged work does not expand model authority:
+deterministic methodology rows and reason codes remain the only training decisions.
 
 ## Root causes
 
@@ -126,7 +126,7 @@ training decisions.
 - RAM readiness distinguishes pre-load model-plus-headroom capacity from the 4 GiB
   operating reserve required after the exact runtime is already attested and resident.
 - Completion responses must return the exact configured model name.
-- Completion, `/models`, and `/props` requests reject redirects and keep abort timers active
+- Completion, `/v1/models`, and `/props` requests reject redirects and keep abort timers active
   through body parsing.
 
 ### Data ownership
@@ -184,6 +184,9 @@ label adjacent to completed-session facts. It uses no new animation or decorativ
 6. **Final evidence.** Full integration, default E2E, live preflight, three-run archive, live
    GPU E2E, clean worktree, and independent review. Any review correction is a small final
    commit, not folded into an unrelated layer.
+
+All six stages were completed across the original feature PR and the post-merge hardening
+PR. This sequence remains as implementation history, not an open branch plan.
 
 ## Completion criteria
 

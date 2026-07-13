@@ -7,6 +7,7 @@ import { listLocalUsersAsOwner } from '@/modules/identity/server/local-users'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { pluralize } from '@/platform/format/plural'
 import { LocalUserForm } from './local-user-form'
+import { MemberResetForm } from './member-reset-form'
 import styles from './settings.module.css'
 
 export const dynamic = 'force-dynamic'
@@ -62,8 +63,19 @@ export default async function SettingsPage() {
               <ul className={styles.userList}>
                 {localUsers.map((localUser) => (
                   <li key={localUser.id}>
-                    <strong>{localUser.name}</strong>
-                    <span>{localUser.email}</span>
+                    <div>
+                      <strong>{localUser.name}</strong>
+                      <span>{localUser.email}</span>
+                      <small>
+                        {localUser.id === actor.userId ? 'Instance owner' : 'Trainee'}
+                      </small>
+                    </div>
+                    {localUser.id !== actor.userId ? (
+                      <MemberResetForm
+                        targetUserId={localUser.id}
+                        targetName={localUser.name}
+                      />
+                    ) : null}
                   </li>
                 ))}
               </ul>

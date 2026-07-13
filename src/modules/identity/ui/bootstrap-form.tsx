@@ -15,6 +15,12 @@ export function BootstrapForm() {
     if (error) errorRef.current?.focus()
   }, [error])
 
+  function leaveBootstrap(url: '/sign-in?created=1' | '/sign-in?claimed=1') {
+    // Claiming the singleton installation is irreversible. The server action invalidates
+    // the pre-claim Router Cache; replace the one-time history entry after it returns.
+    router.replace(url)
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setPending(true)
@@ -39,11 +45,11 @@ export function BootstrapForm() {
       })
 
       if (result.kind === 'created') {
-        router.push('/sign-in?created=1')
+        leaveBootstrap('/sign-in?created=1')
         return
       }
       if (result.kind === 'closed') {
-        router.push('/sign-in?claimed=1')
+        leaveBootstrap('/sign-in?claimed=1')
         return
       }
       setError(
@@ -53,7 +59,7 @@ export function BootstrapForm() {
       try {
         const status = await getOwnerBootstrapStatus()
         if (status === 'closed') {
-          router.push('/sign-in?claimed=1')
+          leaveBootstrap('/sign-in?claimed=1')
           return
         }
         setError('Creation did not complete. Your entries remain; try again.')

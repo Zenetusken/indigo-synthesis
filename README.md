@@ -8,7 +8,9 @@ implementations around one narrow loop:
 The repository now contains a working **engineering MVP**: local authentication and
 owner bootstrap, trainee setup, deterministic development-program generation, Today,
 workout execution, history, a bounded future adjustment, export, subject deletion, and
-owner-controlled instance reset.
+owner-controlled instance reset. It also implements owner-mediated trainee reset,
+host-issued owner recovery through CLI or web redemption, and claimed-instance recovery
+orientation.
 
 It is **not a production coaching release**. The only bundled program and adjustment
 policy are conspicuously labeled development fixtures. They have not received independent
@@ -34,8 +36,12 @@ production mode. See [MVP status and traceability](docs/MVP_STATUS.md).
 
 - one-time, transactionally serialized first-owner bootstrap;
 - local email/password accounts and PostgreSQL-backed sessions through Better Auth;
-- owner-created local users with cross-user authorization boundaries;
-- host-local, expiring, one-use owner credential recovery;
+- reauthenticated owner-created local users with cross-user authorization boundaries;
+- owner-mediated, expiring, one-use trainee reset with session revocation and a
+  cause-neutral return to the exact persisted workout after sign-in;
+- host-issued, expiring, one-use owner credential recovery through protected CLI files or
+  web redemption, with CLI redemption retained as the host-trust escape path;
+- claimed-instance sign-in guidance for trainee, owner, and no-account visitors;
 - trainee units, timezone, goal, experience, schedule, equipment, baseline loads, and
   trainee-reported limitation context;
 - deterministic, versioned program revisions with normalized-input and output hashes;
@@ -124,6 +130,23 @@ RUNS=3 pnpm llm:archive-product-path   # multi-run archive → tmp/llm-runs/
 `pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The
 database-backed suites are intentionally separate because they require PostgreSQL.
 
+Two opt-in operational proofs are also checked in:
+
+```sh
+pnpm db:backup-restore-drill
+bash scripts/e2e/run-network-denied.sh
+```
+
+The first creates, wipes, restores, verifies, and removes only a guarded random
+disposable database; the second runs the default browser suite in a Linux namespace with
+no non-loopback interface or default route. Read
+[`docs/operations/BACKUP_RESTORE.md`](docs/operations/BACKUP_RESTORE.md) and
+[`docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md`](docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md)
+before using them. The current committed 19-test isolation proof is retained in
+[`docs/operations/evidence/2026-07-13-outbound-network-blocked.md`](docs/operations/evidence/2026-07-13-outbound-network-blocked.md).
+Neither substitutes for encrypted off-host retention, a second-person cold restore, or
+independent security/accessibility review.
+
 Before the first browser run, install the pinned Playwright Chromium build and create the
 ignored local E2E configuration from the checked-in template:
 
@@ -132,11 +155,20 @@ pnpm exec playwright install chromium
 cp .env.e2e.example .env.e2e.local
 ```
 
-The suite holds one per-UID, machine-local non-blocking lock across reset and Playwright,
-so a second default/live/worktree run by the same operating-system user fails before it
-can terminate the first run's database connections or bind its ports. The optional
+The canonical `pnpm test:e2e` and `pnpm test:e2e:llm` wrappers hold one per-UID,
+machine-local non-blocking lock across reset and Playwright, so a second
+default/live/worktree run by the same operating-system user fails before it can
+terminate the first run's database connections or bind its ports. The optional
 `INDIGO_E2E_APPLICATION_PORT` and `INDIGO_E2E_SUPERVISOR_PORT` overrides are for
 explicitly isolated diagnostics; the committed defaults remain 3100/3101.
+
+Both checked-in Playwright configurations also validate and pin the disposable database
+target while loading, and per-test application-data cleanup revalidates the original
+administration/target pair immediately before opening a database connection. Direct
+Playwright CLI and VS Code extension runs therefore cannot bypass the destructive-target
+guard. They do not perform the wrapper's serialized drop/recreate step, so use the
+documented `pnpm` commands for canonical evidence and direct invocation only for an
+explicitly isolated diagnostic.
 
 Review `.env.e2e.local` before running the suite. Give it a distinct test-only secret and
 keep its target on the same explicit loopback PostgreSQL host, port, and username as
@@ -200,10 +232,12 @@ owner.
 
 ## Owner recovery
 
-Owner recovery is deliberately host-local and two-step. Secret values are accepted only
-through absolute-path files owned by the invoking POSIX effective user; they are never
-command arguments or browser inputs. The resolved parent directory must have the same
-owner and must not be writable by group or other users.
+Owner recovery is deliberately host-anchored and two-step. Issuance always requires the
+host command and writes the one-time code to an absolute-path file owned by the invoking
+POSIX effective user. Redemption may use protected CLI files or the unauthenticated
+`/recover` form; the web path sends the code and replacement password only in a POST body,
+never a URL, and applies fixed-window admission limits. The resolved parent directory for
+CLI files must have the same owner and must not be writable by group or other users.
 
 ```sh
 pnpm owner:recover issue \
@@ -218,12 +252,12 @@ pnpm owner:recover redeem \
 ```
 
 The issue command creates the code file exclusively with mode `0600`, so that path must
-not already exist. The password file must already exist as a regular, owner-only file
-with mode `0400` or `0600` and contain exactly one line with 12–128 characters. Symbolic
-links, oversized files, extra lines, and NUL bytes are refused. The TTL must be 5–60 whole
-minutes. Redemption reads through the validated open descriptors, changes the credential,
-revokes existing owner sessions, records a redacted audit event, and removes the code only
-if its path still names the opened inode.
+not already exist. For CLI redemption, the password file must already exist as a regular,
+owner-only file with mode `0400` or `0600` and contain exactly one line with 12–128
+characters. Symbolic links, oversized files, extra lines, and NUL bytes are refused. The
+TTL must be 5–60 whole minutes. Both redemption channels change the credential, revoke
+existing owner sessions, and record a redacted channel-aware audit event. Successful CLI
+redemption removes the code only if its path still names the opened inode.
 
 ## Repository map
 
@@ -232,6 +266,7 @@ if its path still names the opened inode.
 - `docs/discovery/` — source coverage and failure synthesis
 - `docs/product/` — vision, canonical requirements, methodology gate, and claim policy
 - `docs/architecture/` — runtime shape, stack, self-hosting contract, and ADRs
+- `docs/operations/` — guarded operator procedures and retained drill evidence
 - `docs/design/` — experience and visual-design direction
 - `docs/ROADMAP.md` — gated path from the engineering MVP to a releasable product
 - `docs/DEFERRED.md` — explicit non-goals and re-entry criteria
@@ -239,6 +274,8 @@ if its path still names the opened inode.
   behavior
 - `src/platform/db/` and `drizzle/` — PostgreSQL schema, preflight, and the sole committed
   migration ledger
+- `src/platform/llm/` and `llm/` — optional grounded-language contracts, guarded
+  loopback runtime integration, exact artifact/runtime locks, and operator tooling
 - `test/integration/` and `test/e2e/` — database and real-browser proof
 
 Start with [the product vision](docs/product/VISION.md), then read

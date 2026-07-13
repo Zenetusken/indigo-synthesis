@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { getInstallationStatus } from '../application/installation'
 import {
   createOwnerWithBootstrapCode,
@@ -19,12 +20,14 @@ export async function bootstrapOwner(input: {
 }): Promise<BootstrapOwnerResult> {
   try {
     await createOwnerWithBootstrapCode(input)
+    revalidatePath('/', 'layout')
     return { kind: 'created' }
   } catch (error) {
     if (
       error instanceof OwnerBootstrapError &&
       error.code === 'owner-bootstrap.instance-closed'
     ) {
+      revalidatePath('/', 'layout')
       return { kind: 'closed' }
     }
     return { kind: 'rejected' }
@@ -32,5 +35,7 @@ export async function bootstrapOwner(input: {
 }
 
 export async function getOwnerBootstrapStatus(): Promise<'open' | 'closed'> {
-  return (await getInstallationStatus()).kind
+  const status = (await getInstallationStatus()).kind
+  if (status === 'closed') revalidatePath('/', 'layout')
+  return status
 }

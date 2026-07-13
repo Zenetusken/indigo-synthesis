@@ -185,6 +185,10 @@ describe.sequential('destructive deletion hardening', () => {
     await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
       code: 'deletion.reauthentication-locked',
     } satisfies Partial<DeletionError>)
+    const [auditsAtLockout] = await getDb()
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'destructive-reauthentication-denied'))
     await expect(subjectDeletionAttempt(ownerPassword)).rejects.toMatchObject({
       code: 'deletion.reauthentication-locked',
     } satisfies Partial<DeletionError>)
@@ -198,6 +202,11 @@ describe.sequential('destructive deletion hardening', () => {
       purpose: 'trainee-data-deletion',
     })
     expect(lockedSubjectState?.lockedUntil?.getTime()).toBeGreaterThan(Date.now())
+    const [auditsAfterSuppressedAttempt] = await getDb()
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'destructive-reauthentication-denied'))
+    expect(auditsAfterSuppressedAttempt?.value).toBe(auditsAtLockout?.value)
     const [subjectPlansAfterDenial] = await getDb()
       .select({ value: count() })
       .from(deletionPlans)
@@ -285,7 +294,7 @@ describe.sequential('destructive deletion hardening', () => {
       .select({ entityId: auditEvents.entityId, metadata: auditEvents.metadata })
       .from(auditEvents)
       .where(eq(auditEvents.eventType, 'destructive-reauthentication-denied'))
-    expect(deniedAudit).toHaveLength(10)
+    expect(deniedAudit).toHaveLength(9)
     expect(deniedAudit.every((event) => event.entityId !== null)).toBe(true)
     expect(
       deniedAudit.map((event) => (event.metadata as { outcome?: string }).outcome),

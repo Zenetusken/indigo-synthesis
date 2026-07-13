@@ -172,7 +172,7 @@ type ExplanationGenerationResult =
       readonly runtimeId: string // verified runtime commit + process identity
       readonly promptVersion: string
       readonly factBundleHash: string
-      readonly generatedAt: string // UTC ISO from application clock port, not the model
+      readonly generatedAt: string // UTC ISO from an application-side clock function, not the model
     }
   | {
       readonly status: 'unavailable'
@@ -270,16 +270,25 @@ explanationCacheKey =
   + '\0' + factBundleHash
 ```
 
-Storage is PostgreSQL `future_load_explanation_cache`. Rows retain served-model,
-runtime, runtime-attestation, prompt, validator, FactBundle, and generation-duration
-provenance. Schema upgrades purge rows that cannot prove the current contract rather
-than relabeling them.
+Storage is the Training-owned PostgreSQL `future_load_explanation_cache`. Rows retain
+served-model, runtime, runtime-attestation, prompt, validator, FactBundle, and
+generation-duration provenance. Data Portability currently projects, counts, and deletes
+these rows through its documented direct transactional path; that boundary debt does not
+transfer domain authority. Schema upgrades purge rows that cannot prove the current
+contract rather than relabeling them.
 
 Every cache hit is revalidated by the current validator before presentation. Identity
 or validation failure deletes the row and regenerates only through the normal guarded
 path. `validatorVersion` participates in the key.
 
 ### 7.2 Invalidation
+
+Before cache lookup or generation, the application rechecks the completed session's
+current content eligibility. Explicitly revoked sessions remain available as factual
+History with stored codes while the UI disables Explain. Other environment-ineligible
+sessions are omitted from History; if the explanation use case is invoked directly, it
+returns application-level `content-ineligible`. This guard precedes the generation port
+and therefore is not an `LlmUnavailableReason`.
 
 Drop or mark stale when any of:
 
@@ -295,6 +304,11 @@ runtime preflight on a cache hit.
 
 Cached prose is **not** part of the immutable training ledger. Deleting it must not
 delete the adjustment decision.
+
+Eligibility governs serving, not subject portability. A subject export retains owned
+cached explanation rows and their full provenance even if the owning content later becomes
+ineligible without revocation. Current eligibility and revocation status are exported
+separately so historical data remains interpretable.
 
 ### 7.3 Concurrency and failure semantics
 
@@ -318,8 +332,8 @@ delete the adjustment decision.
 | --- | --- |
 | Complete set / complete workout | **Never** await the model on the critical path |
 | Adjustment rows committed | Optional best-effort enqueue or skip |
-| History view | Lazy generate on cache miss if enabled; show codes immediately |
-| Model timeout | Default ≤ 3000 ms for interactive lazy path; then `unavailable` |
+| Explicit History Explain action | Lazy generate on cache miss if enabled; codes are already visible |
+| Model timeout | Exactly 3000 ms for the supported interactive lazy path; then `unavailable` |
 | Model down | Codes-only UI; no synthetic fallback prose |
 
 No Redis, queue product, or WebSocket is required. The implemented path is explicit lazy
@@ -337,8 +351,17 @@ Rules:
 
 - Inference is host-local only (loopback HTTP or in-process); not exposed as a public
   origin and not a mandatory cloud call.
+- Every TypeScript LLM HTTP request—completion, `/v1/models`, and `/props`—passes through
+  the sole `fetchLoopback` network primitive. It revalidates an HTTP(S) loopback target
+  immediately before I/O and forces `redirect: 'error'`.
+- Architecture tests reject direct, aliased, destructured, computed, or promise-carried
+  runtime network globals and forbidden HTTP/raw-socket modules everywhere else. Type-only
+  `fetch` references used for injectable test signatures remain allowed.
 - Core config remains valid with inference unset.
-- Application outbound-network-blocked proofs still pass with inference disabled.
+- Inference-disabled operation remains compatible with the required
+  outbound-network-denied release proof. With inference disabled, the namespace runner
+  passed the complete 19-test default tree from clean committed product tree
+  `7c7ea334d4c88d9279abe574031881a23a15f32c`.
 - Adapters are swappable behind `ExplanationGenerationPort` (different engines/formats
   are infrastructure choices, not domain changes).
 - Implemented optional config surface (the listed model/runtime values are the current

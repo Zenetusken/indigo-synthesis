@@ -15,16 +15,20 @@ Core product operation requires only:
 
 No other service is authoritative or mandatory.
 
+The optional grounded-language path is outside that core topology. When explicitly
+enabled, it adds one host-local, loopback-only llama.cpp HTTP process; PostgreSQL and the
+Node.js application remain authoritative, and every core journey continues to work when
+that process is absent.
+
 ## Network trust boundary
 
 There are two distinct access modes:
 
-- **Local development:** plain HTTP is supported only through the loopback origin
-  `http://127.0.0.1:3000`. The checked-in development command binds that address
-  explicitly.
+- **Loopback-local use:** plain HTTP is supported only through a loopback origin such as
+  `http://127.0.0.1:3000`. Both checked-in runtime commands bind that address explicitly.
 - **Network use:** a phone, LAN client, public hostname, or any non-loopback client must
-  use an externally visible HTTPS origin. Production authentication cookies are always
-  `Secure`.
+  use an externally visible HTTPS origin. Cookies for an HTTPS origin are `Secure`;
+  loopback-HTTP cookies remain `HttpOnly` and `SameSite=Lax` but cannot carry `Secure`.
 
 Network use therefore has an environmental ingress prerequisite: the operator supplies a
 TLS terminator in front of the Node process (or an equivalent HTTPS-capable host layer).
@@ -42,7 +46,14 @@ resolved, avoiding a spoofable or globally shared rate-limit bucket.
 
 ## No mandatory outbound network
 
-After installation, the complete core journey works with outbound network access blocked.
+After installation, the complete core journey is designed to work with outbound network
+access blocked. Source guards and browser request observation cover the normal suite. A
+checked-in Linux namespace runner additionally removes every non-loopback interface and
+default route while exposing PostgreSQL through a private Unix-socket bridge. The complete
+19-test default tree passed from clean committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`; the retained record identifies the exact
+environment and proof limits. Any later product/runtime or default-suite change requires
+a new run.
 
 Therefore:
 
@@ -90,11 +101,13 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18, the committed migration ledger including the
-exact canonical 0004 program-ordinal hash, owner bootstrap enforcement, current
-snapshot/revision columns, correction/invalidation structures, append-only content
-release revocations, and the required integrity triggers. `pnpm start` runs this
-preflight before starting the production server. Both
+`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 17 current committed migration
+hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
+enforcement, current snapshot/revision and correction/invalidation structures,
+append-only content-release revocations, the access/recovery persistence and HMAC-keyed
+admission contract, the explanation-cache contract, and all 28 required enabled
+trigger/table/function bindings. `pnpm start` runs this preflight before starting the
+production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.
@@ -112,12 +125,24 @@ Development content is never a production fallback: a production process rejects
 - Database user insertion requires an explicit transaction-local `bootstrap-owner` or
   `owner-admin` creation mode. Missing and unknown modes fail closed.
 - Public signup remains off after bootstrap.
-- The owner can create or invite local users according to the approved user model.
-- The current slice has no SMTP or browser password-reset adapter. If the only owner is
-  locked out, a host-local administrative command with database access may issue an
-  expiring one-use recovery code. Redemption revokes existing sessions and records a
-  redacted audit event. Member self-service reset and optional SMTP remain future work.
-- Core auth does not expose refresh tokens to browser JavaScript.
+- The owner can create local users only after current-password reauthentication; the
+  initial password is shared out of band. No invitation or email-delivery flow exists.
+- A reauthenticated owner may issue an expiring, one-use reset code for a non-owner
+  account. The trainee redeems it through `/reset` and chooses the final password. The
+  owner account cannot be a member-reset target.
+- If the only owner is locked out, a host-local administrative command with database
+  access issues an expiring, one-use recovery code. Redemption is available through
+  protected CLI files or `/recover`; the latter is never a browser-only recovery path
+  because issuance remains host-anchored.
+- Both recovery flows replace the credential, revoke every affected PostgreSQL session,
+  and append a redacted audit event. Web recovery uses HMAC-keyed fixed-window admission,
+  minimized client-address audit data, and bounded cleanup; raw identifiers and secrets
+  do not enter throttle or audit rows.
+- Session reads disable cookie caching. Core credential auth exposes no bearer, JWT, or
+  refresh-token path to browser JavaScript, so database session revocation takes effect
+  on the next request.
+- The current slice has no SMTP/self-service email reset, public signup, role mutation,
+  standalone session-management UI, or security-events view.
 
 ## Data ownership
 
@@ -129,11 +154,18 @@ The complete backup boundary is:
 Export is a product feature, not a database-admin substitute. It includes a schema
 version and enough provenance to interpret programs, sessions, and recommendations.
 
-Deletion is an explicit destruction exception to immutable history. Modules delete or
-redact scoped personal records in referential order inside one transaction; Identity is
-last. The retained system tombstone contains only event metadata, row counts, schema
-version, and a completion digest. Deletion and restore behavior are tested in the first
-release journey and drilled again before beta.
+Deletion is an explicit destruction exception to immutable history. The current Data
+Portability workflow directly deletes or redacts scoped personal records in referential
+order inside one serializable transaction; Identity is last. Subject deletion retains a
+non-personal completion tombstone. Instance reset also retains the cleared singleton
+installation record and any earlier non-personal tombstones, then appends its own
+tombstone. Tombstones contain only event metadata, aggregate row counts, schema version,
+and a completion digest. Subject deletion and instance reset are tested. A guarded
+manual PostgreSQL backup/restore procedure and disposable-database drill now exercise
+logical archive, full schema wipe/restore, exact marker recovery, append-only trigger
+behavior, and startup preflight. Operators still own encryption, off-host retention,
+runtime-secret custody, deployment-specific restore practice, recovery objectives, and
+any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
 
 ## Privacy and telemetry
 
@@ -145,7 +177,9 @@ release journey and drilled again before beta.
 
 ## Supported baseline
 
-The first supported topology is one application instance and one PostgreSQL instance.
+The first supported core topology is one application instance and one PostgreSQL
+instance. An explicitly enabled local-language path may add the non-authoritative
+loopback inference process described above.
 Multi-instance cache coordination, HA databases, replicas, failover, and multi-region
 operation are not implicit requirements.
 
@@ -169,6 +203,11 @@ without need.
 The first release gate includes a test environment where outbound network is denied and
 only the application, PostgreSQL, and optional media directory are available.
 
-This remains an open release proof. The implementation has no mandatory runtime cloud
-adapter, but the complete browser journey has not yet been retained from an
-outbound-network-denied environment. See [MVP status](../MVP_STATUS.md).
+`scripts/e2e/run-network-denied.sh` supplies that runtime boundary and passed the complete
+19-test default tree from committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`. See the
+[acceptance runbook](../operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md) and
+[retained evidence](../operations/evidence/2026-07-13-outbound-network-blocked.md), plus
+[MVP status](../MVP_STATUS.md). Independent methodology, security/privacy, WCAG,
+physical-device, cold-install, HTTPS-ingress, and off-host-retention gates remain
+separate.

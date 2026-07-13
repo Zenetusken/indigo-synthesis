@@ -35,6 +35,8 @@ export const e2eApplicationDataResetTableOrder = [
   'audit_event',
   'deletion_plan',
   'destructive_reauthentication_state',
+  'member_reset_state',
+  'web_recovery_rate_limit_bucket',
   'verification',
   'session',
   'account',

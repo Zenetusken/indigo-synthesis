@@ -11,15 +11,20 @@ fake sync, and incompatible state APIs.
 
 ## Decision
 
-Core use requires no mandatory external/cloud service and is tested with outbound network
-blocked. Durable state is saved to PostgreSQL through the self-hosted application.
-Offline mutation queues and conflict resolution are deferred. Plain HTTP is supported
-only on loopback for development; phone, LAN, and other non-loopback use requires an
-HTTPS origin through an operator-supplied TLS terminator.
+Core use requires no mandatory external/cloud service and must work with outbound network
+blocked. Source guards and browser request observation cover the normal suite. A
+checked-in namespace runner additionally passed the complete 19-test default tree from
+clean committed product tree `7c7ea334d4c88d9279abe574031881a23a15f32c` with no
+non-loopback interface or default route. Durable state is saved to PostgreSQL through the
+self-hosted application. Offline mutation queues and conflict resolution are deferred.
+Plain HTTP is supported only for loopback-local use; phone, LAN, and other non-loopback
+use requires an HTTPS origin through an operator-supplied TLS terminator.
 
 ## Consequences
 
-- Runtime remains one Node process plus PostgreSQL
+- Core runtime remains one Node process plus PostgreSQL. Optional grounded-language
+  generation may add one non-authoritative, host-local loopback HTTP process; core use
+  never depends on it
 - A TLS terminator is an ingress prerequisite for network use, not a product datastore or
   application authority; repository-supplied proxy/certificate automation is deferred
 - Refresh/restart recovery is required; disconnected multi-mutation operation is not

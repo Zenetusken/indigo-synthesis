@@ -4,15 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { and, count, eq, sql } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { admitWebRecoveryAttempt } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
 import {
   issueOwnerRecovery,
   redeemOwnerRecovery,
+  redeemOwnerRecoveryWeb,
 } from '@/modules/identity/recovery/owner-recovery'
 import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
@@ -22,7 +24,13 @@ import {
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
-import { auditEvents, session, user, verification } from '@/platform/db/schema'
+import {
+  auditEvents,
+  session,
+  user,
+  verification,
+  webRecoveryRateLimitBuckets,
+} from '@/platform/db/schema'
 
 const execFile = promisify(execFileCallback)
 const owner = {
@@ -116,6 +124,10 @@ beforeAll(async () => {
   await chmod(secretsDirectory, 0o700)
 })
 
+beforeEach(async () => {
+  await getDb().delete(webRecoveryRateLimitBuckets)
+})
+
 afterAll(async () => {
   resetAuthForTests()
   await closeDb()
@@ -126,6 +138,150 @@ afterAll(async () => {
 })
 
 describe('host-local owner recovery', () => {
+  it('commits one redacted host audit when owner-recovery issuance is rejected', async () => {
+    const [before] = await getDb()
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'owner-recovery-rejected'))
+
+    await expect(
+      issueOwnerRecovery({
+        ownerEmail: 'not-the-installed-owner@example.test',
+        ttlMinutes: 15,
+      }),
+    ).rejects.toMatchObject({ code: 'owner-recovery.owner-mismatch' })
+
+    const rejected = await getDb()
+      .select({
+        subjectUserId: auditEvents.subjectUserId,
+        entityId: auditEvents.entityId,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'owner-recovery-rejected'))
+    expect(rejected).toHaveLength(Number(before?.value ?? 0) + 1)
+    expect(rejected.at(-1)).toEqual({
+      subjectUserId: ownerUserId,
+      entityId: null,
+      metadata: { channel: 'host-local-cli', outcome: 'rejected' },
+    })
+    expect(JSON.stringify(rejected.at(-1))).not.toContain(
+      'not-the-installed-owner@example.test',
+    )
+  })
+
+  it('invalidates every outstanding recovery code when the auth secret rotates', async () => {
+    const issued = await issueOwnerRecovery({ ownerEmail: owner.email, ttlMinutes: 15 })
+    const originalSecret = process.env.BETTER_AUTH_SECRET
+    process.env.BETTER_AUTH_SECRET = 'rotated-owner-recovery-secret-1234567890'
+    resetServerConfigForTests()
+    resetAuthForTests()
+
+    try {
+      await expect(
+        redeemOwnerRecovery({
+          ownerEmail: owner.email,
+          code: issued.code,
+          newPassword: owner.recoveredPassword,
+        }),
+      ).rejects.toMatchObject({ code: 'owner-recovery.code-invalid' })
+    } finally {
+      if (originalSecret === undefined) delete process.env.BETTER_AUTH_SECRET
+      else process.env.BETTER_AUTH_SECRET = originalSecret
+      resetServerConfigForTests()
+      resetAuthForTests()
+    }
+
+    const [pending] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, issued.recoveryId))
+    expect(pending?.id).toBe(issued.recoveryId)
+    await getDb().delete(verification).where(eq(verification.id, issued.recoveryId))
+  })
+
+  it('rejects an oversized web replacement without hashing it into the credential', async () => {
+    const issued = await issueOwnerRecovery({
+      ownerEmail: owner.email,
+      ttlMinutes: 15,
+    })
+    const oversizedPassword = 'x'.repeat(256_000)
+
+    await expect(
+      redeemOwnerRecoveryWeb({
+        ownerEmail: owner.email,
+        code: issued.code,
+        newPassword: oversizedPassword,
+        requestContext: { channel: 'web', clientAddress: '198.51.100.82' },
+      }),
+    ).resolves.toEqual({
+      kind: 'rejected',
+      message: 'The email, code, or password was not accepted.',
+    })
+
+    const [pending] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, issued.recoveryId))
+    expect(pending?.id).toBe(issued.recoveryId)
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: owner.email,
+          password: owner.originalPassword,
+        })
+      ).status,
+    ).toBe(200)
+    await getDb().delete(verification).where(eq(verification.id, issued.recoveryId))
+  })
+
+  it('serializes wrong-email web recovery on the installed owner account lock', async () => {
+    const signInHandled = deferred<Response>()
+    const releaseSignInLock = deferred<void>()
+    const signInPromise = handleAuthRequest(
+      createAuthRequest('/sign-in/email', {
+        email: owner.email,
+        password: owner.originalPassword,
+      }),
+      async (request) => {
+        try {
+          const response = await getAuth().handler(request)
+          signInHandled.resolve(response)
+          await releaseSignInLock.promise
+          return response
+        } catch (error) {
+          signInHandled.reject(error)
+          throw error
+        }
+      },
+    )
+    const signInResponse = await signInHandled.promise
+    expect(signInResponse.status).toBe(200)
+
+    const recoveryPromise = redeemOwnerRecoveryWeb({
+      ownerEmail: 'wrong-owner@example.test',
+      code: 'wrong-owner-recovery-code',
+      newPassword: 'wrong-owner-recovery-password',
+      requestContext: { channel: 'web', clientAddress: '198.51.100.81' },
+    })
+    try {
+      await waitForBlockedCredentialLock()
+    } finally {
+      releaseSignInLock.resolve(undefined)
+    }
+
+    const completedSignIn = await signInPromise
+    expect(completedSignIn.status).toBe(signInResponse.status)
+    expect(completedSignIn.headers.get('set-cookie')).toBe(
+      signInResponse.headers.get('set-cookie'),
+    )
+    expect(await completedSignIn.json()).not.toHaveProperty('token')
+    await expect(recoveryPromise).resolves.toEqual({
+      kind: 'rejected',
+      message: 'The email, code, or password was not accepted.',
+    })
+  })
+
   it('expires and consumes an elapsed recovery code without changing the credential', async () => {
     const issuedAt = new Date('2026-07-11T12:00:00.000Z')
     const issued = await issueOwnerRecovery({
@@ -133,6 +289,10 @@ describe('host-local owner recovery', () => {
       ttlMinutes: 5,
       now: issuedAt,
     })
+    const [rejectionsBefore] = await getDb()
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'owner-recovery-rejected'))
 
     await expect(
       redeemOwnerRecovery({
@@ -146,7 +306,21 @@ describe('host-local owner recovery', () => {
     })
 
     const [pendingCount] = await getDb().select({ value: count() }).from(verification)
+    const rejected = await getDb()
+      .select({
+        subjectUserId: auditEvents.subjectUserId,
+        entityId: auditEvents.entityId,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .where(eq(auditEvents.eventType, 'owner-recovery-rejected'))
     expect(pendingCount?.value).toBe(0)
+    expect(rejected).toHaveLength(Number(rejectionsBefore?.value ?? 0) + 1)
+    expect(rejected.at(-1)).toEqual({
+      subjectUserId: ownerUserId,
+      entityId: issued.recoveryId,
+      metadata: { channel: 'host-local-cli', outcome: 'rejected' },
+    })
 
     const stillAuthenticates = await authRequest('/sign-in/email', {
       email: owner.email,
@@ -203,7 +377,12 @@ describe('host-local owner recovery', () => {
       releaseSignInLock.resolve(undefined)
     }
 
-    await expect(signInPromise).resolves.toBe(signInResponse)
+    const completedSignIn = await signInPromise
+    expect(completedSignIn.status).toBe(signInResponse.status)
+    expect(completedSignIn.headers.get('set-cookie')).toBe(
+      signInResponse.headers.get('set-cookie'),
+    )
+    expect(await completedSignIn.json()).not.toHaveProperty('token')
     const recovery = await recoveryPromise
     expect(recovery).toMatchObject({
       ownerUserId,
@@ -335,6 +514,14 @@ describe('host-local owner recovery', () => {
     expect(recoveryAudits.some((event) => event.type === 'owner-recovery-redeemed')).toBe(
       true,
     )
+    expect(
+      recoveryAudits.every(
+        (event) =>
+          typeof event.metadata === 'object' &&
+          event.metadata !== null &&
+          'outcome' in event.metadata,
+      ),
+    ).toBe(true)
     const serializedAudit = JSON.stringify(recoveryAudits)
     expect(serializedAudit).not.toContain(code)
     expect(serializedAudit).not.toContain(owner.originalPassword)
@@ -346,5 +533,127 @@ describe('host-local owner recovery', () => {
       .from(user)
       .where(eq(user.id, ownerUserId))
     expect(ownerStillPresent?.id).toBe(ownerUserId)
+  })
+
+  it('redeems on the web with uniform failure, minimized audit, and a CLI flood escape', async () => {
+    const webPassword = 'web-recovered-owner-password'
+    const issuedAt = new Date('2026-07-13T15:00:00.000Z')
+    const issued = await issueOwnerRecovery({
+      ownerEmail: owner.email,
+      ttlMinutes: 15,
+      now: issuedAt,
+    })
+    const requestContext = {
+      channel: 'web',
+      clientAddress: '198.51.100.77',
+    } as const
+
+    const rejected = await redeemOwnerRecoveryWeb({
+      ownerEmail: owner.email,
+      code: `${issued.code}-wrong`,
+      newPassword: webPassword,
+      requestContext,
+      now: issuedAt,
+    })
+    expect(rejected).toEqual({
+      kind: 'rejected',
+      message: 'The email, code, or password was not accepted.',
+    })
+
+    const redeemed = await redeemOwnerRecoveryWeb({
+      ownerEmail: owner.email,
+      code: issued.code,
+      newPassword: webPassword,
+      requestContext,
+      now: new Date(issuedAt.getTime() + 1),
+    })
+    expect(redeemed).toMatchObject({ kind: 'redeemed', ownerUserId })
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: owner.email,
+          password: owner.recoveredPassword,
+        })
+      ).ok,
+    ).toBe(false)
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: owner.email,
+          password: webPassword,
+        })
+      ).status,
+    ).toBe(200)
+
+    const webAudits = await getDb()
+      .select({
+        eventType: auditEvents.eventType,
+        entityId: auditEvents.entityId,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, 'owner-recovery'),
+          eq(auditEvents.subjectUserId, ownerUserId),
+        ),
+      )
+    const webEvents = webAudits.filter(
+      (event) =>
+        (event.metadata as { channel?: string }).channel === 'web' &&
+        event.entityId === issued.recoveryId,
+    )
+    expect(webEvents.map((event) => event.eventType)).toEqual([
+      'owner-recovery-rejected',
+      'owner-recovery-redeemed',
+    ])
+    const serializedWebAudit = JSON.stringify(webEvents)
+    expect(serializedWebAudit).toContain('198.51.100.0/24')
+    expect(serializedWebAudit).not.toContain(requestContext.clientAddress)
+    expect(serializedWebAudit).not.toContain(issued.code)
+    expect(serializedWebAudit).not.toContain(webPassword)
+
+    const cliEscape = await issueOwnerRecovery({
+      ownerEmail: owner.email,
+      ttlMinutes: 15,
+      now: new Date(issuedAt.getTime() + 60_001),
+    })
+    const floodStart = new Date(issuedAt.getTime() + 60_002)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        admitWebRecoveryAttempt({
+          purpose: 'owner-recovery',
+          email: owner.email,
+          clientAddress: requestContext.clientAddress,
+          now: new Date(floodStart.getTime() + attempt),
+        }),
+      ).resolves.toEqual({ admitted: true })
+    }
+    await expect(
+      admitWebRecoveryAttempt({
+        purpose: 'owner-recovery',
+        email: owner.email,
+        clientAddress: requestContext.clientAddress,
+        now: new Date(floodStart.getTime() + 5),
+      }),
+    ).resolves.toMatchObject({ admitted: false })
+
+    const cliPassword = 'cli-escape-owner-password'
+    await expect(
+      redeemOwnerRecovery({
+        ownerEmail: owner.email,
+        code: cliEscape.code,
+        newPassword: cliPassword,
+        now: new Date(floodStart.getTime() + 6),
+      }),
+    ).resolves.toMatchObject({ ownerUserId })
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: owner.email,
+          password: cliPassword,
+        })
+      ).status,
+    ).toBe(200)
   })
 })

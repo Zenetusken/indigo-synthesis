@@ -18,11 +18,12 @@ export type DatabasePreflight = {
   readonly trainingCorrectionIntegrityPresent: boolean
   readonly contentRevocationIntegrityPresent: boolean
   readonly llmCacheContractPresent: boolean
+  readonly accessRecoveryPersistencePresent: boolean
   readonly integrityTriggerCount: number
   readonly ineligibleContentRevisionCount: number
 }
 
-export const expectedMigrationCount = 16
+export const expectedMigrationCount = 17
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -183,6 +184,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     trainingCorrectionResult,
     contentRevocationResult,
     llmCacheResult,
+    accessRecoveryResult,
     integrityResult,
   ] = await Promise.all([
     db.execute<{ version: string; versionNumber: string }>(sql`
@@ -535,6 +537,147 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
         )
         AS present
     `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        to_regclass('public.member_reset_state') IS NOT NULL
+        AND to_regclass('public.web_recovery_rate_limit_bucket') IS NOT NULL
+        AND (
+          SELECT count(*) = 8
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'member_reset_state'
+            AND column_name IN (
+              'target_user_id', 'active_verification_id', 'last_issued_at',
+              'failed_attempts', 'retry_after', 'last_attempt_at',
+              'created_at', 'updated_at'
+            )
+        )
+        AND (
+          SELECT count(*) = 8
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'web_recovery_rate_limit_bucket'
+            AND column_name IN (
+              'scope', 'bucket_key', 'window_started_at', 'attempt_count',
+              'retry_after', 'last_attempt_at', 'created_at', 'updated_at'
+            )
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.member_reset_state')
+            AND conname = 'member_reset_state_target_user_id_user_id_fk'
+            AND contype = 'f'
+            AND confrelid = to_regclass('public.user')
+            AND confdeltype = 'c' AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.member_reset_state')
+            AND conname = 'member_reset_state_active_verification_id_verification_id_fk'
+            AND contype = 'f'
+            AND confrelid = to_regclass('public.verification')
+            AND confdeltype = 'n' AND convalidated
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.member_reset_state_pkey')
+            AND indrelid = to_regclass('public.member_reset_state')
+            AND indisprimary AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['target_user_id']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.member_reset_state_active_verification_uidx'
+            )
+            AND indrelid = to_regclass('public.member_reset_state')
+            AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['active_verification_id']
+        )
+        AND (
+          SELECT count(*) = 4
+          FROM pg_constraint
+          WHERE conrelid = to_regclass('public.member_reset_state')
+            AND contype = 'c' AND convalidated
+            AND conname IN (
+              'member_reset_state_attempts_check',
+              'member_reset_state_attempt_shape_check',
+              'member_reset_state_attempt_order_check',
+              'member_reset_state_retry_check'
+            )
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.web_recovery_rate_limit_bucket_pk'
+          )
+            AND indrelid = to_regclass('public.web_recovery_rate_limit_bucket')
+            AND indisprimary AND indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['scope', 'bucket_key']
+        )
+        AND (
+          SELECT count(*) = 5
+          FROM pg_constraint
+          WHERE conrelid = to_regclass('public.web_recovery_rate_limit_bucket')
+            AND contype = 'c' AND convalidated
+            AND conname IN (
+              'web_recovery_rate_limit_bucket_scope_check',
+              'web_recovery_rate_limit_bucket_key_check',
+              'web_recovery_rate_limit_bucket_attempts_check',
+              'web_recovery_rate_limit_bucket_window_check',
+              'web_recovery_rate_limit_bucket_retry_check'
+            )
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.web_recovery_rate_limit_bucket_updated_idx'
+          )
+            AND indrelid = to_regclass('public.web_recovery_rate_limit_bucket')
+            AND indisvalid AND indisready AND indpred IS NULL
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['updated_at', 'scope', 'bucket_key']
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.destructive_reauthentication_state')
+            AND conname = 'destructive_reauthentication_purpose_check'
+            AND contype = 'c' AND convalidated
+            AND pg_get_constraintdef(oid) LIKE '%member-reset-issue%'
+            AND pg_get_constraintdef(oid) LIKE '%local-user-create%'
+            AND pg_get_constraintdef(oid) NOT LIKE '%session-revoke%'
+        ) AS present
+    `),
     db.execute<{ count: number }>(sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
@@ -626,6 +769,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
       trainingCorrectionResult.rows[0]?.present ?? false,
     contentRevocationIntegrityPresent,
     llmCacheContractPresent: llmCacheResult.rows[0]?.present ?? false,
+    accessRecoveryPersistencePresent: accessRecoveryResult.rows[0]?.present ?? false,
     integrityTriggerCount: integrityResult.rows[0]?.count ?? 0,
     ineligibleContentRevisionCount: contentResult.rows[0]?.count ?? 0,
   }
@@ -669,6 +813,11 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   if (!result.llmCacheContractPresent) {
     failures.push(
       'latest explanation-cache ownership, provenance, constraint, or index contract is absent',
+    )
+  }
+  if (!result.accessRecoveryPersistencePresent) {
+    failures.push(
+      'access-recovery state, rate-limit, constraint, or index contract is absent',
     )
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {

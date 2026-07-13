@@ -1,12 +1,15 @@
 # PR #1 adversarial remediation
 
-Status: in progress — phases 1 and 2 complete
+Status: complete and archived — every named high/medium PR #1 remediation finding merged
 Source: PR #1 adversarial swarm review  
 Scope: every unresolved implementation and release-evidence finding
 
-This document is the execution contract for hardening the engineering MVP. A finding is
-not closed by code alone: its named proof must pass against a fresh PostgreSQL database
-and, where the behavior is user-visible, through the real browser path.
+This document preserves the execution contract and point-in-time evidence used to harden
+the engineering MVP. Historical phase test counts and branch language below describe the
+state when each phase closed; current validation totals and remaining release gates live in
+[MVP status](../MVP_STATUS.md). A finding was not closed by code alone: its named proof had
+to pass against a fresh PostgreSQL database and, where the behavior was user-visible,
+through the real browser path.
 
 The independent Methodology Gate 0 and the working-name/brand-rights decision remain
 external review gates. They cannot be truthfully converted into code fixes. The source
@@ -89,8 +92,9 @@ environment:
 7. clean worktree/diff checks; and
 8. a new independent adversarial review of the complete PR diff.
 
-No thread is marked resolved and the draft PR is not promoted until the evidence above
-is attached and the re-review finds no unresolved high- or medium-severity regression.
+During execution, no thread was marked resolved and the draft PR was not promoted until
+the evidence above was attached and the re-review found no unresolved high- or
+medium-severity regression.
 
 ## Remediation log
 
@@ -110,7 +114,7 @@ All phase 1 changes pass `pnpm validate`, `pnpm test:integration` (42/42), and `
 | Finding | Status | Evidence |
 | --- | --- | --- |
 | H3 | Fixed for source-linked live-session reports | Migrations `0007`–`0009` add source-linked holds, append-only resolutions, composite ownership/provenance, immutable hold facts, an exact abandoned-source rule, and a conservative `0006` upgrade bridge. Unique audit-backed or sole-candidate legacy sources are recovered; contradictory or ambiguous legacy evidence remains source-less and fail-closed for explicit administrator remediation rather than being guessed. `resolveSafetyHold` is subject-only and idempotent; the typed Today form preserves values, locks while pending, focuses errors, and states that resolution is not symptom clearance. Integration tests cover lifecycle, authorization, concurrency, direct-SQL integrity, export/deletion, and the real `0006`→`0009` upgrade. The unmocked browser journey proves report → required abandonment → resolve → process restart with persisted UI/database state. |
-| H1 boundary | Fail-closed pending phase 3 | A report against a completed session remains non-resolvable and Today explains that progression invalidation is pending. H1 must append the correction and invalidate every affected decision/revision before this path can become resolvable; clearing a live-session hold cannot reactivate a completed-session progression. |
+| H1 boundary | Fail-closed at phase 2; fixed in phase 3 | At this checkpoint, a report against a completed session remained non-resolvable and Today explained that progression invalidation was pending. Phase 3 then appended the correction, invalidated every affected decision/revision, and preserved the rule that hold resolution cannot reactivate invalidated progression. |
 | Preflight | Fixed | `src/platform/db/preflight.ts` expects the current committed migration count, requires the canonical corrected 0004 ledger hash, and verifies the exact enabled public hold triggers/functions, ownership constraints, semantic checks, and valid/ready unique indexes. |
 
 Phase 2 plus the compatibility follow-up pass `pnpm validate` (including 257/257
@@ -133,11 +137,12 @@ after all committed migrations.
 
 ### Phase 3 — completed PR1 adversarial findings
 
-H1, H4, M7/M8, M10, M12, and L22 are now implemented in this branch. The final slice
-adds append-only post-completion correction/invalidation, hardened recovery/deletion
+H1, H4, M7/M8, M10, M12, and L22 were completed in the merged implementation. The final
+slice adds append-only post-completion correction/invalidation, hardened recovery/deletion
 attempt windows, exact-version content-release revocation, reviewed-content fail-closed
-gates, export/deletion provenance, and targeted UI reflow hardening. The current
-preflight contract expects 14 committed migrations and 28 exact integrity triggers.
+gates, export/deletion provenance, and targeted UI reflow hardening. At this phase's
+closure, the preflight contract expected 14 committed migrations and 28 exact integrity
+triggers.
 
 Validated evidence for this phase:
 
@@ -148,8 +153,9 @@ Validated evidence for this phase:
 - `pnpm build`
 - `pnpm test:e2e` — 15/15 tests
 
-### Remaining for phase 3 or later
+### Closure
 
-The UI arc remains intentionally open for continued product/design iteration after these
-inconsistency fixes. No high- or medium-severity PR1 adversarial remediation item is
-intentionally left unresolved by this branch.
+No high- or medium-severity PR1 adversarial remediation item remains unresolved. Later UI
+iterations and the optional grounded-language arc were delivered separately; current
+product work and release blockers are tracked in [MVP status](../MVP_STATUS.md), not in
+this archived review record.

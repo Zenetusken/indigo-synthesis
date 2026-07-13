@@ -38,18 +38,26 @@ Infrastructure ports
 PostgreSQL · Better Auth · local media · clock/IDs
 ```
 
-There is no separate frontend API service, internal HTTP, broker, cache cluster, or
-secondary database.
+There is no separate frontend API service, mandatory internal HTTP service, broker, cache
+cluster, or secondary database. The optional grounded-language feature is the sole narrow
+exception: when explicitly enabled, the Node application calls an attested host-local
+llama.cpp process over loopback HTTP. That process is presentation-only and never becomes
+a product-data or decision authority.
 
 ## Module boundaries
 
 ### Identity
 
-Owns local accounts, sessions, bootstrap, signup policy, and authorization context.
-Better Auth owns auth semantics, while its tables are represented through the single
-Drizzle schema and committed migration ledger. Better Auth does not run a second
-production migration authority. Other modules consume an authenticated actor ID, not
-auth tables.
+Owns local accounts, sessions, bootstrap, credential recovery, web admission policy, and
+authorization context. Better Auth owns the narrow credential/session adapter semantics,
+while its tables and Indigo's recovery state are represented through the single Drizzle
+schema and committed migration ledger. Better Auth does not run a second production
+migration authority, and unsupported provider signup/credential-mutation routes are
+blocked so they cannot bypass Indigo's owner-administered lifecycle. Sign-in, local-user
+creation, member reset, and owner recovery share email-first/account-scoped lifecycle
+locking; recovery revokes database sessions and records redacted audit evidence. Other
+modules consume a server-derived authenticated actor ID, not auth tables or
+request-supplied identity.
 
 ### Athletes
 
@@ -217,6 +225,12 @@ extend them before a reviewed release.
 
 - Better Auth users, sessions, accounts, verifications
 - singleton installation state for serialized first-owner bootstrap
+- destructive-reauthentication attempt state for subject deletion, instance reset,
+  member-reset issuance, and local-user creation
+- target-keyed member-reset issuance/cooldown/backoff state linked to the active
+  digest-only verification capability
+- HMAC-keyed fixed-window web credential-admission buckets for sign-in, member reset,
+  and owner recovery
 - athlete profile
 - training-day preference
 - confirmed athlete equipment codes
@@ -232,16 +246,21 @@ extend them before a reviewed release.
 
 None of those reviewed-content catalog tables exists in the engineering MVP. Exercise
 identity and equipment requirements come from the conspicuously unreviewed development
-fixture, while program revisions snapshot the resulting prescriptions. Source lookup,
-rights enforcement, revocation, substitutions, and reviewed-release activation require
-the future catalog and Gate 0 approval.
+fixture, while program revisions snapshot the resulting prescriptions. Exact-version
+methodology/template revocation is already represented by an append-only instance record
+and enforced against those snapshots at runtime. There is no operator-facing revocation
+UI or CLI yet. Source lookup, rights enforcement, substitutions, reviewed-release
+authoring/activation, and its operator workflow still require the future catalog and Gate
+0 approval.
 
 ### Program
 
 - program
 - program revision
+- append-only revision lineage and correction-led invalidation
 - planned workout
 - exercise/set prescription snapshot
+- append-only exact-version methodology/template release revocation
 
 ### Execution
 
@@ -250,12 +269,16 @@ the future catalog and Gate 0 approval.
 - performed set
 - session feedback
 - adjustment decision
+- session-linked safety holds and append-only hold resolutions
+- append-only command receipts, training-fact corrections, performed-set/feedback
+  corrections, and decision invalidations
 - validated future-load explanation cache (owned by user/session/decision with model,
   runtime, prompt, validator, FactBundle, and duration provenance)
 - audit event
 
 ### Portability/administration
 
+- expiring, digest-bound deletion preview
 - non-personal deletion tombstone
 
 Personal records and progress are initially derived views/queries. No aggregate table is
@@ -278,8 +301,10 @@ added until profiling proves a need.
 - Client command IDs and unique constraints make writes idempotent.
 - Optimistic versions protect active-session edits.
 - Checks bound repetitions, loads, RPE, dates, statuses, and lifecycle transitions.
-- A planned workout belongs to a program revision. A workout-session row is created
-  directly as `active`, then follows active ↔ paused → completed or abandoned.
+- A planned workout belongs to a program revision. Workout start stages its session as
+  `initializing` while snapshot exercises and sets are inserted, then atomically
+  finalizes it to `active` before the transaction commits. Its externally visible
+  lifecycle then follows active ↔ paused → completed or abandoned.
 - The singleton installation and host-issued capability rows are locked in the
   first-owner transaction. Credential creation, capability consumption, and bootstrap
   closure commit atomically; explicit database creation modes and the unique owner
@@ -297,17 +322,26 @@ added until profiling proves a need.
 - only the project migration command applies committed SQL before application startup;
   Better Auth runtime migration/schema push is disabled and its CLI is never a production
   migration authority
-- `HttpOnly`, `Secure` in production, `SameSite=Lax` cookies
+- `HttpOnly`, `SameSite=Lax` cookies; `Secure` whenever the configured application origin
+  is HTTPS, while loopback-local HTTP remains supported without the `Secure` attribute
 - host-issued, expiring, one-use, transactionally serialized first-owner bootstrap
 - generic public signup disabled before and after bootstrap
-- one advisory-lock namespace covers password sign-in through session creation and owner
-  recovery through password replacement and session revocation
+- one email-first/account-scoped advisory-lock order covers known and unknown password
+  sign-in, owner-created local credentials, member reset, and owner recovery through
+  password replacement and session revocation
 - server-derived actor identity for every use case
 - optional SMTP is a future adapter, not an implemented password-reset path; no
   mandatory email/cloud identity exists
+- owner-mediated member reset: fresh owner reauthentication issues an expiring one-use
+  code; public redemption chooses the replacement password, revokes sessions, and
+  preserves all account-owned training state
 - out-of-band sole-owner recovery when SMTP is absent: a host-local admin command with
-  database access issues an expiring single-use recovery code, revokes existing sessions
-  on use, and writes a redacted audit event
+  database access issues an expiring one-use code; protected CLI or web redemption
+  revokes sessions and writes a redacted channel-aware audit event
+- HMAC-keyed, fixed-window web credential admission with bounded cleanup and minimized
+  audit addresses; active throttles do not amplify mutable state or audit
+- database-backed session reads disable cookie caching, and no browser bearer/refresh
+  token path can outlive recovery-triggered revocation
 
 Social login, passkeys, MFA, SSO, organizations, and custom JWT/refresh tokens are not
 first-slice requirements.
@@ -330,25 +364,39 @@ Supported baseline:
 - one PostgreSQL database;
 - one writable media directory only if uploads are enabled.
 
+That is the core topology. Enabling optional grounded-language generation adds one
+non-authoritative, host-local llama.cpp process reached only through the
+loopback-restricted HTTP primitive; the application and database continue to serve every
+core journey without it.
+
 Structured stdout, configuration validation, and truthful application/database health are
-part of the application. Reverse proxy, Docker, CI/CD, monitoring stack, HA, backup
-automation, and deployment packaging are later operational work.
+part of the application. A guarded manual PostgreSQL backup/restore runbook and exercised
+disposable-database drill are checked in. Reverse proxy, Docker, CI/CD, monitoring stack,
+HA, backup scheduling/retention automation, and deployment packaging are later
+operational work.
 
-Plain HTTP is a loopback-only development mode. Phone, LAN, and any other non-loopback
-access require an externally visible HTTPS origin and `Secure` cookies. A user-managed
-TLS terminator may sit in front of the Node process; it is an ingress prerequisite, not
-an application datastore or authority. Product-supplied proxy configuration and
-certificate automation remain deferred. The supported `dev` and `start` commands bind
-the Node listener explicitly to `127.0.0.1`; `start` completes the database preflight
-before listening.
+Plain HTTP is supported only for loopback-local use. Phone, LAN, and any other
+non-loopback access require an externally visible HTTPS origin and `Secure` cookies. A
+user-managed TLS terminator may sit in front of the Node process; it is an ingress
+prerequisite, not an application datastore or authority. Product-supplied proxy
+configuration and certificate automation remain deferred. The supported `dev` and
+`start` commands bind the Node listener explicitly to `127.0.0.1`; `start` completes the
+database preflight before listening.
 
-Deletion is a deliberate destruction exception to historical immutability. The
-portability workflow deletes or redacts scoped personal records in referential order and
-retains only a system-level tombstone containing event ID, actor class, timestamp, schema
-version, aggregate row counts, and a completion digest—never identity, health context, or
-training content.
+Deletion is a deliberate destruction exception to historical immutability. The current
+Data Portability workflow directly deletes or redacts scoped personal records in
+referential order inside one serializable transaction. It retains system-level tombstones
+containing event ID, actor class, timestamp, schema version, aggregate row counts, and a
+completion digest—never identity, health context, or training content. Instance reset also
+retains the cleared singleton installation record and prior non-personal tombstones.
 
 See [the self-hosting contract](SELF_HOSTING_CONTRACT.md).
+
+The outbound-network acceptance runner executes the application and browser in a Linux
+namespace with only loopback and a private PostgreSQL bridge. The complete 19-test default
+tree passed from clean committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c`; later product/runtime or default-suite
+changes require a new retained run.
 
 ## Architecture acceptance
 

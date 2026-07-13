@@ -56,8 +56,9 @@ export default async function DeleteSettingsPage({
           <p>
             Profiles, programs, planned workouts, sessions, performed sets, saved
             plain-language explanations, and subject-linked audit history are removed.
-            Backups remain the operator’s responsibility. Only a non-personal completion
-            tombstone remains.
+            Backups remain the operator’s responsibility. The installation returns to its
+            unclaimed bootstrap state; only non-personal installation state and completion
+            tombstones remain.
           </p>
         </section>
 

@@ -111,10 +111,11 @@ journeys, invariants, hardening, and success metrics live in
    forgot their password, an owner who forgot theirs, and a person with no account —
    without revealing whether any account exists.
 
-Owner recovery (FR-006) already exists; trainee reset (J7) and cold-start orientation
-(J9) are the new additions. These access/recovery journeys are governed by the success
-metrics in [Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md), not the Release 1
-J1–J6 acceptance gate.
+The engineering MVP implements J7–J9, including both CLI and web redemption for a
+host-issued owner-recovery code and cause-neutral session-ended return to a persisted
+active workout. These access/recovery journeys are governed by the success metrics in
+[Access and recovery](./ACCESS_AND_RECOVERY_SPEC.md), not the Release 1 J1–J6 acceptance
+gate. Their implementation does not approve methodology content or close Gate 0.
 
 ## Functional requirements
 
@@ -143,6 +144,12 @@ J1–J6 acceptance gate.
   each locked-out persona — trainee, owner, no-account — without disclosing whether any
   account exists; failure responses are uniform across cause and across whether the
   submitted account exists.
+- **FR-009** When a session is absent during an active workout—including after recovery
+  revocation—the next workout command or navigation requires sign-in, presents a
+  cause-neutral notice, and may return only to a workout path reconstructed from a
+  shape-restricted UUIDv7 session identifier and reauthorized after sign-in. Already
+  committed workout state survives; the denied command is not replayed and unsaved
+  browser fields are not represented as persisted.
 
 ### Athlete profile
 
@@ -212,8 +219,10 @@ J1–J6 acceptance gate.
 - **FR-071** Deletion is explicit, scoped, confirmable, and tested.
 - **FR-071A** Deletion is the explicit exception to historical immutability. A single
   portability workflow orders referential deletion/redaction inside one transaction and
-  retains only a non-personal tombstone containing event ID, actor class, timestamp,
-  schema version, aggregate row counts, and completion digest.
+  retains no personal training content. Subject deletion appends a non-personal
+  tombstone; whole-instance reset also reopens the non-personal installation singleton
+  for bootstrap and preserves non-personal tombstone records containing event ID, actor
+  class, timestamp, schema version, aggregate row counts, and completion digest.
 - **FR-072** No core workflow requires a cloud identity, email provider, object store,
   analytics service, CDN, or model API.
 - **FR-073** Development/demo data is visibly labeled and cannot enter production history.
@@ -225,9 +234,10 @@ J1–J6 acceptance gate.
 
 - **NFR-001 Self-hosting:** one Node process plus one PostgreSQL database; one writable
   directory only if media is enabled.
-- **NFR-001A Secure access:** plain HTTP is supported only on loopback for development.
-  Any phone, LAN, or other non-loopback deployment uses an HTTPS origin and secure
-  cookies through a user-supplied TLS terminator.
+- **NFR-001A Secure access:** loopback-local operation may use plain HTTP. Any phone,
+  LAN, or other non-loopback deployment uses an HTTPS origin and `Secure` cookies
+  through a user-supplied TLS terminator; loopback HTTP cookies remain `HttpOnly` and
+  `SameSite=Lax` but are not marked `Secure`.
 - **NFR-002 Accessibility:** WCAG 2.2 AA, keyboard operation, visible focus, 200% zoom,
   reduced motion, and status beyond color.
 - **NFR-003 Mobile:** 48px workout targets, 16px numeric inputs, safe-area-aware sticky

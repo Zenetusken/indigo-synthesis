@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   authClientAddressHeaders,
   authTrustedProxyCidrs,
+  directLoopbackClientAddress,
+  minimizeCredentialClientAddress,
   resolveForwardedClientAddress,
   resolveRequestClientAddress,
+  resolveWebClientAddress,
 } from './client-address'
 
 describe('trusted authentication client address', () => {
@@ -42,5 +45,34 @@ describe('trusted authentication client address', () => {
         }),
       ),
     ).toBe('203.0.113.9')
+  })
+
+  it('attributes direct loopback web requests explicitly without weakening HTTPS ingress', () => {
+    expect(resolveWebClientAddress(new Headers(), { allowDirectLoopback: true })).toBe(
+      directLoopbackClientAddress,
+    )
+    expect(
+      resolveWebClientAddress(new Headers(), { allowDirectLoopback: false }),
+    ).toBeNull()
+    expect(
+      resolveWebClientAddress(
+        new Headers({ 'x-forwarded-for': '203.0.113.9, 127.0.0.1' }),
+        { allowDirectLoopback: false },
+      ),
+    ).toBe('203.0.113.9')
+    expect(
+      resolveWebClientAddress(new Headers({ 'x-forwarded-for': 'not-an-address' }), {
+        allowDirectLoopback: true,
+      }),
+    ).toBeNull()
+  })
+
+  it.each([
+    ['203.0.113.91', '203.0.113.0/24'],
+    ['2001:db8:1234:56ff:abcd::1', '2001:db8:1234:5600::/56'],
+    ['::1', '::/56'],
+    [directLoopbackClientAddress, directLoopbackClientAddress],
+  ])('minimizes audit address %s as %s', (address, expected) => {
+    expect(minimizeCredentialClientAddress(address)).toBe(expected)
   })
 })

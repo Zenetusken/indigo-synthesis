@@ -11,15 +11,45 @@ the slice uses a generic product schema and a clean-room `0.0.1-development` fix
 That fixture is visibly unreviewed and configuration rejects it in production.
 
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
-reviewed content and golden examples, an outbound-network-blocked browser run,
-independent WCAG/screen-reader and physical-device review, schema/table-ownership
-enforcement, and independent product/security review. Targeted automated
+reviewed content and golden examples, independent WCAG/screen-reader and physical-device
+review, schema/table-ownership enforcement, and independent product/security/privacy
+review. The committed 19-test tree has retained outbound-network-denied proof; that proof
+must be rerun after relevant code or default-suite changes. Targeted automated
 accessibility/mobile checks already pass; they are not a conformance claim. Current
 traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
 
 The distinction is deliberate: the technical workflow exists, while every exercise,
 volume, load, rest, progression, population, safety, evidence, and rights decision in a
 production release remains blocked until Gate 0 closes.
+
+## Cross-cutting checkpoint — access and recovery
+
+[Access and recovery](product/ACCESS_AND_RECOVERY_SPEC.md) defines a separately gated
+account-security and cold-start slice. It may be implemented independently of methodology
+review, but it does not close Gate 0 or expand the J1–J6 Release 1 acceptance gate by
+implication.
+
+Implemented checkpoint:
+
+- J7 owner-mediated trainee reset is live with reauthentication, expiring one-use codes,
+  digest-only storage, fixed-window admission, non-destructive code backoff, credential
+  serialization, session revocation, and redacted audit;
+- J8 keeps host-only issuance and CLI redemption as the root-of-trust escape path while
+  adding the hardened `/recover` web redemption surface;
+- J9 gives each locked-out persona a concrete next action without public signup or
+  account-existence disclosure;
+- a cause-neutral session-ended sign-in path safely returns a revoked mid-workout
+  browser to its exact persisted workout; and
+- unmocked browser/database proof covers data preservation, session revocation, audit
+  minimization/cardinality, and the non-amplifying owner-recovery throttle.
+
+Gate status: the baseline J7–J9 engineering slice and its specified hardening are
+implemented. The complete 19-test default Playwright selection, including all four new
+access/recovery cases, passed from committed product tree
+`7c7ea334d4c88d9279abe574031881a23a15f32c` with outbound network denied. The separately
+named Account security follow-on—session management plus a security-events view and
+sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
+for independent security/privacy review.
 
 ## Gate 0 — Product truth
 
@@ -63,8 +93,9 @@ Gate:
 
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
 configuration validation, local assets, and executable module-boundary guards are
-implemented. The release evidence still needs the outbound-network-blocked run and
-schema/table-ownership enforcement.
+implemented. A no-default-route namespace runner has passed the complete 19-test tree
+from a clean product commit; schema/table-ownership enforcement remains open release
+work.
 
 ## Phase 2 — First vertical slice
 
@@ -150,6 +181,12 @@ Success measures:
 - weekly return to the prescribed plan;
 - explanation comprehension; and
 - successful export/restore.
+
+Checkpoint: a guarded PostgreSQL logical backup/restore runbook and disposable-instance
+drill are implemented and exercised, including restored preflight and append-only trigger
+proof. Phase 4 still requires the second-person cold install, encrypted off-host
+retention/restore exercise, deployment-specific secret custody, and any future media
+boundary; repository-local technical proof cannot stand in for those operator checks.
 
 Screen time, notification opens, points, and social engagement are not success measures.
 

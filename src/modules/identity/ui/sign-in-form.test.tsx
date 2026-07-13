@@ -74,4 +74,15 @@ describe('SignInForm', () => {
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled()
     expect(authMocks.push).not.toHaveBeenCalled()
   })
+
+  it('returns an authenticated athlete to the server-approved saved workout', async () => {
+    authMocks.signInEmail.mockResolvedValueOnce({ data: { user: {} }, error: null })
+    const returnTo = '/workouts/0198f6d2-7c31-7f14-8f01-123456789abc'
+    render(<SignInForm returnTo={returnTo} />)
+
+    fillSignInForm()
+
+    await waitFor(() => expect(authMocks.push).toHaveBeenCalledWith(returnTo))
+    expect(authMocks.refresh).toHaveBeenCalledOnce()
+  })
 })

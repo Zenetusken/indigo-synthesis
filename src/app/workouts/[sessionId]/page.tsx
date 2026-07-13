@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { loadUnitLabel } from '@/modules/athletes/domain/units'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireActorForWorkout } from '@/modules/identity/server/actor'
 import { getWorkoutSession } from '@/modules/training/application/workouts'
 import { WorkoutClient } from './workout-client'
 
@@ -16,8 +16,8 @@ export default async function WorkoutPage({
   params: Promise<{ sessionId: string }>
   searchParams: Promise<{ error?: string }>
 }) {
-  const actor = await requireActor()
   const { sessionId } = await params
+  const actor = await requireActorForWorkout(sessionId)
   const [session, profile, query] = await Promise.all([
     getWorkoutSession(actor.userId, sessionId),
     getAthleteProfile(actor.userId),

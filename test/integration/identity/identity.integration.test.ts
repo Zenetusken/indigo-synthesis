@@ -16,9 +16,21 @@ import {
   type OwnerBootstrapError,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import {
+  CredentialLifecycleCapacityError,
+  credentialLifecycleConnectionLimit,
+  credentialLifecycleSubmittedEmailQueueLimit,
+  credentialLifecycleTrustedQueueLimit,
+  withCredentialLifecycleLocks,
+  withSubmittedEmailCredentialLifecycleLocks,
+} from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import { getInstallationOwnerUserId } from '@/modules/identity/infrastructure/installation'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
-import { handleAuthPost } from '@/modules/identity/server/auth-handler'
+import {
+  handleAuthGet,
+  handleAuthPost,
+  handleAuthRequest,
+} from '@/modules/identity/server/auth-handler'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
@@ -33,6 +45,7 @@ import {
   session,
   user,
   verification,
+  webRecoveryRateLimitBuckets,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 
@@ -72,6 +85,14 @@ let owner: BootstrapIdentity
 let localMember: BootstrapIdentity
 let bootstrapCode: string
 let bootstrapSecretsDirectory: string
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 async function authRequest(
   path: string,
@@ -138,7 +159,8 @@ describe('identity database boundary', () => {
     })
     const [userCount] = await getDb().select({ value: count() }).from(user)
 
-    expect(response.ok).toBe(false)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ code: 'NOT_FOUND', message: 'Not found.' })
     expect(userCount?.value).toBe(0)
   })
 
@@ -352,7 +374,33 @@ describe('identity database boundary', () => {
 
     expect(response.status).toBe(200)
     expect(responseBody.user?.id).toBe(owner.id)
-    expect(responseBody.token).toEqual(expect.any(String))
+    expect(responseBody.token).toBeUndefined()
+
+    const cookies = response.headers
+      .getSetCookie()
+      .map((value) => value.split(';', 1)[0])
+      .filter((value): value is string => value !== undefined)
+      .join('; ')
+    expect(cookies).not.toBe('')
+    const sessionResponse = await handleAuthGet(
+      new Request(`${getServerConfig().appOrigin}/api/auth/get-session`, {
+        headers: { cookie: cookies },
+      }),
+    )
+    const sessionBody = (await sessionResponse.json()) as {
+      readonly session?: { readonly token?: string }
+      readonly user?: { readonly id?: string }
+    }
+    expect(sessionResponse.status).toBe(200)
+    expect(sessionBody.user?.id).toBe(owner.id)
+    expect(sessionBody.session?.token).toBeUndefined()
+
+    const listSessions = await handleAuthGet(
+      new Request(`${getServerConfig().appOrigin}/api/auth/list-sessions`, {
+        headers: { cookie: cookies },
+      }),
+    )
+    expect(listSessions.status).toBe(404)
 
     const [sessionCount] = await getDb()
       .select({ value: count() })
@@ -430,7 +478,193 @@ describe('identity database boundary', () => {
 
     expect(response.status).toBe(200)
     expect(responseBody.user?.id).toBe(localMember.id)
-    expect(responseBody.token).toEqual(expect.any(String))
+    expect(responseBody.token).toBeUndefined()
+
+    const credentials = await getDb()
+      .select({
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        idToken: account.idToken,
+      })
+      .from(account)
+      .where(eq(account.providerId, 'credential'))
+    expect(credentials).toHaveLength(2)
+    expect(
+      credentials.every(
+        (credential) =>
+          credential.accessToken === null &&
+          credential.refreshToken === null &&
+          credential.idToken === null,
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps provider credential mutation routes absent and leaves the password unchanged', async () => {
+    const replacement = 'provider-route-replacement-password'
+    const change = await authRequest('/change-password', {
+      currentPassword: localMember.password,
+      newPassword: replacement,
+      revokeOtherSessions: true,
+    })
+    expect(change.status).toBe(404)
+    expect(await change.json()).toEqual({ code: 'NOT_FOUND', message: 'Not found.' })
+
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: localMember.email,
+          password: localMember.password,
+        })
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await authRequest('/sign-in/email', {
+          email: localMember.email,
+          password: replacement,
+        })
+      ).status,
+    ).toBe(401)
+  })
+
+  it('keeps sign-in rejection uniform and an active throttle transaction read-only', async () => {
+    await getDb().delete(webRecoveryRateLimitBuckets)
+
+    const knownFailure = await authRequest('/sign-in/email', {
+      email: localMember.email,
+      password: 'wrong-but-valid-password',
+    })
+    const unknownFailure = await authRequest('/sign-in/email', {
+      email: 'unknown-member@example.test',
+      password: 'wrong-but-valid-password',
+    })
+
+    expect(knownFailure.status).toBe(401)
+    expect(unknownFailure.status).toBe(knownFailure.status)
+    expect(unknownFailure.headers.get('content-type')).toBe(
+      knownFailure.headers.get('content-type'),
+    )
+    expect(await unknownFailure.text()).toBe(await knownFailure.text())
+
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const floodedEmail = 'flooded-member@example.test'
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await authRequest('/sign-in/email', {
+        email: floodedEmail,
+        password: 'wrong-but-valid-password',
+      })
+      expect(response.status).toBe(401)
+    }
+
+    const beforeThrottle = await getDb()
+      .select()
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+    const lockEntered = deferred<void>()
+    const releaseLock = deferred<void>()
+    const heldLock = withSubmittedEmailCredentialLifecycleLocks({
+      email: floodedEmail,
+      resolveAccountUserIds: async () => [],
+      callback: async () => {
+        lockEntered.resolve(undefined)
+        await releaseLock.promise
+      },
+    })
+    await lockEntered.promise
+
+    let throttled: Response
+    try {
+      throttled = await Promise.race([
+        authRequest('/sign-in/email', {
+          email: floodedEmail,
+          password: 'wrong-but-valid-password',
+        }),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error('Throttled sign-in entered the lifecycle lock.')),
+            1_000,
+          ),
+        ),
+      ])
+    } finally {
+      releaseLock.resolve(undefined)
+      await heldLock
+    }
+    const afterThrottle = await getDb()
+      .select()
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+
+    expect(throttled.status).toBe(401)
+    expect(await throttled.text()).toBe(
+      JSON.stringify({
+        kind: 'rejected',
+        message: 'The email or password was not accepted.',
+      }),
+    )
+    expect(afterThrottle).toEqual(beforeThrottle)
+  })
+
+  it('runs malformed sign-in input through one bounded dummy provider request', async () => {
+    const origin = getServerConfig().appOrigin
+    const cases = [
+      {
+        name: 'malformed email',
+        body: JSON.stringify({
+          email: 'not-an-email',
+          password: 'wrong-but-valid-password',
+        }),
+        contentType: 'application/json',
+      },
+      {
+        name: 'missing password',
+        body: JSON.stringify({ email: localMember.email }),
+        contentType: 'application/json',
+      },
+      {
+        name: 'oversized password',
+        body: JSON.stringify({ email: localMember.email, password: 'x'.repeat(256_000) }),
+        contentType: 'application/json',
+      },
+      {
+        name: 'malformed JSON',
+        body: '{',
+        contentType: 'application/json',
+      },
+    ] as const
+
+    for (const testCase of cases) {
+      await getDb().delete(webRecoveryRateLimitBuckets)
+      let providerBody: Record<string, unknown> | undefined
+      const response = await handleAuthRequest(
+        new Request(`${origin}/api/auth/sign-in/email`, {
+          method: 'POST',
+          headers: { 'content-type': testCase.contentType, origin },
+          body: testCase.body,
+        }),
+        async (providerRequest) => {
+          providerBody = (await providerRequest.json()) as Record<string, unknown>
+          return Response.json(
+            { token: 'must-not-escape', user: { id: 'must-not-exist' } },
+            { status: 200, headers: { 'set-cookie': 'must-not-escape=1' } },
+          )
+        },
+      )
+
+      expect(response.status, testCase.name).toBe(401)
+      expect(await response.json(), testCase.name).toEqual({
+        kind: 'rejected',
+        message: 'The email or password was not accepted.',
+      })
+      expect(response.headers.get('set-cookie'), testCase.name).toBeNull()
+      expect(providerBody?.email, testCase.name).toEqual(expect.any(String))
+      expect(String(providerBody?.email).length, testCase.name).toBeGreaterThan(254)
+      expect(providerBody?.password, testCase.name).toEqual(expect.any(String))
+      expect(String(providerBody?.password).length, testCase.name).toBeLessThanOrEqual(
+        128,
+      )
+      expect(JSON.stringify(providerBody), testCase.name).not.toContain('must-not-escape')
+    }
   })
 
   it('rechecks ownership inside the transaction even if a member role is forged', async () => {
@@ -451,5 +685,181 @@ describe('identity database boundary', () => {
 
     const [userCount] = await getDb().select({ value: count() }).from(user)
     expect(userCount?.value).toBe(2)
+  })
+
+  it('bounds first-burst lifecycle lock connections independently of the app pool', async () => {
+    const releaseCallbacks = deferred<void>()
+    const connectionLimitReached = deferred<void>()
+    let enteredCallbacks = 0
+    const burstSize = credentialLifecycleConnectionLimit * 3
+    const requests = Array.from({ length: burstSize }, (_, index) =>
+      withSubmittedEmailCredentialLifecycleLocks({
+        email: `first-burst-${index}@example.test`,
+        resolveAccountUserIds: async () => [],
+        callback: async () => {
+          enteredCallbacks += 1
+          if (enteredCallbacks === credentialLifecycleConnectionLimit) {
+            connectionLimitReached.resolve(undefined)
+          }
+          await releaseCallbacks.promise
+        },
+      }),
+    )
+
+    try {
+      await connectionLimitReached.promise
+      const lockConnections = await getDb().execute<{ active: number }>(sql`
+        SELECT count(*)::integer AS active
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND application_name = 'indigo-credential-lifecycle'
+      `)
+      expect(Number(lockConnections.rows[0]?.active ?? 0)).toBe(
+        credentialLifecycleConnectionLimit,
+      )
+      expect(enteredCallbacks).toBe(credentialLifecycleConnectionLimit)
+    } finally {
+      releaseCallbacks.resolve(undefined)
+    }
+
+    await expect(Promise.all(requests)).resolves.toHaveLength(burstSize)
+    expect(enteredCallbacks).toBe(burstSize)
+  })
+
+  it('bounds submitted-email waiters, sheds uniformly, and prioritizes trusted recovery', async () => {
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const activeEntered = deferred<void>()
+    const releaseActive = Array.from({ length: credentialLifecycleConnectionLimit }, () =>
+      deferred<void>(),
+    )
+    let activeCount = 0
+    const active = Array.from(
+      { length: credentialLifecycleConnectionLimit },
+      (_, index) =>
+        withSubmittedEmailCredentialLifecycleLocks({
+          email: `capacity-active-${index}@example.test`,
+          resolveAccountUserIds: async () => [],
+          callback: async () => {
+            activeCount += 1
+            if (activeCount === credentialLifecycleConnectionLimit) {
+              activeEntered.resolve(undefined)
+            }
+            await releaseActive[index]?.promise
+          },
+        }),
+    )
+    await activeEntered.promise
+
+    const enteredAfterRelease: string[] = []
+    const queued = Array.from(
+      { length: credentialLifecycleSubmittedEmailQueueLimit },
+      (_, index) =>
+        withSubmittedEmailCredentialLifecycleLocks({
+          email: `capacity-queued-${index}@example.test`,
+          resolveAccountUserIds: async () => [],
+          callback: async () => {
+            enteredAfterRelease.push('submitted-email')
+          },
+        }),
+    )
+    const trustedEntered = deferred<void>()
+    const trusted = withCredentialLifecycleLocks([owner.id], async () => {
+      enteredAfterRelease.push('trusted')
+      trustedEntered.resolve(undefined)
+    })
+
+    try {
+      const shed = await authRequest('/sign-in/email', {
+        email: 'capacity-shed@example.test',
+        password: 'capacity-shed-password',
+      })
+      expect(shed.status).toBe(401)
+      expect(await shed.json()).toEqual({
+        kind: 'rejected',
+        message: 'The email or password was not accepted.',
+      })
+      releaseActive[0]?.resolve(undefined)
+      await expect(trustedEntered.promise).resolves.toBeUndefined()
+      expect(enteredAfterRelease[0]).toBe('trusted')
+    } finally {
+      for (const release of releaseActive) release.resolve(undefined)
+      await expect(trusted).resolves.toBeUndefined()
+      await expect(Promise.all([...active, ...queued])).resolves.toHaveLength(
+        credentialLifecycleConnectionLimit + credentialLifecycleSubmittedEmailQueueLimit,
+      )
+    }
+  })
+
+  it('bounds authenticated account-scoped waiters without consuming another connection', async () => {
+    const activeEntered = deferred<void>()
+    const releaseActive = deferred<void>()
+    let activeCount = 0
+    const active = Array.from(
+      { length: credentialLifecycleConnectionLimit },
+      (_, index) =>
+        withCredentialLifecycleLocks([`trusted-active-${index}`], async () => {
+          activeCount += 1
+          if (activeCount === credentialLifecycleConnectionLimit) {
+            activeEntered.resolve(undefined)
+          }
+          await releaseActive.promise
+        }),
+    )
+    await activeEntered.promise
+
+    const queued = Array.from(
+      { length: credentialLifecycleTrustedQueueLimit },
+      (_, index) =>
+        withCredentialLifecycleLocks([`trusted-queued-${index}`], async () => undefined),
+    )
+    try {
+      await expect(
+        withCredentialLifecycleLocks(['trusted-overflow'], async () => undefined),
+      ).rejects.toBeInstanceOf(CredentialLifecycleCapacityError)
+      const lockConnections = await getDb().execute<{ active: number }>(sql`
+        SELECT count(*)::integer AS active
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND application_name = 'indigo-credential-lifecycle'
+      `)
+      expect(Number(lockConnections.rows[0]?.active ?? 0)).toBe(
+        credentialLifecycleConnectionLimit,
+      )
+    } finally {
+      releaseActive.resolve(undefined)
+    }
+    await expect(Promise.all([...active, ...queued])).resolves.toHaveLength(
+      credentialLifecycleConnectionLimit + credentialLifecycleTrustedQueueLimit,
+    )
+  })
+
+  it('does not consume lifecycle capacity when runtime configuration is invalid', async () => {
+    const databaseUrl = process.env.DATABASE_URL
+    if (!databaseUrl) throw new Error('Identity integration database URL is unavailable.')
+
+    process.env.DATABASE_URL = 'not-a-postgresql-url'
+    resetServerConfigForTests()
+    try {
+      for (let attempt = 0; attempt < credentialLifecycleConnectionLimit; attempt += 1) {
+        await expect(
+          withCredentialLifecycleLocks([owner.id], async () => 'unreachable'),
+        ).rejects.toThrow()
+      }
+    } finally {
+      process.env.DATABASE_URL = databaseUrl
+      resetServerConfigForTests()
+    }
+
+    await expect(
+      Promise.race([
+        withCredentialLifecycleLocks([owner.id], async () => 'recovered'),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error('Invalid configuration leaked lifecycle capacity.')),
+            1_000,
+          ),
+        ),
+      ]),
+    ).resolves.toBe('recovered')
   })
 })
