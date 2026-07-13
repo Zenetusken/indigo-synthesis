@@ -22,7 +22,7 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-export const expectedMigrationCount = 15
+export const expectedMigrationCount = 16
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -488,18 +488,51 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     db.execute<{ present: boolean }>(sql`
       SELECT
         (
-          SELECT count(*) = 4
+          SELECT count(*) = 16
           FROM information_schema.columns
           WHERE table_schema = 'public'
             AND table_name = 'future_load_explanation_cache'
             AND column_name IN (
-              'served_model_name',
-              'runtime_id',
-              'runtime_attestation_digest',
-              'validator_version'
+              'id', 'user_id', 'session_id', 'decision_id', 'cache_key', 'prose',
+              'model_id', 'model_content_digest', 'served_model_name', 'runtime_id',
+              'runtime_attestation_digest', 'prompt_version', 'validator_version',
+              'fact_bundle_hash', 'generate_duration_ms', 'created_at'
             )
         )
         AND to_regclass('public.future_load_explanation_cache_session_idx') IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.future_load_explanation_cache_key_uidx'
+          )
+            AND indrelid = to_regclass('public.future_load_explanation_cache')
+            AND indisunique AND indisvalid AND indisready
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass(
+            'public.future_load_explanation_cache_decision_uidx'
+          )
+            AND indrelid = to_regclass('public.future_load_explanation_cache')
+            AND indisunique AND indisvalid AND indisready
+        )
+        AND (
+          SELECT count(*) = 5
+          FROM pg_constraint
+          WHERE conrelid = to_regclass('public.future_load_explanation_cache')
+            AND convalidated
+            AND (
+              (conname IN (
+                'future_load_explanation_cache_session_user_fk',
+                'future_load_explanation_cache_decision_session_fk'
+              ) AND contype = 'f')
+              OR (conname IN (
+                'future_load_explanation_cache_hashes_check',
+                'future_load_explanation_cache_identity_check',
+                'future_load_explanation_cache_duration_check'
+              ) AND contype = 'c')
+            )
+        )
         AS present
     `),
     db.execute<{ count: number }>(sql`
@@ -635,7 +668,7 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   }
   if (!result.llmCacheContractPresent) {
     failures.push(
-      'latest explanation-cache provenance columns or session index are absent',
+      'latest explanation-cache ownership, provenance, constraint, or index contract is absent',
     )
   }
   if (result.integrityTriggerCount !== requiredIntegrityTriggers.length) {

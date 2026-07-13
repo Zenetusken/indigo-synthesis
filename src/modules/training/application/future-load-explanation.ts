@@ -90,7 +90,17 @@ export async function explainFutureLoadDecision(input: {
   const cache = input.deps?.cache ?? createPostgresFutureLoadExplanationCache()
   const singleFlight = input.deps?.singleFlight ?? defaultSingleFlight
 
-  const bundlesResult = await getBundles(input.userId, input.sessionId)
+  let bundlesResult: Awaited<ReturnType<typeof getFutureLoadFactBundlesForSession>>
+  try {
+    bundlesResult = await getBundles(input.userId, input.sessionId)
+  } catch {
+    return {
+      status: 'unavailable',
+      reason: 'fact-bundle-failed',
+      detail: 'Stored facts could not be loaded for explanation.',
+      durationMs: elapsed(),
+    }
+  }
   if (bundlesResult.status !== 'available') {
     return {
       status: 'unavailable',
@@ -126,19 +136,33 @@ export async function explainFutureLoadDecision(input: {
 
   // Semantic invalidation (e.g. post-completion pain): never serve model or cache prose.
   if (item.factBundle.decision.invalidated) {
-    await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+    try {
+      await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+    } catch {
+      // The invalidation ledger is authoritative; physical cache cleanup is fail-soft.
+    }
     return {
       status: 'unavailable',
       reason: 'decision-invalidated',
       detail:
         item.factBundle.decision.invalidationReason === 'post-completion-pain-report'
-          ? 'A post-completion pain report was recorded. Stored rule codes remain; plain-language paraphrases of the prior decision are not offered.'
-          : 'This decision is no longer active for explanation. The rule codes above still apply.',
+          ? 'A post-completion pain report was recorded. The original rule code remains visible as historical evidence, but the decision is no longer active.'
+          : 'A post-completion training fact was corrected. The original rule code remains visible as historical evidence, but the decision is no longer active.',
       durationMs: elapsed(),
     }
   }
 
-  const config = getConfig()
+  let config: LlmRuntimeConfig
+  try {
+    config = getConfig()
+  } catch {
+    return {
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: 'Local model configuration is invalid; stored rule codes still apply.',
+      durationMs: elapsed(),
+    }
+  }
   if (config.mode === 'disabled') {
     return {
       status: 'unavailable',
@@ -184,7 +208,7 @@ export async function explainFutureLoadDecision(input: {
           cacheKey,
         })
         if (cached.status === 'invalidated') {
-          return invalidatedExplanationResult(elapsed())
+          return invalidatedExplanationResult(elapsed(), cached.reason)
         }
         if (cached.status === 'state-unavailable') {
           return stateUnavailableResult(elapsed())
@@ -219,7 +243,18 @@ export async function explainFutureLoadDecision(input: {
         // while holding the reportPain advisory lock.
       }
 
-      const readiness = await preflight(config)
+      let readiness: LlmPreflightReport
+      try {
+        readiness = await preflight(config)
+      } catch {
+        return {
+          status: 'unavailable',
+          reason: 'llm-not-ready',
+          detail:
+            'Local model readiness could not be verified; stored rule codes still apply.',
+          durationMs: elapsed(),
+        }
+      }
       if (!readiness.readyForLocalInference || !readiness.verifiedRuntimeIdentity) {
         return {
           status: 'unavailable',
@@ -295,7 +330,7 @@ export async function explainFutureLoadDecision(input: {
           generateDurationMs,
         })
         if (publication.status === 'invalidated') {
-          return invalidatedExplanationResult(elapsed())
+          return invalidatedExplanationResult(elapsed(), publication.reason)
         }
         if (publication.status === 'state-unavailable') {
           return stateUnavailableResult(elapsed())
@@ -325,16 +360,26 @@ export async function explainFutureLoadDecision(input: {
         durationMs: elapsed(),
       }
     }
-    throw error
+    return {
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: 'Local explanation is unavailable; stored rule codes still apply.',
+      durationMs: elapsed(),
+    }
   }
 }
 
-function invalidatedExplanationResult(durationMs: number): FutureLoadExplanationResult {
+function invalidatedExplanationResult(
+  durationMs: number,
+  reason: 'post-completion-pain-report' | 'training-fact-correction',
+): FutureLoadExplanationResult {
   return {
     status: 'unavailable',
     reason: 'decision-invalidated',
     detail:
-      'A post-completion pain report was recorded. Stored rule codes remain; plain-language paraphrases of the prior decision are not offered.',
+      reason === 'post-completion-pain-report'
+        ? 'A post-completion pain report was recorded. The original rule code remains visible as historical evidence, but the decision is no longer active.'
+        : 'A post-completion training fact was corrected. The original rule code remains visible as historical evidence, but the decision is no longer active.',
     durationMs,
   }
 }

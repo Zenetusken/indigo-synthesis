@@ -652,6 +652,7 @@ export const adjustmentDecisions = pgTable(
     createdAt: createdAt(),
   },
   (table) => [
+    uniqueIndex('adjustment_decision_id_session_uidx').on(table.id, table.sessionId),
     uniqueIndex('adjustment_decision_session_exercise_uidx').on(
       table.sessionId,
       table.exerciseCode,
@@ -861,12 +862,8 @@ export const futureLoadExplanationCache = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
-    sessionId: text('session_id')
-      .notNull()
-      .references(() => workoutSessions.id, { onDelete: 'cascade' }),
-    decisionId: text('decision_id')
-      .notNull()
-      .references(() => adjustmentDecisions.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').notNull(),
+    decisionId: text('decision_id').notNull(),
     cacheKey: text('cache_key').notNull(),
     prose: text('prose').notNull(),
     modelId: text('model_id').notNull(),
@@ -882,10 +879,46 @@ export const futureLoadExplanationCache = pgTable(
     createdAt: createdAt(),
   },
   (table) => [
+    foreignKey({
+      name: 'future_load_explanation_cache_session_user_fk',
+      columns: [table.sessionId, table.userId],
+      foreignColumns: [workoutSessions.id, workoutSessions.userId],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'future_load_explanation_cache_decision_session_fk',
+      columns: [table.decisionId, table.sessionId],
+      foreignColumns: [adjustmentDecisions.id, adjustmentDecisions.sessionId],
+    }).onDelete('cascade'),
     uniqueIndex('future_load_explanation_cache_key_uidx').on(table.cacheKey),
     index('future_load_explanation_cache_user_idx').on(table.userId),
     index('future_load_explanation_cache_session_idx').on(table.sessionId),
-    index('future_load_explanation_cache_decision_idx').on(table.decisionId),
+    uniqueIndex('future_load_explanation_cache_decision_uidx').on(table.decisionId),
+    check(
+      'future_load_explanation_cache_hashes_check',
+      sql`${table.cacheKey} ~ '^[0-9a-f]{64}$'
+        AND ${table.modelContentDigest} ~ '^[0-9a-f]{64}$'
+        AND ${table.runtimeAttestationDigest} ~ '^[0-9a-f]{64}$'
+        AND ${table.factBundleHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'future_load_explanation_cache_identity_check',
+      sql`char_length(${table.prose}) BETWEEN 1 AND 8000
+        AND ${table.prose} ~ '[^[:space:]]'
+        AND char_length(${table.modelId}) BETWEEN 1 AND 512
+        AND ${table.modelId} ~ '[^[:space:]]'
+        AND char_length(${table.servedModelName}) BETWEEN 1 AND 256
+        AND ${table.servedModelName} ~ '[^[:space:]]'
+        AND char_length(${table.runtimeId}) BETWEEN 1 AND 1024
+        AND ${table.runtimeId} ~ '[^[:space:]]'
+        AND char_length(${table.promptVersion}) BETWEEN 1 AND 128
+        AND ${table.promptVersion} ~ '[^[:space:]]'
+        AND char_length(${table.validatorVersion}) BETWEEN 1 AND 128
+        AND ${table.validatorVersion} ~ '[^[:space:]]'`,
+    ),
+    check(
+      'future_load_explanation_cache_duration_check',
+      sql`${table.generateDurationMs} >= 0`,
+    ),
   ],
 )
 

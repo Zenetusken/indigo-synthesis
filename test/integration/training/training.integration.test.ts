@@ -30,6 +30,7 @@ import {
   abandonWorkout,
   completeSet,
   completeWorkout,
+  correctPerformedSet,
   getCompletedSessions,
   getSessionFutureLoadDecisions,
   getTodayState,
@@ -135,7 +136,40 @@ async function completedSessionWithDecision() {
   const decisions = await getSessionFutureLoadDecisions(owner.id, sessionId)
   const decision = decisions?.[0]
   if (!decision) throw new Error('Expected a future-load decision for cache testing.')
-  return { sessionId, decision }
+  return { sessionId, setId, decision }
+}
+
+async function completedSessionWithDecisionFor(userId: string) {
+  const seeded = await seedCoherentProgram(userId)
+  const sessionId = await startWorkout(
+    userId,
+    seeded.currentWorkoutId,
+    newUuidV7(),
+    TEST_NOW,
+  )
+  const session = await getWorkoutSession(userId, sessionId)
+  const setId = session?.exercises[0]?.sets[0]?.id
+  if (!setId) throw new Error('Started fixture session has no set.')
+  await completeSet({
+    userId,
+    sessionId,
+    setId,
+    commandId: newUuidV7(),
+    actualLoadGrams: TEST_TARGET_LOAD_GRAMS,
+    actualRepetitions: TEST_TARGET_REPETITIONS,
+    rpe: 8,
+    note: null,
+  })
+  await completeWorkout({
+    userId,
+    sessionId,
+    commandId: newUuidV7(),
+    noPainAttested: true,
+  })
+  const decisions = await getSessionFutureLoadDecisions(userId, sessionId)
+  const decision = decisions?.[0]
+  if (!decision) throw new Error('Expected a future-load decision for cache testing.')
+  return { sessionId, setId, decision }
 }
 
 function cachedExplanationInput(input: {
@@ -158,6 +192,20 @@ function cachedExplanationInput(input: {
     validatorVersion: 'future-load-validator.v2',
     factBundleHash: 'c'.repeat(64),
     generateDurationMs: 1000,
+  }
+}
+
+function persistedExplanationRow(input: {
+  readonly userId: string
+  readonly sessionId: string
+  readonly decisionId: string
+  readonly cacheKey: string
+}) {
+  return {
+    id: newUuidV7(),
+    ...cachedExplanationInput(input),
+    userId: input.userId,
+    cacheKey: storageKeyFromExplanationCacheKey(input.cacheKey),
   }
 }
 
@@ -942,7 +990,7 @@ describe('training PostgreSQL command boundary', () => {
         userId: owner.id,
         sessionId,
         decisionId: firstDecision.id,
-        cacheKey: 'test-stale-key',
+        cacheKey: storageKeyFromExplanationCacheKey('test-stale-key'),
         prose: 'stale inferred paraphrase',
         modelId: 'test-model',
         modelContentDigest: 'a'.repeat(64),
@@ -1111,11 +1159,22 @@ describe('training PostgreSQL command boundary', () => {
       .select()
       .from(sessionFeedback)
       .where(eq(sessionFeedback.sessionId, sessionId))
+    const [correction] = await getDb()
+      .select({
+        painReported: sessionFeedbackCorrections.painReported,
+        details: sessionFeedbackCorrections.details,
+      })
+      .from(sessionFeedbackCorrections)
+      .where(eq(sessionFeedbackCorrections.sessionId, sessionId))
     const [hold] = await getDb()
       .select()
       .from(safetyHolds)
       .where(eq(safetyHolds.userId, owner.id))
     expect(feedback).toMatchObject({
+      painReported: false,
+      details: null,
+    })
+    expect(correction).toMatchObject({
       painReported: true,
       details: 'late issue while cache is unavailable',
     })
@@ -1141,6 +1200,99 @@ describe('training PostgreSQL command boundary', () => {
     })
 
     expect(result).toEqual({ status: 'state-unavailable' })
+  })
+
+  it('rejects cache rows whose user, session, and decision ownership disagree', async () => {
+    const ownerState = await completedSessionWithDecision()
+    const memberState = await completedSessionWithDecisionFor(member.id)
+
+    await expect(
+      getDb()
+        .insert(futureLoadExplanationCache)
+        .values(
+          persistedExplanationRow({
+            userId: owner.id,
+            sessionId: memberState.sessionId,
+            decisionId: memberState.decision.id,
+            cacheKey: 'cross-user-cache-row',
+          }),
+        ),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23503',
+        constraint: 'future_load_explanation_cache_session_user_fk',
+      },
+    })
+
+    await expect(
+      getDb()
+        .insert(futureLoadExplanationCache)
+        .values(
+          persistedExplanationRow({
+            userId: member.id,
+            sessionId: memberState.sessionId,
+            decisionId: ownerState.decision.id,
+            cacheKey: 'cross-session-decision-row',
+          }),
+        ),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23503',
+        constraint: 'future_load_explanation_cache_decision_session_fk',
+      },
+    })
+  })
+
+  it('rejects malformed cache provenance and duration at the database boundary', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const valid = persistedExplanationRow({
+      userId: owner.id,
+      sessionId,
+      decisionId: decision.id,
+      cacheKey: 'valid-cache-provenance',
+    })
+
+    await expect(
+      getDb()
+        .insert(futureLoadExplanationCache)
+        .values({
+          ...valid,
+          cacheKey: 'not-a-sha256',
+        }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23514',
+        constraint: 'future_load_explanation_cache_hashes_check',
+      },
+    })
+    await expect(
+      getDb()
+        .insert(futureLoadExplanationCache)
+        .values({
+          ...valid,
+          id: newUuidV7(),
+          modelId: '   ',
+        }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23514',
+        constraint: 'future_load_explanation_cache_identity_check',
+      },
+    })
+    await expect(
+      getDb()
+        .insert(futureLoadExplanationCache)
+        .values({
+          ...valid,
+          id: newUuidV7(),
+          generateDurationMs: -1,
+        }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: '23514',
+        constraint: 'future_load_explanation_cache_duration_check',
+      },
+    })
   })
 
   it('rolls cache statement failures back to a savepoint after confirming active state', async () => {
@@ -1232,6 +1384,45 @@ describe('training PostgreSQL command boundary', () => {
     expect(row?.createdAt.getTime()).toBeGreaterThan(staleCreatedAt.getTime())
   })
 
+  it('replaces stale cache variants instead of accumulating rows for one decision', async () => {
+    const { sessionId, decision } = await completedSessionWithDecision()
+    const cache = createPostgresFutureLoadExplanationCache()
+    const stale = cachedExplanationInput({
+      sessionId,
+      decisionId: decision.id,
+      cacheKey: 'stale-model-and-prompt',
+    })
+    const current = {
+      ...cachedExplanationInput({
+        sessionId,
+        decisionId: decision.id,
+        cacheKey: 'current-model-and-prompt',
+      }),
+      prose: 'The current validated explanation.',
+      modelContentDigest: 'd'.repeat(64),
+      promptVersion: 'future-load.v3',
+    }
+
+    await expect(cache.putIfActive(stale)).resolves.toEqual({ status: 'stored' })
+    await expect(cache.putIfActive(current)).resolves.toEqual({ status: 'stored' })
+
+    const rows = await getDb()
+      .select({
+        cacheKey: futureLoadExplanationCache.cacheKey,
+        prose: futureLoadExplanationCache.prose,
+        promptVersion: futureLoadExplanationCache.promptVersion,
+      })
+      .from(futureLoadExplanationCache)
+      .where(eq(futureLoadExplanationCache.decisionId, decision.id))
+    expect(rows).toEqual([
+      {
+        cacheKey: storageKeyFromExplanationCacheKey(current.cacheKey),
+        prose: current.prose,
+        promptVersion: current.promptVersion,
+      },
+    ])
+  })
+
   it('serializes publication before pain and purges the published row afterward', async () => {
     const { sessionId, decision } = await completedSessionWithDecision()
     const publicationLocked = deferred()
@@ -1275,24 +1466,22 @@ describe('training PostgreSQL command boundary', () => {
     const { sessionId, decision } = await completedSessionWithDecision()
     const painLocked = deferred()
     const releasePain = deferred()
-    const painTransaction = getDb().transaction(async (transaction) => {
-      await transaction.execute(
-        sql`SELECT pg_advisory_xact_lock(hashtextextended(${owner.id}, 0))`,
-      )
-      await transaction.execute(
-        sql`SELECT set_config(
-          'indigo.session_feedback_write_mode',
-          'post-completion-safety-report',
-          true
-        )`,
-      )
-      await transaction
-        .update(sessionFeedback)
-        .set({ painReported: true, details: 'pain linearized first' })
-        .where(eq(sessionFeedback.sessionId, sessionId))
-      painLocked.resolve()
-      await releasePain.promise
-    })
+    const pain = reportPain(
+      {
+        userId: owner.id,
+        sessionId,
+        commandId: newUuidV7(),
+        details: 'pain linearized first',
+      },
+      {
+        testHooks: {
+          afterSafetyStateWritten: async () => {
+            painLocked.resolve()
+            await releasePain.promise
+          },
+        },
+      },
+    )
     await painLocked.promise
 
     const publication = createPostgresFutureLoadExplanationCache().putIfActive(
@@ -1303,7 +1492,7 @@ describe('training PostgreSQL command boundary', () => {
       }),
     )
     releasePain.resolve()
-    await painTransaction
+    await pain
 
     await expect(publication).resolves.toEqual({
       status: 'invalidated',
@@ -1314,6 +1503,92 @@ describe('training PostgreSQL command boundary', () => {
       .from(futureLoadExplanationCache)
       .where(eq(futureLoadExplanationCache.sessionId, sessionId))
     expect(rows).toHaveLength(0)
+  })
+
+  it('invalidates and purges cached prose after a performed-set correction', async () => {
+    const { sessionId, setId, decision } = await completedSessionWithDecision()
+    const cache = createPostgresFutureLoadExplanationCache()
+    await expect(
+      cache.putIfActive(
+        cachedExplanationInput({
+          sessionId,
+          decisionId: decision.id,
+          cacheKey: 'before-performed-set-correction',
+        }),
+      ),
+    ).resolves.toEqual({ status: 'stored' })
+
+    await correctPerformedSet({
+      userId: owner.id,
+      sessionId,
+      setId,
+      commandId: newUuidV7(),
+      reason: 'Corrected from the training log.',
+      actualLoadGrams: TEST_TARGET_LOAD_GRAMS + 2500,
+      actualRepetitions: TEST_TARGET_REPETITIONS - 1,
+      rpe: 9,
+      note: 'Verified after the session.',
+    })
+
+    await expect(
+      cache.putIfActive(
+        cachedExplanationInput({
+          sessionId,
+          decisionId: decision.id,
+          cacheKey: 'after-performed-set-correction',
+        }),
+      ),
+    ).resolves.toEqual({
+      status: 'invalidated',
+      reason: 'training-fact-correction',
+    })
+    const rows = await getDb()
+      .select({ id: futureLoadExplanationCache.id })
+      .from(futureLoadExplanationCache)
+      .where(eq(futureLoadExplanationCache.sessionId, sessionId))
+    expect(rows).toHaveLength(0)
+  })
+
+  it('keeps pain invalidation semantics after a second post-completion report', async () => {
+    const { sessionId } = await completedSessionWithDecision()
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'first post-completion report',
+    })
+    await reportPain({
+      userId: owner.id,
+      sessionId,
+      commandId: newUuidV7(),
+      details: 'second post-completion report',
+    })
+
+    const [correctionCount] = await getDb()
+      .select({ value: count() })
+      .from(sessionFeedbackCorrections)
+      .where(eq(sessionFeedbackCorrections.sessionId, sessionId))
+    expect(correctionCount?.value).toBe(2)
+
+    const decisions = await getSessionFutureLoadDecisions(owner.id, sessionId)
+    expect(decisions).not.toBeNull()
+    expect(
+      decisions?.every(
+        (decision) => decision.invalidationCorrectionKind === 'session-feedback',
+      ),
+    ).toBe(true)
+
+    const bundles = await getFutureLoadFactBundlesForSession(owner.id, sessionId)
+    expect(bundles.status).toBe('available')
+    if (bundles.status === 'available') {
+      expect(bundles.bundles.length).toBeGreaterThan(0)
+      expect(
+        bundles.bundles.every(
+          ({ factBundle }) =>
+            factBundle.decision.invalidationReason === 'post-completion-pain-report',
+        ),
+      ).toBe(true)
+    }
   })
 
   it('creates a source-linked pain hold without coalescing an unrelated eligibility hold', async () => {

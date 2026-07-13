@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { type DatabaseTransaction, getDb } from '@/platform/db/client'
 import {
+  adjustmentDecisionInvalidations,
   adjustmentDecisions,
   futureLoadExplanationCache,
   sessionFeedback,
+  trainingFactCorrections,
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -32,17 +34,23 @@ export type FutureLoadExplanationCacheRead =
   | { readonly status: 'hit'; readonly value: CachedFutureLoadExplanation }
   | { readonly status: 'miss' }
   | { readonly status: 'cache-unavailable' }
-  | { readonly status: 'invalidated'; readonly reason: 'post-completion-pain-report' }
+  | {
+      readonly status: 'invalidated'
+      readonly reason: 'post-completion-pain-report' | 'training-fact-correction'
+    }
   | { readonly status: 'state-unavailable' }
 
 export type FutureLoadExplanationCacheWrite =
   | { readonly status: 'stored' }
   | { readonly status: 'cache-unavailable' }
-  | { readonly status: 'invalidated'; readonly reason: 'post-completion-pain-report' }
+  | {
+      readonly status: 'invalidated'
+      readonly reason: 'post-completion-pain-report' | 'training-fact-correction'
+    }
   | { readonly status: 'state-unavailable' }
 
 export type FutureLoadExplanationCachePort = {
-  /** Linearized cache read: user lock + authoritative pain check + optional cache read. */
+  /** Linearized cache read: user lock + authoritative invalidation check + cache read. */
   readonly getIfActive: (
     input: FutureLoadExplanationCacheScope & { readonly cacheKey: string },
   ) => Promise<FutureLoadExplanationCacheRead>
@@ -80,7 +88,10 @@ export function storageKeyFromExplanationCacheKey(contractCacheKey: string): str
 
 type AuthoritativeState =
   | { readonly status: 'active' }
-  | { readonly status: 'invalidated'; readonly reason: 'post-completion-pain-report' }
+  | {
+      readonly status: 'invalidated'
+      readonly reason: 'post-completion-pain-report' | 'training-fact-correction'
+    }
   | { readonly status: 'state-unavailable' }
 
 async function lockAndReadAuthoritativeState(
@@ -93,11 +104,21 @@ async function lockAndReadAuthoritativeState(
   const [row] = await transaction
     .select({
       status: workoutSessions.status,
-      painReported: sessionFeedback.painReported,
+      feedbackSessionId: sessionFeedback.sessionId,
+      invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      correctionKind: trainingFactCorrections.correctionKind,
     })
     .from(adjustmentDecisions)
     .innerJoin(workoutSessions, eq(workoutSessions.id, adjustmentDecisions.sessionId))
     .leftJoin(sessionFeedback, eq(sessionFeedback.sessionId, workoutSessions.id))
+    .leftJoin(
+      adjustmentDecisionInvalidations,
+      eq(adjustmentDecisionInvalidations.decisionId, adjustmentDecisions.id),
+    )
+    .leftJoin(
+      trainingFactCorrections,
+      eq(trainingFactCorrections.id, adjustmentDecisionInvalidations.correctionId),
+    )
     .where(
       and(
         eq(adjustmentDecisions.id, scope.decisionId),
@@ -108,12 +129,17 @@ async function lockAndReadAuthoritativeState(
     .limit(1)
 
   if (row?.status !== 'completed') return { status: 'state-unavailable' }
-  if (row.painReported === true) {
-    return { status: 'invalidated', reason: 'post-completion-pain-report' }
+  if (row.feedbackSessionId === null) return { status: 'state-unavailable' }
+  if (row.invalidationCorrectionId !== null) {
+    return {
+      status: 'invalidated',
+      reason:
+        row.correctionKind === 'session-feedback'
+          ? 'post-completion-pain-report'
+          : 'training-fact-correction',
+    }
   }
-  return row.painReported === false
-    ? { status: 'active' }
-    : { status: 'state-unavailable' }
+  return { status: 'active' }
 }
 
 /**
@@ -185,6 +211,16 @@ export function createPostgresFutureLoadExplanationCache(options?: {
             const storageKey = storageKeyFromExplanationCacheKey(input.cacheKey)
             await transaction.transaction(async (cacheTransaction) => {
               await options?.testHooks?.beforeCacheStatement?.(cacheTransaction, 'put')
+              await cacheTransaction
+                .delete(futureLoadExplanationCache)
+                .where(
+                  and(
+                    eq(futureLoadExplanationCache.userId, input.userId),
+                    eq(futureLoadExplanationCache.sessionId, input.sessionId),
+                    eq(futureLoadExplanationCache.decisionId, input.decisionId),
+                    ne(futureLoadExplanationCache.cacheKey, storageKey),
+                  ),
+                )
               return cacheTransaction
                 .insert(futureLoadExplanationCache)
                 .values({
@@ -205,8 +241,9 @@ export function createPostgresFutureLoadExplanationCache(options?: {
                   generateDurationMs: input.generateDurationMs,
                 })
                 .onConflictDoUpdate({
-                  target: futureLoadExplanationCache.cacheKey,
+                  target: futureLoadExplanationCache.decisionId,
                   set: {
+                    cacheKey: storageKey,
                     prose: input.prose,
                     modelId: input.modelId,
                     modelContentDigest: input.modelContentDigest,
@@ -287,6 +324,16 @@ export function createMemoryFutureLoadExplanationCache(options?: {
     async putIfActive(input) {
       const state = await activeState()
       if (state.status !== 'active') return state
+      for (const [key, value] of byKey) {
+        if (
+          value.userId === input.userId &&
+          value.sessionId === input.sessionId &&
+          value.decisionId === input.decisionId &&
+          key !== input.cacheKey
+        ) {
+          byKey.delete(key)
+        }
+      }
       byKey.set(input.cacheKey, input)
       return { status: 'stored' }
     },

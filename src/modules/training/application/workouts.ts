@@ -1545,6 +1545,10 @@ export async function reportPain(
   },
   deps?: {
     readonly explanationCache?: FutureLoadExplanationCachePort
+    /** Integration-only ordering hook; production composition never supplies this. */
+    readonly testHooks?: {
+      readonly afterSafetyStateWritten?: () => Promise<void>
+    }
   },
 ): Promise<void> {
   const input = {
@@ -1682,6 +1686,8 @@ export async function reportPain(
       },
     })
 
+    await deps?.testHooks?.afterSafetyStateWritten?.()
+
     return wasCompleted
   })
 
@@ -1697,17 +1703,22 @@ export async function reportPain(
   }
 }
 
-export async function correctPerformedSet(rawInput: {
-  readonly userId: string
-  readonly sessionId: string
-  readonly setId: string
-  readonly commandId: string
-  readonly reason: string
-  readonly actualLoadGrams: number
-  readonly actualRepetitions: number
-  readonly rpe: number | null
-  readonly note: string | null
-}): Promise<void> {
+export async function correctPerformedSet(
+  rawInput: {
+    readonly userId: string
+    readonly sessionId: string
+    readonly setId: string
+    readonly commandId: string
+    readonly reason: string
+    readonly actualLoadGrams: number
+    readonly actualRepetitions: number
+    readonly rpe: number | null
+    readonly note: string | null
+  },
+  deps?: {
+    readonly explanationCache?: FutureLoadExplanationCachePort
+  },
+): Promise<void> {
   const input = {
     userId: rawInput.userId,
     ...parseWorkoutCommand(correctPerformedSetCommandSchema, rawInput),
@@ -1815,6 +1826,13 @@ export async function correctPerformedSet(rawInput: {
       },
     })
   })
+
+  const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
+  try {
+    await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
+  } catch {
+    // The append-only correction and recursive invalidations are already committed.
+  }
 }
 
 export async function resolveSafetyHold(rawInput: {
@@ -1944,20 +1962,7 @@ export async function resolveSafetyHold(rawInput: {
         acknowledged: input.acknowledged,
       },
     })
-
-    return wasCompleted
   })
-
-  // Presentation cleanup is deliberately post-commit and fail-soft. The authoritative
-  // feedback, safety hold, receipt, and audit never depend on cache availability.
-  if (shouldPurgeExplanationCache) {
-    const cache = deps?.explanationCache ?? createPostgresFutureLoadExplanationCache()
-    try {
-      await cache.deleteBySessionId({ userId: input.userId, sessionId: input.sessionId })
-    } catch {
-      // Authoritative safety state is already committed; cleanup must remain fail-soft.
-    }
-  }
 }
 
 export async function completeWorkout(rawInput: {
@@ -2545,6 +2550,7 @@ export type FutureLoadDecisionView = {
   readonly templateReviewStatus: string
   readonly invalidatedAt: Date | null
   readonly invalidationCorrectionId: string | null
+  readonly invalidationCorrectionKind: string | null
   readonly invalidationReason: string | null
 }
 
@@ -2590,6 +2596,7 @@ export async function getSessionAdjustments(userId: string, sessionId: string) {
       ...getTableColumns(adjustmentDecisions),
       invalidatedAt: adjustmentDecisionInvalidations.createdAt,
       invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationCorrectionKind: trainingFactCorrections.correctionKind,
       invalidationReason: trainingFactCorrections.reason,
     })
     .from(adjustmentDecisions)
@@ -2659,6 +2666,7 @@ export async function getSessionFutureLoadDecisions(
       exerciseName: sessionExercises.exerciseName,
       invalidatedAt: adjustmentDecisionInvalidations.createdAt,
       invalidationCorrectionId: adjustmentDecisionInvalidations.correctionId,
+      invalidationCorrectionKind: trainingFactCorrections.correctionKind,
       invalidationReason: trainingFactCorrections.reason,
     })
     .from(adjustmentDecisions)
@@ -2697,6 +2705,7 @@ export async function getSessionFutureLoadDecisions(
     templateReviewStatus: owned.templateReviewStatus,
     invalidatedAt: row.invalidatedAt,
     invalidationCorrectionId: row.invalidationCorrectionId,
+    invalidationCorrectionKind: row.invalidationCorrectionKind,
     invalidationReason: row.invalidationReason,
   }))
 }

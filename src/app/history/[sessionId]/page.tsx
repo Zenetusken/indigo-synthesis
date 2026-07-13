@@ -26,8 +26,11 @@ export default async function SessionHistoryPage({
 }) {
   const actor = await requireActor()
   const { sessionId } = await params
-  const [session, adjustments, profile] = await Promise.all([
-    getWorkoutSession(actor.userId, sessionId),
+  // Read the session facts before their derived decisions. Corrections and decision
+  // invalidations commit atomically, so this ordering prevents a render from pairing a
+  // newly visible correction with an earlier, still-active decision snapshot.
+  const session = await getWorkoutSession(actor.userId, sessionId)
+  const [adjustments, profile] = await Promise.all([
     getSessionAdjustments(actor.userId, sessionId),
     getAthleteProfile(actor.userId),
   ])

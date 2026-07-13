@@ -54,6 +54,10 @@ function sampleBundleResult(
           methodologyVersion: '0.0.1-development',
           methodologyReviewStatus: 'development',
           templateReviewStatus: 'development',
+          invalidatedAt: null,
+          invalidationCorrectionId: null,
+          invalidationCorrectionKind: null,
+          invalidationReason: null,
         },
         factBundle: {
           contractVersion: '2',
@@ -177,6 +181,27 @@ describe('explainFutureLoadDecision', () => {
     expect(synthesize).not.toHaveBeenCalled()
   })
 
+  it('fails soft when local model configuration cannot be parsed', async () => {
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache: createMemoryFutureLoadExplanationCache(),
+        getBundles: async () => sampleBundleResult(),
+        getConfig: () => {
+          throw new Error('malformed operator environment')
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: expect.stringContaining('configuration is invalid'),
+    })
+  })
+
   it('returns decision-not-found when the decision id is missing', async () => {
     const result = await explainFutureLoadDecision({
       userId,
@@ -260,6 +285,28 @@ describe('explainFutureLoadDecision', () => {
       status: 'unavailable',
       reason: 'llm-not-ready',
       detail: 'GPU required but not ready',
+    })
+  })
+
+  it('fails soft when runtime preflight throws on a cache miss', async () => {
+    const result = await explainFutureLoadDecision({
+      userId,
+      sessionId,
+      decisionId,
+      deps: {
+        cache: createMemoryFutureLoadExplanationCache(),
+        getBundles: async () => sampleBundleResult(),
+        getConfig: localConfig,
+        preflight: async () => {
+          throw new Error('runtime probe failed unexpectedly')
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'llm-not-ready',
+      detail: expect.stringContaining('readiness could not be verified'),
     })
   })
 

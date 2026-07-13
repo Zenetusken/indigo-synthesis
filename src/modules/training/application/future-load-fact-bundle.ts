@@ -64,21 +64,28 @@ function mapSetFact(
 
 /** Stable presentation invalidation when post-completion pain supersedes active framing. */
 export const POST_COMPLETION_PAIN_INVALIDATION_REASON = 'post-completion-pain-report'
+export const TRAINING_FACT_CORRECTION_INVALIDATION_REASON = 'training-fact-correction'
 
 /**
  * Derives explanation invalidation without rewriting immutable adjustment_decision rows.
  * Post-completion pain means "active increase/hold" prose is no longer honest framing.
  */
-export function isFutureLoadExplanationInvalidated(session: WorkoutSessionView):
+export function isFutureLoadExplanationInvalidated(
+  decision: FutureLoadDecisionView,
+  session: WorkoutSessionView,
+):
   | { readonly invalidated: true; readonly invalidationReason: string }
   | {
       readonly invalidated: false
       readonly invalidationReason: null
     } {
-  if (session.status === 'completed' && session.feedback?.painReported === true) {
+  if (session.status === 'completed' && decision.invalidatedAt !== null) {
     return {
       invalidated: true,
-      invalidationReason: POST_COMPLETION_PAIN_INVALIDATION_REASON,
+      invalidationReason:
+        decision.invalidationCorrectionKind === 'session-feedback'
+          ? POST_COMPLETION_PAIN_INVALIDATION_REASON
+          : TRAINING_FACT_CORRECTION_INVALIDATION_REASON,
     }
   }
   return { invalidated: false, invalidationReason: null }
@@ -109,7 +116,10 @@ export function toPersistedFutureLoadDecision(input: {
     )
   }
 
-  const { invalidated, invalidationReason } = isFutureLoadExplanationInvalidated(session)
+  const { invalidated, invalidationReason } = isFutureLoadExplanationInvalidated(
+    decision,
+    session,
+  )
 
   return {
     decisionId: decision.id,
