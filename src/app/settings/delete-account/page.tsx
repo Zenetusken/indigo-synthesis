@@ -3,6 +3,7 @@ import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveSubjectDeletionPlan } from '@/modules/data-portability/application/deletion'
 import { requireActor } from '@/modules/identity/server/actor'
 import styles from '../delete/delete.module.css'
+import { deletionCategoryLabel } from '../deletion-category-label'
 import { createAccountDeletionPreviewAction, deleteAccountAction } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -87,7 +88,7 @@ export default async function DeleteAccountPage({
             <dl className={styles.counts}>
               {Object.entries(plan.counts).map(([category, value]) => (
                 <div key={category}>
-                  <dt>{category}</dt>
+                  <dt>{deletionCategoryLabel(category)}</dt>
                   <dd>{value}</dd>
                 </div>
               ))}

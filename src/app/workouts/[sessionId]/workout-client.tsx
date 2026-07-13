@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState, useTransition } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton, Disclosure } from '@/components'
 import { formatCalendarDate, formatTimeInTimezone } from '@/modules/athletes/domain/time'
 import {
   type DisplayUnits,
@@ -271,46 +271,53 @@ function SubstitutionProposalForm({
       className={styles.substitutionPanel}
       aria-label={`Substitution proposal for ${originalExerciseName}`}
     >
+      {/* The reassurance stays visible; only the rarely-used request form
+          collapses so it does not push the set work down the page (U1). */}
       <div className={styles.substitutionProof}>
         <strong>Prescription unchanged</strong>
         <span>{originalExerciseName} remains the prescribed exercise.</span>
       </div>
-      {errorCode ? (
-        <div
-          className={styles.substitutionUnavailable}
-          role="alert"
-          tabIndex={-1}
-          ref={alertRef}
-        >
-          <strong>Substitution not applied</strong>
-          <span>{errorMessages[errorCode] ?? 'The substitution was not applied.'}</span>
-          <span>The original prescription remains unchanged.</span>
-        </div>
-      ) : null}
-      <form className={styles.substitutionForm} onSubmit={submit} aria-busy={isPending}>
-        <input type="hidden" name="sessionId" value={sessionId} />
-        <input type="hidden" name="sessionExerciseId" value={sessionExerciseId} />
-        <input type="hidden" name="commandId" value={commandId} />
-        <label>
-          <span>Requested exercise</span>
-          <input
-            name="requestedExerciseCode"
-            type="text"
-            maxLength={200}
-            value={requestedExerciseCode}
-            onChange={(event) => setRequestedExerciseCode(event.target.value)}
-            aria-describedby={`substitution-help-${sessionExerciseId}`}
-            required
-            disabled={isPending}
-          />
-        </label>
-        <p id={`substitution-help-${sessionExerciseId}`}>
-          Enter the exercise name or catalog code you want considered.
-        </p>
-        <ActionButton variant="secondary" type="submit" busy={isPending}>
-          {isPending ? 'Checking proposal…' : 'Propose substitute'}
-        </ActionButton>
-      </form>
+      <Disclosure
+        className={styles.substitutionDisclosure}
+        summary="Request a substitution"
+      >
+        {errorCode ? (
+          <div
+            className={styles.substitutionUnavailable}
+            role="alert"
+            tabIndex={-1}
+            ref={alertRef}
+          >
+            <strong>Substitution not applied</strong>
+            <span>{errorMessages[errorCode] ?? 'The substitution was not applied.'}</span>
+            <span>The original prescription remains unchanged.</span>
+          </div>
+        ) : null}
+        <form className={styles.substitutionForm} onSubmit={submit} aria-busy={isPending}>
+          <input type="hidden" name="sessionId" value={sessionId} />
+          <input type="hidden" name="sessionExerciseId" value={sessionExerciseId} />
+          <input type="hidden" name="commandId" value={commandId} />
+          <label>
+            <span>Requested exercise</span>
+            <input
+              name="requestedExerciseCode"
+              type="text"
+              maxLength={200}
+              value={requestedExerciseCode}
+              onChange={(event) => setRequestedExerciseCode(event.target.value)}
+              aria-describedby={`substitution-help-${sessionExerciseId}`}
+              required
+              disabled={isPending}
+            />
+          </label>
+          <p id={`substitution-help-${sessionExerciseId}`}>
+            Enter the exercise name or catalog code you want considered.
+          </p>
+          <ActionButton variant="secondary" type="submit" busy={isPending}>
+            {isPending ? 'Checking proposal…' : 'Propose substitute'}
+          </ActionButton>
+        </form>
+      </Disclosure>
     </section>
   )
 }

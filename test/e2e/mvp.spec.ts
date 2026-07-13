@@ -183,9 +183,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
   await page.getByRole('button', { name: 'Start workout' }).click()
   await expect(page).toHaveURL(/\/workouts\//)
   await expect(page.getByText('Prescription unchanged').first()).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Propose substitute' }).first(),
-  ).toBeVisible()
+  await expect(page.getByText('Request a substitution').first()).toBeVisible()
 
   let remaining = await page.getByRole('button', { name: 'Complete set' }).count()
   expect(remaining).toBeGreaterThan(0)

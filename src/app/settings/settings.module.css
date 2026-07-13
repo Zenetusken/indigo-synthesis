@@ -114,12 +114,12 @@
 
 .error {
   background: var(--danger-soft);
-  border-inline-start: 0.3rem solid var(--danger);
+  border-inline-start: var(--accent-edge) solid var(--danger);
 }
 
 .success {
   background: var(--verified-soft);
-  border-inline-start: 0.3rem solid var(--verified);
+  border-inline-start: var(--accent-edge) solid var(--verified);
 }
 
 .userList {

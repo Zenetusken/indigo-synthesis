@@ -96,6 +96,6 @@
 
 .error {
   background: var(--danger-soft);
-  border-inline-start: 0.35rem solid var(--danger);
+  border-inline-start: var(--accent-edge) solid var(--danger);
   padding: var(--space-4);
 }

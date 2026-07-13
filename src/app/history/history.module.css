@@ -120,7 +120,7 @@
 
 .reportError,
 .reportSuccess {
-  border-inline-start: 0.3rem solid var(--danger);
+  border-inline-start: var(--accent-edge) solid var(--danger);
   padding: var(--space-4);
 }
 
@@ -129,8 +129,8 @@
 }
 
 .reportSuccess {
-  background: var(--warning-soft);
-  border-inline-start-color: var(--warning);
+  background: var(--verified-soft);
+  border-inline-start-color: var(--verified);
 }
 
 .setCorrection {
@@ -143,7 +143,7 @@
 
 .invalidatedDecision {
   background: var(--danger-soft);
-  border-inline-start: 0.3rem solid var(--danger);
+  border-inline-start: var(--accent-edge) solid var(--danger);
   padding-inline: var(--space-3);
 }
 

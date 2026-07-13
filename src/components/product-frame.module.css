@@ -193,9 +193,7 @@
     font-size: clamp(0.72rem, 3.5vw, 0.88rem);
     justify-content: center;
     min-height: 3rem;
-    overflow: hidden;
     padding: 0 var(--space-1);
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
