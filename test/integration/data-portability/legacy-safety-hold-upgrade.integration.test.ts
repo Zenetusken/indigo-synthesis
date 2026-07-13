@@ -2,6 +2,7 @@ import { type MigrationMeta, readMigrationFiles } from 'drizzle-orm/migrator'
 import { Client } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { createDisposableIntegrationDatabase } from '@/platform/db/disposable-integration-database'
+import { expectedMigrationCount } from '@/platform/db/preflight'
 
 async function applyMigrations(client: Client, migrations: readonly MigrationMeta[]) {
   for (const migration of migrations) {
@@ -222,7 +223,7 @@ describe('legacy source-less safety hold migration', () => {
       client = new Client({ connectionString: database.databaseUrl })
       await client.connect()
       const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-      expect(migrations).toHaveLength(14)
+      expect(migrations).toHaveLength(expectedMigrationCount)
       await applyMigrations(client, migrations.slice(0, 7))
 
       const users = [

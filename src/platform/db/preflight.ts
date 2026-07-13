@@ -17,7 +17,7 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-const expectedMigrationCount = 14
+export const expectedMigrationCount = 15
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',

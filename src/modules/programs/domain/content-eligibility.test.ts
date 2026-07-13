@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { evaluatePersistedContentEligibility } from './content-eligibility'
 
 describe('persisted content eligibility', () => {
-  it('denies exact-version revoked releases before status checks', () => {
+  it('denies exact-version revoked releases that are otherwise eligible', () => {
     expect(
       evaluatePersistedContentEligibility({
         contentMode: 'development',
@@ -11,6 +11,34 @@ describe('persisted content eligibility', () => {
         revoked: true,
       }),
     ).toEqual({ eligible: false, code: 'content.revoked' })
+  })
+
+  it.each([
+    ['prohibited', 'content.prohibited'],
+    ['expired', 'content.expired'],
+  ] as const)('keeps the stricter %s cause when revoked content is also %s', (status, code) => {
+    expect(
+      evaluatePersistedContentEligibility({
+        contentMode: 'development',
+        methodologyStatus: status,
+        templateStatus: 'reviewed',
+        revoked: true,
+      }),
+    ).toEqual({ eligible: false, code })
+  })
+
+  it('keeps development-forbidden precedence over revocation in reviewed mode', () => {
+    expect(
+      evaluatePersistedContentEligibility({
+        contentMode: 'reviewed',
+        methodologyStatus: 'development',
+        templateStatus: 'reviewed',
+        revoked: true,
+      }),
+    ).toEqual({
+      eligible: false,
+      code: 'content.development-forbidden-in-production',
+    })
   })
 
   it.each([

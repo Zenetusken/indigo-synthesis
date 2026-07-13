@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { assertOwner } from '@/modules/identity/application/actor'
 import { type Database, type DatabaseTransaction, getDb } from '@/platform/db/client'
@@ -116,6 +116,26 @@ export async function revokeContentRelease(input: {
       input.contentId,
       input.contentVersion,
     )
+    // Safe check-then-insert: every revoker serializes on the advisory lock
+    // above, so a concurrent duplicate cannot slip between check and insert.
+    // The unique index remains the database-level backstop.
+    const [existing] = await transaction
+      .select({ id: contentReleaseRevocations.id })
+      .from(contentReleaseRevocations)
+      .where(
+        and(
+          eq(contentReleaseRevocations.contentKind, input.contentKind),
+          eq(contentReleaseRevocations.contentId, input.contentId),
+          eq(contentReleaseRevocations.contentVersion, input.contentVersion),
+        ),
+      )
+      .limit(1)
+    if (existing) {
+      throw new ContentRevocationError(
+        'content-revocation.already-revoked',
+        'This content release is already revoked.',
+      )
+    }
     await transaction.insert(contentReleaseRevocations).values({
       id,
       contentKind: input.contentKind,
@@ -171,5 +191,12 @@ export async function programRevisionContentIsRevoked(
     .from(programRevisions)
     .where(eq(programRevisions.id, revisionId))
     .limit(1)
-  return row?.revoked ?? false
+  if (!row) {
+    // Fail closed: an unknown revision cannot be attested as unrevoked.
+    throw new ContentRevocationError(
+      'content-revocation.revision-missing',
+      'The program revision is unavailable for revocation evaluation.',
+    )
+  }
+  return row.revoked
 }
