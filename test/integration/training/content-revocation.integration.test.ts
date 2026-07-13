@@ -7,7 +7,10 @@ import {
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
-import { revokeContentRelease } from '@/modules/programs/application/content-revocations'
+import {
+  programRevisionContentIsRevoked,
+  revokeContentRelease,
+} from '@/modules/programs/application/content-revocations'
 import { activateProgram } from '@/modules/programs/application/programs'
 import {
   completeSet,
@@ -134,12 +137,41 @@ describe('runtime content revocation', () => {
     expect(program?.status).toBe('draft')
   })
 
+  it('rejects duplicate revocation with a typed domain error', async () => {
+    await revokeFixtureMethodology()
+
+    await expect(revokeFixtureMethodology()).rejects.toMatchObject({
+      name: 'ContentRevocationError',
+      code: 'content-revocation.already-revoked',
+    })
+  })
+
+  it('fails closed when evaluating revocation for an unknown revision', async () => {
+    await expect(
+      getDb().transaction((transaction) =>
+        programRevisionContentIsRevoked(transaction, newUuidV7()),
+      ),
+    ).rejects.toMatchObject({
+      name: 'ContentRevocationError',
+      code: 'content-revocation.revision-missing',
+    })
+  })
+
   it('keeps revocations unique and append-only in PostgreSQL', async () => {
     const revocationId = await revokeFixtureMethodology()
 
-    await expect(revokeFixtureMethodology()).rejects.toMatchObject({
-      cause: { code: '23505' },
-    })
+    // Database-level uniqueness backstop, bypassing the application guard.
+    const [existing] = await getDb()
+      .select()
+      .from(contentReleaseRevocations)
+      .where(eq(contentReleaseRevocations.id, revocationId))
+    if (!existing) throw new Error('Seeded revocation row is missing.')
+    await expect(
+      getDb()
+        .insert(contentReleaseRevocations)
+        .values({ ...existing, id: newUuidV7() }),
+    ).rejects.toMatchObject({ cause: { code: '23505' } })
+
     await expect(
       getDb()
         .update(contentReleaseRevocations)
@@ -151,6 +183,43 @@ describe('runtime content revocation', () => {
         .delete(contentReleaseRevocations)
         .where(eq(contentReleaseRevocations.id, revocationId)),
     ).rejects.toMatchObject({ cause: { code: '55000' } })
+  })
+
+  it('permits only the actor-unlink update, and only inside a deletion mode', async () => {
+    const revocationId = await revokeFixtureMethodology()
+
+    // Actor unlink outside any sanctioned deletion mode stays rejected.
+    await expect(
+      getDb()
+        .update(contentReleaseRevocations)
+        .set({ actorUserId: null })
+        .where(eq(contentReleaseRevocations.id, revocationId)),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+
+    // A fact-column change stays rejected even inside a deletion mode.
+    await expect(
+      getDb().transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`)
+        await transaction
+          .update(contentReleaseRevocations)
+          .set({ reason: 'Rewritten during reset.' })
+          .where(eq(contentReleaseRevocations.id, revocationId))
+      }),
+    ).rejects.toMatchObject({ cause: { code: '55000' } })
+
+    // The exact FK ON DELETE SET NULL transition is permitted in-mode.
+    await getDb().transaction(async (transaction) => {
+      await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'trainee-data'`)
+      await transaction
+        .update(contentReleaseRevocations)
+        .set({ actorUserId: null })
+        .where(eq(contentReleaseRevocations.id, revocationId))
+    })
+    const [unlinked] = await getDb()
+      .select({ actorUserId: contentReleaseRevocations.actorUserId })
+      .from(contentReleaseRevocations)
+      .where(eq(contentReleaseRevocations.id, revocationId))
+    expect(unlinked?.actorUserId).toBeNull()
   })
 
   it('blocks start, resume, set completion, and set skip after revocation', async () => {

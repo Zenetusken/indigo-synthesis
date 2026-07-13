@@ -19,9 +19,6 @@ export function evaluatePersistedContentEligibility(input: {
 }): ContentEligibilityResult {
   const statuses = [input.methodologyStatus, input.templateStatus]
 
-  if (input.revoked) {
-    return { eligible: false, code: 'content.revoked' }
-  }
   if (statuses.includes('prohibited')) {
     return { eligible: false, code: 'content.prohibited' }
   }
@@ -39,6 +36,13 @@ export function evaluatePersistedContentEligibility(input: {
   }
   if (statuses.some((status) => status !== 'reviewed' && status !== 'development')) {
     return { eligible: false, code: 'content.prohibited' }
+  }
+  // Revocation is evaluated last so 'content.revoked' always means "otherwise
+  // eligible": stricter causes keep precedence, and the completed-history
+  // exemption keyed on this code can never un-hide content that a stricter
+  // status already hides.
+  if (input.revoked) {
+    return { eligible: false, code: 'content.revoked' }
   }
 
   return { eligible: true }

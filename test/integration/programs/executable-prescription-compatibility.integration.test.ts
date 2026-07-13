@@ -23,7 +23,7 @@ import {
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
-import { assertDatabaseReady } from '@/platform/db/preflight'
+import { assertDatabaseReady, expectedMigrationCount } from '@/platform/db/preflight'
 import {
   plannedWorkouts,
   programRevisions,
@@ -255,7 +255,7 @@ async function withPendingLedgerProvenanceMigration(
     client = new Client({ connectionString: database.databaseUrl })
     await client.connect()
     const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-    expect(migrations).toHaveLength(14)
+    expect(migrations).toHaveLength(expectedMigrationCount)
     await applyMigrationPrefixWithLedger(client, migrations.slice(0, 10))
 
     database.activateDatabaseUrl()
@@ -503,7 +503,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(ledger.rows).toEqual([{ hash: canonicalProgramOrdinalMigrationHash }])
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 14,
+        appliedMigrationCount: expectedMigrationCount,
         migrationLedgerCanonical: true,
       })
 
@@ -535,7 +535,7 @@ describe('program-ordinal migration ledger provenance', () => {
       )
       expect(after.rows).toEqual(before.rows)
       await expect(assertDatabaseReady()).resolves.toMatchObject({
-        appliedMigrationCount: 14,
+        appliedMigrationCount: expectedMigrationCount,
         migrationLedgerCanonical: true,
       })
     })

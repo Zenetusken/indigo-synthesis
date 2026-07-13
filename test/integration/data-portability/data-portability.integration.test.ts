@@ -17,6 +17,7 @@ import {
 import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
+import { revokeContentRelease } from '@/modules/programs/application/content-revocations'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
@@ -1299,6 +1300,18 @@ describe('subject export and exact instance reset', () => {
   })
 
   it('binds every affected live-table count into the plan and leaves only a tombstone', async () => {
+    // Reset must succeed with a live revocation row present: the append-only
+    // guard permits its deletion only inside instance-reset mode, and the row
+    // must be purged before the authoring user row so the FK actor-unlink
+    // update never fires.
+    await revokeContentRelease({
+      actor,
+      contentKind: 'methodology',
+      contentId: 'development.methodology-fixture',
+      contentVersion: '0.0.1-development',
+      reason: 'Reset coverage requires a live revocation.',
+    })
+
     const stalePlan = await createInstanceResetPlan(actor)
     expect(Object.keys(stalePlan.counts)).toHaveLength(32)
     expect(stalePlan.counts).toMatchObject({
@@ -1330,8 +1343,8 @@ describe('subject export and exact instance reset', () => {
       performedSetCorrections: 1,
       adjustmentDecisionInvalidations: 1,
       programRevisionInvalidations: 1,
-      contentReleaseRevocations: 0,
-      auditEvents: 4,
+      contentReleaseRevocations: 1,
+      auditEvents: 5,
       deletionPlans: 1,
     })
 
