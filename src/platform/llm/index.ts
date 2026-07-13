@@ -10,6 +10,11 @@ export {
   LLM_BASELINE_VERSION,
 } from './baseline/golden-cases'
 export {
+  buildMeasurementSnapshot,
+  formatMeasurementSummary,
+  type LlmMeasurementSnapshot,
+} from './baseline/metrics'
+export {
   formatLiveProbeReport,
   type LiveProbeReport,
   runLiveProbe,
@@ -32,6 +37,11 @@ export {
   parseLlmConfig,
   resetLlmConfigForTests,
 } from './config'
+export {
+  buildFutureLoadFactBundle,
+  FactBundleBuildError,
+  type PersistedFutureLoadDecision,
+} from './explanation/build-fact-bundle'
 export type { ExplanationFactBundle } from './explanation/fact-bundle'
 export {
   canonicalJsonStringify,

@@ -151,13 +151,18 @@ language models.
 - loopback-only OpenAI-compatible adapter for host-local servers (e.g. llama-server);
 - calibrated **offline** golden baseline (`pnpm llm:validate-baseline`) plus optional live
   probe when a loopback server is running;
+- measurement protocol and JSON metrics snapshot
+  ([LLM_MEASUREMENT_PROTOCOL.md](architecture/LLM_MEASUREMENT_PROTOCOL.md));
+- pure `buildFutureLoadFactBundle` from persisted decision fields (caller supplies
+  `formatLoad` labels);
 - operator guide in `llm/README.md`.
 
 **Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations,
 weight download automation, or any methodology authority. History continues to show
 structured reason codes only. `INDIGO_LLM_MODE` defaults to `disabled`. LLM/ML
 **coaching** remains deferred. No live GGUF is required in CI; live probe is operator
-calibration only.
+calibration only. Product UI waits until offline metrics stay green and live runs are
+recorded per the measurement protocol.
 
 ## Production-release blockers
 

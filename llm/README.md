@@ -110,18 +110,21 @@ OpenAI-compatible endpoint on loopback only.
 - Validation rejects prose that invents loads or omits reason codes.
 - CI does not download weights or start inference.
 
-## Calibrated baseline
+## Calibrated baseline (measure first)
+
+Protocol: [docs/architecture/LLM_MEASUREMENT_PROTOCOL.md](../docs/architecture/LLM_MEASUREMENT_PROTOCOL.md)
 
 Offline contract baseline (no weights, no server) is the CI-grade calibration gate:
 
 ```sh
 pnpm llm:validate-baseline
+pnpm llm:validate-baseline --json   # machine-readable measurement snapshot
 ```
 
 It loads both model packs, runs the golden FactBundle suite (increase / holds / pain
-block / invalidated), checks accepted templates pass and trap prose fails, and verifies
-fake synthesize + disabled defaults. Baseline version: see
-`LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`.
+block / invalidated), checks accepted templates pass and trap prose fails, verifies fake
+synthesize + disabled defaults, and prints accept/reject/synthesize rates. Baseline
+version: `LLM_BASELINE_VERSION` in `src/platform/llm/baseline/golden-cases.ts`.
 
 Optional live probe against a running loopback server (informational; unreachable does
 not fail the offline gate):
@@ -130,8 +133,8 @@ not fail the offline gate):
 INDIGO_LLM_LIVE=1 \
 INDIGO_LLM_ENDPOINT=http://127.0.0.1:8080/v1 \
 INDIGO_LLM_MODEL_ID=qwen3.5-9b-q4_k_m \
-pnpm llm:validate-baseline
+pnpm llm:validate-baseline --json
 ```
 
 Live results only count as calibrated when cases return `available` after the validation
-gate. Treat that as operator evidence, not a product claim that the model is coaching.
+gate. Prefer multiple runs with a fixed model digest before any UI experiment.
