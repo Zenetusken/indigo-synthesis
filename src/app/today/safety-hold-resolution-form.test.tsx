@@ -78,10 +78,20 @@ describe('SafetyHoldResolutionForm', () => {
     expect(await screen.findByRole('button', { name: 'Resolving safety hold…' })).toBe(
       button,
     )
-    expect(button).toBeDisabled()
+    // The submit control keeps focus (aria-disabled) instead of going natively
+    // disabled, so mid-submit focus is not dropped to the body.
+    expect(button).not.toBeDisabled()
+    expect(button).toHaveAttribute('aria-disabled', 'true')
+    expect(button).toHaveAttribute('aria-busy', 'true')
     expect(reason).toBeDisabled()
     expect(acknowledgement).toBeDisabled()
     expect(button.closest('form')).toHaveAttribute('aria-busy', 'true')
+
+    // Double-submit guard: re-activating the busy control must not enqueue a
+    // second resolution. Native `disabled` used to prevent this for free; now
+    // the button's own activation guard does. Without it, this queued click
+    // would run a second action once the first resolves.
+    fireEvent.click(button)
 
     await act(async () => {
       pendingResult.resolve({
@@ -90,6 +100,8 @@ describe('SafetyHoldResolutionForm', () => {
       })
       await pendingResult.promise
     })
+
+    expect(actionMock).toHaveBeenCalledTimes(1)
   })
 
   it('focuses actionable validation feedback without relying on native bubbles', async () => {

@@ -43,21 +43,6 @@
   text-decoration: none;
 }
 
-.mark {
-  align-items: center;
-  background: var(--indigo-enamel);
-  border-radius: var(--radius-sm);
-  color: white;
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-family: var(--font-data);
-  font-size: var(--text-sm);
-  height: 2.5rem;
-  justify-content: center;
-  letter-spacing: -0.06em;
-  width: 2.5rem;
-}
-
 .wordmarkText strong,
 .wordmarkText small {
   display: block;

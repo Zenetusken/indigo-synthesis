@@ -43,7 +43,11 @@ describe('SubmitButton', () => {
     render(<SubmitButton pendingLabel="Saving…">Save</SubmitButton>)
 
     const button = screen.getByRole('button', { name: 'Saving…' })
-    expect(button).toBeDisabled()
+    // The busy control stays focusable (aria-disabled, not native `disabled`)
+    // so mid-submit focus is not dropped to the body; the pointer/keyboard
+    // re-activation guard is asserted behaviourally in action-button.test.tsx.
+    expect(button).not.toBeDisabled()
+    expect(button).toHaveAttribute('aria-disabled', 'true')
     expect(button).toHaveAttribute('aria-busy', 'true')
   })
 })

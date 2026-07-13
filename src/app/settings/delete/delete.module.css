@@ -12,6 +12,11 @@
   padding: clamp(1.25rem, 4vw, 2.5rem);
 }
 
+/* The confirm button sizes to its label rather than stretching the grid width. */
+.form button {
+  justify-self: start;
+}
+
 .warning {
   border-block-start: var(--accent-bar) solid var(--danger);
 }
