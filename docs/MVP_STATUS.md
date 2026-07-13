@@ -158,10 +158,12 @@ language models.
 - operator guide in `llm/README.md`;
 - host preflight (`pnpm llm:preflight`), serve/load/download scripts, and runtime/GPU
   runbook ([LLM_RUNTIME_AND_GPU.md](architecture/LLM_RUNTIME_AND_GPU.md));
-- first live calibration on this host (CPU `llama-server` + Qwen3.5-9B Q4_K_M): offline
-  28/28 and live **availableRate=1.0** on eligible golden cases (invalidated case correctly
-  unavailable). GPU CUDA still blocked until NVIDIA module/userspace versions match after
-  reboot.
+- live calibrations on this host for Qwen3.5-9B Q4_K_M:
+  - CPU path (pre-reboot): offline 28/28, live availableRate=1.0
+  - **GPU path (post-reboot, 2026-07-13):** driver 580.173.02 / RTX 4070, CUDA
+    `llama-server` with `n-gpu-layers=-1`, ~6.1 GiB VRAM in use, offline 28/28, live
+    **availableRate=1.0** (8/8 eligible; invalidated case correctly unavailable). Product
+    policy remains GPU-only for local inference (`INDIGO_LLM_REQUIRE_GPU=true`).
 
 **Not implemented yet:** trainee History/Program UI for prose, prose cache/migrations, or
 any methodology authority. History continues to show structured reason codes only.
