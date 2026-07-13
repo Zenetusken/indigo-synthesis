@@ -22,8 +22,10 @@ a generic notes app.
 Primary:
 
 - **Today** — start or resume, program context, compact workout preview
-- **Program** — phase/week, schedule, prescriptions, explanations
-- **History** — completed sessions and factual summaries
+- **Program** — phase/week, schedule, prescriptions, and deterministic rationale;
+  optional plain-language Explain remains deferred
+- **History** — completed sessions, factual summaries, correction provenance, stored
+  decisions, and optional grounded explanations
 
 Secondary:
 

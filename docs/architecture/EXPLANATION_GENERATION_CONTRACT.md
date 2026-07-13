@@ -1,6 +1,6 @@
 # Explanation generation contract
 
-Status: **implemented; FactBundle v2 and closed-output prompt/validator v3 active**
+Status: **implemented; FactBundle v2, closed-output prompt v3, and validator v4 active**
 
 Date: 2026-07-13
 
@@ -238,10 +238,10 @@ Before any prose is shown or cached as `available`:
    the decision; for pure `blocked` / `hold` without load change, must not claim a new
    working weight.
 4. **Numeric smuggling**: normalize Unicode, recognize unit-bearing loads as complete
-   values, and allow only the exact authorized display labels. Mask only those labels plus
-   the exact required reason code and rule version; reject every remaining digit or
-   spelled-out quantity. Raw grams, repetitions, RPE, and ordinals never authorize prose
-   numbers.
+   values, and allow only the exact authorized display labels. Independently safety-check
+   the exact structured exercise name, then mask that name, the load labels, the required
+   reason code, and the rule version; reject every remaining digit or spelled-out quantity.
+   Raw grams, repetitions, RPE, and ordinals never authorize prose numbers.
 5. **Safety and advice**: reject diagnosis language, forward coaching/modal/imperative
    language, or instructions that permit continuing through pain, symptoms, or a safety
    hold. Explanation is retrospective presentation only.
@@ -318,12 +318,13 @@ delete the adjustment decision.
 | --- | --- |
 | Complete set / complete workout | **Never** await the model on the critical path |
 | Adjustment rows committed | Optional best-effort enqueue or skip |
-| History (or Program) view | Lazy generate on cache miss if enabled; show codes immediately |
+| History view | Lazy generate on cache miss if enabled; show codes immediately |
 | Model timeout | Default ≤ 3000 ms for interactive lazy path; then `unavailable` |
 | Model down | Codes-only UI; no synthetic fallback prose |
 
 No Redis, queue product, or WebSocket is required. The implemented path is explicit lazy
-generation on History with bounded in-process miss coalescing.
+generation on History with bounded in-process miss coalescing. A Program Explain control
+is deferred product work, not part of this delivery path.
 
 ## 9. Runtime topology
 
@@ -449,7 +450,7 @@ must not require any model weight file or local inference process.**
 ## 14. Implementation sequence
 
 1. Contract + ADR 0006. **Done.**
-2. FactBundle v2 plus closed-output prompt/validator v3 and adversarial goldens. **Done.**
+2. FactBundle v2 plus closed-output prompt v3 / validator v4 and adversarial goldens. **Done.**
 3. Disabled default, strict loopback transport, and exact response model. **Done.**
 4. Codes-first History explanation and completed-session safety correction. **Done.**
 5. Exact artifact/runtime locks and live attestation. **Done.**
