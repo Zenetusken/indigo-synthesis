@@ -181,6 +181,16 @@ export type WriterGrant = {
   readonly debt?: boolean
 }
 
+/**
+ * A non-module writer the AST scan will not attribute (library adapter or DB
+ * trigger). `principal` is type-checked against NonModulePrincipal so the O5
+ * attribution vocabulary is enforced, not merely documented.
+ */
+export type ExternalWriter = {
+  readonly principal: NonModulePrincipal
+  readonly note: string
+}
+
 export type TableWriteFence = {
   /** Module that is the seed primary for reviews and gateway migration checklists. */
   readonly owner: ModuleId
@@ -191,8 +201,8 @@ export type TableWriteFence = {
    */
   readonly additionalWriters?: readonly WriterGrant[]
   readonly mutability?: 'append-only' | 'lifecycle-status' | 'mutable' | 'cache' | 'deletion-ledger'
-  /** Non-module writers the AST will not see (triggers, adapters). Document only + O5. */
-  readonly externalWriters?: readonly string[]
+  /** Non-module writers the AST will not see (triggers, adapters). O5 attribution. */
+  readonly externalWriters?: readonly ExternalWriter[]
 }
 
 /**
@@ -211,16 +221,23 @@ export declare const crossCuttingOperator: {
   readonly allow: {
     readonly read: '*'
     readonly delete: '*' // ordered deletion of personal/product rows
-    readonly update: readonly string[] // SQL table names
-    readonly insert: readonly string[] // SQL table names
+    readonly update: readonly SqlTableName[] // non-owned tables only
+    readonly insert: readonly SqlTableName[] // non-owned tables only
   }
 }
 ```
 
-`SqlTableName` is derived by parsing `pgTable(...)` in
-`src/platform/db/schema/{auth,installation,product}.ts`. Platform is **not** a product
-module and must never appear as `owner` / `additionalWriters` module. Schema DDL and the
-migration ledger (`drizzle/`, `drizzle.__drizzle_migrations`) are **out of the 36**.
+`SqlTableName` is derived from the live `pgTable(...)` definitions in
+`src/platform/db/schema/{auth,installation,product}.ts` **at the type level** (via
+Drizzle's branded `_.name`), not from the manifest's own keys. The manifest is then
+declared `as const satisfies Record<SqlTableName, TableWriteFence>` with a bijection guard,
+so O1 (every schema table manifested, no stale entries) is enforced at **compile time** —
+adding, renaming, or dropping a table without a matching manifest edit fails `tsc` (and
+therefore `pnpm validate`). The §5 runtime test additionally asserts O2–O5. Platform is
+**not** a product module and must never appear as `owner` / `additionalWriters` module.
+Schema DDL and the migration ledger (`drizzle/`, `drizzle.__drizzle_migrations`) are **out
+of the 36**. Owned tables (`deletion_plan`, `deletion_tombstone`) are authorized by their
+owner grant, so they do **not** appear in the operator's `update` / `insert` arrays.
 
 ### 4.2 Exhaustive seed (36 tables)
 
@@ -278,10 +295,13 @@ should use full reason strings.
 | --- | --- |
 | `read` | `*` (export projection — current implementation debt) |
 | `delete` | `*` (ordered personal/product deletion; not a domain-owner claim) |
-| `update` | `installation_state` (instance reset reopen), `deletion_plan` |
-| `insert` | `deletion_plan`, `deletion_tombstone` |
+| `update` | `installation_state` (instance reset reopen) — **non-owned only** |
+| `insert` | — (none; DP's `deletion_plan` / `deletion_tombstone` inserts are its **owner** grants, not operator breadth) |
 
-No other module may hold whole-schema read/delete breadth.
+The operator arrays list **only non-owned** tables. DP-owned tables (`deletion_plan`,
+`deletion_tombstone`) are authorized through their owner grant per §5.3(7), so listing them
+here would be a redundant second authority that could mask a removed owner grant — they are
+intentionally excluded. No other module may hold whole-schema read/delete breadth.
 
 ### 4.3 What the seed means under either Part B fork
 
@@ -331,7 +351,7 @@ them.
 | `src/app/**` | Scanned; product DML here is a **fail** (no app principal grants) |
 | `src/platform/**` | Scanned; product table DML is a **fail** except documented non-DML (`set_config`, locks, migrate/preflight admin) |
 | `src/application/**` | Scanned; no product DML expected today |
-| `scripts/**` | Scanned or explicitly allowlisted; operational `INSERT INTO audit_event` in backup-restore drill must be allowlisted or moved — not a product sharedWriter |
+| `scripts/**` | Scanned or explicitly allowlisted; `scripts/db/backup-restore-drill.ts` issues a raw `INSERT INTO audit_event` **and** a raw `UPDATE audit_event` (a `{"tampered":true}` tamper-detection probe) — **both** must be allowlisted or moved, not just the insert. Because the UPDATE mutates an `append-only` table, the allowlist entry must be explicit that this is a test/operational exception, never a product sharedWriter or a licence for app code to update audit rows |
 | `**/*.{test,spec}.{ts,tsx}` and `test/**` | Excluded |
 
 **2. Module id** — exact folder names (`data-portability`, not `dataPortability`).
@@ -490,7 +510,7 @@ doc/status convergence (§6.3).
 
 | ID | Claim | Proof |
 | --- | --- | --- |
-| **O1** | All 36 tables manifested bijectively | Test: set equality vs `pgTable` parse |
+| **O1** | All 36 tables manifested bijectively | **Compile time:** `SqlTableName` is schema-derived and the manifest is `satisfies Record<SqlTableName, …>` + a bijection guard, so `tsc` fails on any add/rename/drop. Runtime test re-asserts set equality vs `pgTable` parse as belt-and-suspenders |
 | **O2** | No undeclared write in perimeter | Live scan + synthetic unauthorized-write fixture |
 | **O3** | Stale debt grants fail | Synthetic unused `additionalWriters` fixture + live stale check |
 | **O4** | Only `data-portability` holds cross-cutting operator breadth; ops match matrix | Scan + fixture; includes `installation_state` UPDATE authorization |

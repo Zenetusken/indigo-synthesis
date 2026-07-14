@@ -12,16 +12,39 @@
  * Decision record: docs/architecture/adr/0007-schema-table-ownership.md
  * (status: proposed).
  *
- * Enforcement lives in a separate, not-yet-landed test
- * (test/architecture/schema-ownership.test.ts) that reproduces the write
- * census and asserts O1–O5 against this manifest. Until it lands, this file is
- * declared reality, not yet a CI-enforced invariant.
+ * Enforcement split:
+ * - Compile time (O1, at `tsc`): `SqlTableName` is derived from the parsed
+ *   `pgTable` schema, NOT from this file's own keys, so
+ *   `satisfies Record<SqlTableName, …>` plus the bijection guard below fail the
+ *   build if a table is added, renamed, or dropped without a matching manifest
+ *   edit. This realizes spec §4.1's mapped-type contract.
+ * - Runtime (O2–O5): the write census and authorization checks live in a
+ *   separate, not-yet-landed test (test/architecture/schema-ownership.test.ts).
+ *   Until it lands, *authorization* is declared, not enforced; *coverage* (O1)
+ *   is already enforced here by the type system.
  *
  * Keys are SQL table names (the `pgTable` first argument), not Drizzle export
- * bindings. The key set must stay bijective with the 36 product schema tables
- * in src/platform/db/schema/{auth,installation,product}.ts; the test asserts
- * that bijection (O1).
+ * bindings.
  */
+
+import type * as authSchema from './auth'
+import type * as installationSchema from './installation'
+import type * as productSchema from './product'
+
+/**
+ * SQL table names extracted from the live `pgTable` definitions at the type
+ * level via Drizzle's branded `_.name`. Deriving this from the schema — rather
+ * than from `keyof typeof tableWriteFence` — is what makes the manifest's
+ * coverage bijective with reality at compile time (spec §4.1).
+ */
+type TableNamesOf<M> = {
+  [K in keyof M]: M[K] extends { _: { name: infer N extends string } } ? N : never
+}[keyof M]
+
+export type SqlTableName =
+  | TableNamesOf<typeof authSchema>
+  | TableNamesOf<typeof installationSchema>
+  | TableNamesOf<typeof productSchema>
 
 /** Product module folder names under src/modules/. */
 export type ModuleId =
@@ -36,8 +59,8 @@ export type ModuleId =
 
 /**
  * Principals that write schema tables but are not product modules. They may
- * appear only in `externalWriters` documentation / scanner attribution, never
- * as `owner` or in `additionalWriters`.
+ * appear only in `externalWriters` attribution, never as `owner` or in
+ * `additionalWriters`.
  */
 export type NonModulePrincipal =
   | 'platform'
@@ -66,6 +89,16 @@ export type Mutability =
   | 'cache'
   | 'deletion-ledger'
 
+/**
+ * A non-module writer the static AST scan will not attribute (a library adapter
+ * or DB trigger). `principal` is type-checked against NonModulePrincipal so the
+ * O5 attribution vocabulary is enforced, not merely documented.
+ */
+export type ExternalWriter = {
+  readonly principal: NonModulePrincipal
+  readonly note: string
+}
+
 export type TableWriteFence = {
   /**
    * Seed primary writer — the migration-checklist default and review anchor.
@@ -77,11 +110,8 @@ export type TableWriteFence = {
   readonly additionalWriters?: readonly WriterGrant[]
   /** Optional mutation-shape annotation; unset in the v1 seed. */
   readonly mutability?: Mutability
-  /**
-   * Non-module writers a static AST scan will not attribute (library adapters,
-   * DB triggers). Documentation for the scanner's O5 rules; not a grant.
-   */
-  readonly externalWriters?: readonly string[]
+  /** Non-module writers (adapters, triggers) — attribution for the O5 rules. */
+  readonly externalWriters?: readonly ExternalWriter[]
 }
 
 /**
@@ -97,16 +127,19 @@ export type CrossCuttingOperator = {
     readonly read: '*'
     /** Ordered deletion of personal/product rows across the schema. */
     readonly delete: '*'
-    /** Non-owned tables it may UPDATE (SQL names). */
-    readonly update: readonly string[]
-    /** Non-owned tables it may INSERT (SQL names). */
-    readonly insert: readonly string[]
+    /** Non-owned tables it may UPDATE (owned tables use their owner grant). */
+    readonly update: readonly SqlTableName[]
+    /** Non-owned tables it may INSERT (owned tables use their owner grant). */
+    readonly insert: readonly SqlTableName[]
   }
 }
 
-const BETTER_AUTH_ADAPTER =
-  'library-adapter: Better Auth drizzleAdapter (configured only in ' +
-  'src/modules/identity); adapter registration is identity write authority (O5)'
+const BETTER_AUTH_ADAPTER: ExternalWriter = {
+  principal: 'library-adapter',
+  note:
+    'Better Auth drizzleAdapter — configured only in src/modules/identity; ' +
+    'adapter registration is identity write authority (O5).',
+}
 
 const PROGRAMS_TRAINING_CLUSTER =
   'Programs/Training cluster: Training writes program-graph rows on session ' +
@@ -118,9 +151,9 @@ const AUDIT_APPEND =
   'Debt until a single audit append port (ADR 0007; spec C2).'
 
 /**
- * Write-authority fence for all 36 product schema tables, grouped by owner.
- * `as const satisfies` type-checks each entry against TableWriteFence while
- * preserving literal keys for `SqlTableName` and literal `ops` tuples.
+ * Write-authority fence for all product schema tables, grouped by owner.
+ * `as const satisfies Record<SqlTableName, …>` enforces bijection with the live
+ * schema at compile time (see the guard below).
  */
 export const tableWriteFence = {
   // --- identity (auth + installation + audit primary) ---
@@ -135,16 +168,19 @@ export const tableWriteFence = {
   verification: { owner: 'identity', externalWriters: [BETTER_AUTH_ADAPTER] },
   destructive_reauthentication_state: { owner: 'identity' },
   member_reset_state: { owner: 'identity' },
-  // Drizzle insert/update on the bucket plus a raw-SQL DELETE cleanup path,
-  // both by identity (owner) — the raw DELETE is why the scanner must read
-  // raw SQL, not just Drizzle calls.
+  // Drizzle insert/update on the bucket plus a raw-SQL DELETE cleanup path, both
+  // by identity (owner) — the raw DELETE is why the scanner must read raw SQL,
+  // not just Drizzle calls.
   web_recovery_rate_limit_bucket: { owner: 'identity' },
   installation_state: {
     owner: 'identity',
     // Data Portability UPDATEs this on instance reset via the cross-cutting
     // operator grant below, not as an additionalWriter.
     externalWriters: [
-      'db-trigger: owner bootstrap seeds the initial row on authorized user insert',
+      {
+        principal: 'db-trigger',
+        note: 'owner bootstrap seeds the initial row on authorized user insert',
+      },
     ],
   },
   audit_event: {
@@ -247,7 +283,23 @@ export const tableWriteFence = {
   // --- data-portability (owns its own ledger tables) ---
   deletion_plan: { owner: 'data-portability', mutability: 'deletion-ledger' },
   deletion_tombstone: { owner: 'data-portability', mutability: 'deletion-ledger' },
-} as const satisfies Record<string, TableWriteFence>
+} as const satisfies Record<SqlTableName, TableWriteFence>
+
+/**
+ * Compile-time bijection guard (belt-and-suspenders around the `satisfies`
+ * above, and the check that catches a `SqlTableName` collapsing to `never` —
+ * which would make the `Record<>` constraint pass vacuously). Both aliases must
+ * be `never`; a table added, renamed, or dropped without a matching manifest
+ * edit makes one of them non-`never` and fails this assignment.
+ */
+type SchemaTableMissingFromManifest = Exclude<SqlTableName, keyof typeof tableWriteFence>
+type ManifestKeyNotInSchema = Exclude<keyof typeof tableWriteFence, SqlTableName>
+const _assertBijection: [SchemaTableMissingFromManifest, ManifestKeyNotInSchema] extends [
+  never,
+  never,
+]
+  ? true
+  : never = true
 
 export const crossCuttingOperator = {
   module: 'data-portability',
@@ -260,24 +312,25 @@ export const crossCuttingOperator = {
   allow: {
     read: '*',
     delete: '*',
-    // installation_state is identity-owned, so DP's reset UPDATE needs an
-    // explicit operator grant. deletion_plan is DP-owned (owner grant); it is
-    // listed here only to mirror the spec §4.2 DP write inventory and is
-    // redundant with its owner grant, not a second authority.
-    update: ['installation_state', 'deletion_plan'],
-    // Both are DP-owned (owner grants); listed for inventory parity with the
-    // spec. DP performs no non-owned INSERTs.
-    insert: ['deletion_plan', 'deletion_tombstone'],
+    // installation_state is identity-owned, so DP's instance-reset UPDATE needs
+    // an explicit operator grant. DP-owned tables (deletion_plan,
+    // deletion_tombstone) are authorized by their owner grants, not here
+    // (spec §5.3(7)), so they are intentionally absent.
+    update: ['installation_state'],
+    // DP performs no non-owned INSERTs; its own ledger inserts are owner grants.
+    insert: [],
   },
 } as const satisfies CrossCuttingOperator
-
-/** The SQL table names covered by the fence. Must be bijective with the schema. */
-export type SqlTableName = keyof typeof tableWriteFence
 
 /**
  * Modules that intentionally write zero tables in the current slice —
  * `exercises` (content schema not yet built), `methodology` (pure domain
  * engine), and `progress` (read-model not yet built). They never appear above;
- * that absence is itself an enforceable fact.
+ * that absence is itself an enforceable fact. `satisfies readonly ModuleId[]`
+ * keeps the list honest against the module union.
  */
-export const NON_WRITING_MODULES = ['exercises', 'methodology', 'progress'] as const
+export const NON_WRITING_MODULES = [
+  'exercises',
+  'methodology',
+  'progress',
+] as const satisfies readonly ModuleId[]
