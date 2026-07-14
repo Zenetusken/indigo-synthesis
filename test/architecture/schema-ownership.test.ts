@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -8,10 +7,10 @@ import {
   tableWriteFence,
 } from '@/platform/db/schema/ownership'
 import {
+  adapterConfiguredOutsideIdentity,
   buildSchemaTableMap,
-  listTsFiles,
+  listAdapterConfigurers,
   type ObservedWrite,
-  projectPath,
   scanSource,
   scanWrites,
   type WriteOp,
@@ -80,7 +79,10 @@ function authorization(
   if (
     NON_MODULE_WRITE_ALLOWLIST.some(
       (a) =>
-        a.principal === write.principal && a.table === write.table && a.op === write.op,
+        a.principal === write.principal &&
+        a.table === write.table &&
+        a.op === write.op &&
+        a.file === write.file,
     )
   ) {
     return 'allowlist'
@@ -155,11 +157,9 @@ describe('schema/table write-authority fence', () => {
   })
 
   it('O5: Better Auth adapter is configured only in identity', () => {
-    const adapterConfigurers = listTsFiles(sourceRoot)
-      .filter((file) => /\bdrizzleAdapter\s*\(/.test(readFileSync(file, 'utf8')))
-      .map(projectPath)
-      .sort()
-    expect(adapterConfigurers).toEqual(['src/modules/identity/infrastructure/auth.ts'])
+    expect(listAdapterConfigurers(sourceRoot)).toEqual([
+      'src/modules/identity/infrastructure/auth.ts',
+    ])
     for (const table of ['user', 'session', 'account', 'verification']) {
       expect(fence[table]?.owner).toBe('identity')
     }
@@ -216,17 +216,14 @@ describe('schema-ownership scanner fixtures (through the production detectors)',
   })
 
   it('detects a Better Auth adapter configured outside identity (O5)', () => {
-    const configuresAdapter = (content: string) => /\bdrizzleAdapter\s*\(/.test(content)
-    const adapterOutsideIdentity = (file: string, content: string) =>
-      configuresAdapter(content) && !file.startsWith('src/modules/identity/')
     expect(
-      adapterOutsideIdentity(
+      adapterConfiguredOutsideIdentity(
         'src/modules/progress/infra/auth.ts',
         'drizzleAdapter(db, {})',
       ),
     ).toBe(true)
     expect(
-      adapterOutsideIdentity(
+      adapterConfiguredOutsideIdentity(
         'src/modules/identity/infrastructure/auth.ts',
         'drizzleAdapter(db, {})',
       ),

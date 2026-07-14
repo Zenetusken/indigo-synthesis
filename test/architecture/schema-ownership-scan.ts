@@ -244,6 +244,24 @@ export function listTsFiles(dir: string): string[] {
   return filesMatching(dir, TS_SOURCE).filter((file) => !TEST_FILE.test(file))
 }
 
+/** True if the file configures a Better Auth Drizzle adapter (the call, not a mention). */
+export function configuresDrizzleAdapter(content: string): boolean {
+  return /\bdrizzleAdapter\s*\(/.test(content)
+}
+
+/** True if a non-identity file registers a Drizzle adapter (an O5 violation). */
+export function adapterConfiguredOutsideIdentity(file: string, content: string): boolean {
+  return configuresDrizzleAdapter(content) && !file.startsWith('src/modules/identity/')
+}
+
+/** Project paths of files that configure a Drizzle adapter under a source root. */
+export function listAdapterConfigurers(sourceRoot: string): string[] {
+  return listTsFiles(sourceRoot)
+    .filter((file) => configuresDrizzleAdapter(readFileSync(file, 'utf8')))
+    .map(projectPath)
+    .sort()
+}
+
 /** Principal for a project-relative path: module id, or the non-module root. */
 export function principalOf(path: string): string {
   const moduleMatch = path.match(/^src\/modules\/([^/]+)\//)
