@@ -32,6 +32,9 @@ const operator: CrossCuttingOperator = crossCuttingOperator
  * are NOT product sharedWriters; app/module code must never write these tables.
  * The backup-restore drill seeds a sentinel `audit_event` and then UPDATEs it as
  * a tamper-detection probe (an append-only table mutated by a test/ops script).
+ * The match is `file`-scoped on purpose: relocating the drill deliberately
+ * reddens CI until this entry is updated, so a sanctioned raw audit write cannot
+ * silently spread to other scripts.
  */
 const NON_MODULE_WRITE_ALLOWLIST: readonly {
   readonly principal: string
@@ -54,7 +57,7 @@ const NON_MODULE_WRITE_ALLOWLIST: readonly {
 ]
 
 function operatorAllows(table: string, op: WriteOp): boolean {
-  if (op === 'delete') return true // delete '*'
+  if (op === 'delete') return operator.allow.delete === '*'
   if (op === 'update') return (operator.allow.update as readonly string[]).includes(table)
   return (operator.allow.insert as readonly string[]).includes(table)
 }
@@ -215,18 +218,79 @@ describe('schema-ownership scanner fixtures (through the production detectors)',
     expect(observed.has('programs:audit_event:insert')).toBe(true)
   })
 
-  it('detects a Better Auth adapter configured outside identity (O5)', () => {
+  it('resolves schema bindings imported via the barrel /index subpath', () => {
+    const found = scan(
+      'src/modules/progress/application/leak.ts',
+      "import { auditEvents } from '@/platform/db/schema/index'\n" +
+        'export const go = (db: any) => db.insert(auditEvents).values({})',
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.table).toBe('audit_event')
+    expect(authorization(found[0] as ObservedWrite)).toBeNull()
+  })
+
+  it('resolves a table re-bound to a local const', () => {
+    const found = scan(
+      'src/modules/progress/application/leak.ts',
+      "import { auditEvents } from '@/platform/db/schema'\n" +
+        'export const go = (db: any) => {\n  const t = auditEvents\n  return db.delete(t)\n}',
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.op).toBe('delete')
+    expect(found[0]?.table).toBe('audit_event')
+  })
+
+  it('detects raw writes with a schema-qualified name and an aliased UPDATE target', () => {
+    const qualified = scan(
+      'src/modules/progress/application/leak.ts',
+      'export const go = (db: any) =>\n' +
+        '  db.execute(sql`INSERT INTO public.audit_event (id) VALUES (1)`)',
+    )
+    expect(qualified).toHaveLength(1)
+    expect(qualified[0]?.table).toBe('audit_event')
+
+    const aliasedUpdate = scan(
+      'src/modules/progress/application/leak.ts',
+      'export const go = (db: any) =>\n' +
+        '  db.execute(sql`UPDATE safety_hold h SET resolved = true WHERE h.id = 1`)',
+    )
+    expect(aliasedUpdate).toHaveLength(1)
+    expect(aliasedUpdate[0]?.op).toBe('update')
+    expect(aliasedUpdate[0]?.table).toBe('safety_hold')
+  })
+
+  it('does not treat SQL keywords in a non-executed string (error message) as a write', () => {
+    const found = scan(
+      'src/modules/programs/application/guard.ts',
+      'export const message =\n' +
+        "  'never DELETE FROM audit_event directly — use the audit ledger port'",
+    )
+    expect(found).toEqual([])
+  })
+
+  it('detects a Better Auth adapter configured outside identity, incl. aliased import (O5)', () => {
+    const direct =
+      "import { drizzleAdapter } from 'better-auth/adapters/drizzle'\n" +
+      'export const auth = drizzleAdapter(db, {})'
+    const aliased =
+      "import { drizzleAdapter as da } from 'better-auth/adapters/drizzle'\n" +
+      'export const auth = da(db, {})'
+    const mentionOnly = '// drizzleAdapter is configured in identity\nexport const x = 1'
     expect(
-      adapterConfiguredOutsideIdentity(
-        'src/modules/progress/infra/auth.ts',
-        'drizzleAdapter(db, {})',
-      ),
+      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', direct),
     ).toBe(true)
+    expect(
+      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', aliased),
+    ).toBe(true)
+    // The same configuration inside identity is allowed; a bare mention is not a config.
     expect(
       adapterConfiguredOutsideIdentity(
         'src/modules/identity/infrastructure/auth.ts',
-        'drizzleAdapter(db, {})',
+        direct,
       ),
+    ).toBe(false)
+    expect(
+      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', mentionOnly),
     ).toBe(false)
   })
 })
