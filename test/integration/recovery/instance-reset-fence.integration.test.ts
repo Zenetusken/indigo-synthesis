@@ -12,6 +12,7 @@ import {
 } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   CredentialLifecycleUnavailableError,
+  credentialLifecycleConnectionLimit,
   withCredentialLifecycleLock,
   withExclusiveCredentialLifecycleFence,
   withSubmittedEmailCredentialLifecycleLocks,
@@ -22,12 +23,13 @@ import {
   redeemMemberReset,
 } from '@/modules/identity/recovery/member-reset'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb, getPool } from '@/platform/db/client'
+import { closeDb, getDb } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
+import { getDatabaseRuntime } from '@/platform/db/runtime-registry'
 import {
   auditEvents,
   deletionTombstones,
@@ -64,13 +66,6 @@ function captureOutcome<T>(promise: Promise<T>): Promise<CapturedOutcome<T>> {
   return promise.then(
     (value) => ({ status: 'fulfilled', value }),
     (error: unknown) => ({ status: 'rejected', error }),
-  )
-}
-
-function isInstallationOwnerCaptureQuery(query: unknown): boolean {
-  return (
-    String(query).replace(/\s+/g, ' ').trim() ===
-    'SELECT owner_user_id FROM installation_state WHERE singleton = 1'
   )
 }
 
@@ -145,7 +140,9 @@ describe.sequential('instance reset credential lifecycle fence', () => {
 
   it('rejects work submitted before a replacement installation generation', async () => {
     const activeEntered = deferred<void>()
-    const releases = Array.from({ length: 4 }, () => deferred<void>())
+    const releases = Array.from({ length: credentialLifecycleConnectionLimit }, () =>
+      deferred<void>(),
+    )
     let enteredCount = 0
     const active = releases.map((release, index) =>
       withCredentialLifecycleLock(`generation-active-${index}`, async () => {
@@ -160,8 +157,6 @@ describe.sequential('instance reset credential lifecycle fence', () => {
     let staleRequest: Promise<CapturedOutcome<string>> | undefined
     let trustedBlockers: Array<Promise<CapturedOutcome<void>>> | undefined
     let staleCallbackEntered = false
-    const poolQuerySpy = vi.spyOn(getPool(), 'query')
-
     try {
       replacement = captureOutcome(
         withExclusiveCredentialLifecycleFence(async () => {
@@ -191,19 +186,12 @@ describe.sequential('instance reset credential lifecycle fence', () => {
       )
 
       await vi.waitFor(() => {
-        const captureQueries = poolQuerySpy.mock.calls.filter(([query]) =>
-          isInstallationOwnerCaptureQuery(query),
+        const snapshot = getDatabaseRuntime().snapshot()
+        expect(snapshot.pools.capture.admission).toMatchObject({ active: 0, queued: 0 })
+        expect(snapshot.pools.control.admission.queued).toBe(
+          (trustedBlockers?.length ?? 0) + 2,
         )
-        expect(captureQueries).toHaveLength(4)
       })
-      const completedCaptureQueries = poolQuerySpy.mock.calls.flatMap(([query], index) =>
-        isInstallationOwnerCaptureQuery(query)
-          ? [Promise.resolve(poolQuerySpy.mock.results[index]?.value)]
-          : [],
-      )
-      await Promise.all(completedCaptureQueries)
-      await Promise.resolve()
-      poolQuerySpy.mockRestore()
 
       releases[0]?.resolve(undefined)
       await waitForDatabaseCondition(
@@ -213,7 +201,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
             SELECT count(*)::integer AS waiting
             FROM pg_stat_activity
             WHERE datname = current_database()
-              AND application_name = 'indigo-credential-lifecycle'
+              AND application_name = 'indigo-synthesis:control'
               AND wait_event = 'advisory'
           `)
           return Number(result.rows[0]?.waiting ?? 0) >= 1
@@ -239,7 +227,6 @@ describe.sequential('instance reset credential lifecycle fence', () => {
         ),
       ).toBe(true)
     } finally {
-      poolQuerySpy.mockRestore()
       for (const release of releases) release.resolve(undefined)
       await Promise.allSettled(active)
       await Promise.allSettled(
@@ -321,7 +308,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
           SELECT count(*)::integer AS waiting
           FROM pg_stat_activity
           WHERE datname = current_database()
-            AND application_name = 'indigo-credential-lifecycle'
+            AND application_name = 'indigo-synthesis:control'
             AND wait_event = 'advisory'
         `)
           return Number(result.rows[0]?.waiting ?? 0) >= 1

@@ -1,8 +1,15 @@
 import { CoordinationError } from '@/application/coordination/errors'
+import {
+  ordinaryAdmissionQueueLimit,
+  submittedEmailAdmissionQueueLimit,
+  trustedAdmissionQueueLimit,
+} from './connection-topology'
 
-export const ordinaryAdmissionQueueLimit = 128
-export const trustedAdmissionQueueLimit = 64
-export const submittedEmailAdmissionQueueLimit = 64
+export {
+  ordinaryAdmissionQueueLimit,
+  submittedEmailAdmissionQueueLimit,
+  trustedAdmissionQueueLimit,
+}
 
 export type AdmissionPriority = 'trusted' | 'submitted-email'
 export type AdmissionMode = 'fifo' | 'priority'

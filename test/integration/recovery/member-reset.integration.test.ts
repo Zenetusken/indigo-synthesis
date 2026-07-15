@@ -69,7 +69,7 @@ async function waitForBlockedCredentialLock(): Promise<void> {
       )::integer AS waiting
       FROM pg_stat_activity
       WHERE datname = current_database()
-        AND application_name = 'indigo-credential-lifecycle'
+        AND application_name = 'indigo-synthesis:control'
     `)
     if (Number(result.rows[0]?.waiting ?? 0) >= 1) return
     await new Promise((resolve) => setTimeout(resolve, 10))

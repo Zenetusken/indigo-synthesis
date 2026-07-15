@@ -83,6 +83,30 @@ class DelayedConnectPgClient extends InMemoryPgClient {
   }
 }
 
+class DelayedEndPgClient extends InMemoryPgClient {
+  static liveBackends = 0
+  static readonly pendingEnds: Array<() => void> = []
+
+  override connect(callback: DriverConnectCallback): void {
+    DelayedEndPgClient.liveBackends += 1
+    callback()
+  }
+
+  override end(callback?: () => void): void {
+    this._ending = true
+    DelayedEndPgClient.pendingEnds.push(() => {
+      DelayedEndPgClient.liveBackends -= 1
+      callback?.()
+    })
+  }
+
+  static finishEnd(): void {
+    const callback = DelayedEndPgClient.pendingEnds.shift()
+    if (!callback) throw new Error('No pending driver shutdown.')
+    callback()
+  }
+}
+
 const releaseAssignmentFailure = new TypeError('release is not writable')
 
 class RejectBoundedReleaseClient extends InMemoryPgClient {
@@ -121,6 +145,8 @@ function spyOnDriverConnect(): Mock<() => Promise<PoolClient>> {
 afterEach(() => {
   vi.restoreAllMocks()
   DelayedConnectPgClient.pending.length = 0
+  DelayedEndPgClient.pendingEnds.length = 0
+  DelayedEndPgClient.liveBackends = 0
 })
 
 describe('BoundedPool', () => {
@@ -276,6 +302,97 @@ describe('BoundedPool', () => {
     await pool.end()
   })
 
+  it('holds admission until an errored backend has physically ended', async () => {
+    const pool = inMemoryPool(DelayedEndPgClient)
+    const first = await pool.connect()
+
+    first.release(new Error('retire first client'))
+    const secondCheckout = pool.connect()
+    await flushMicrotasks()
+
+    expect(DelayedEndPgClient.liveBackends).toBe(1)
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 1, queued: 1 },
+      driver: { total: 0, waiting: 0 },
+    })
+
+    DelayedEndPgClient.finishEnd()
+    const second = await secondCheckout
+    expect(DelayedEndPgClient.liveBackends).toBe(1)
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 1, queued: 0 },
+      driver: { total: 1, waiting: 0 },
+    })
+
+    second.release(new Error('retire second client'))
+    expect(pool.snapshot().admission.active).toBe(1)
+    DelayedEndPgClient.finishEnd()
+    expect(pool.snapshot().admission.active).toBe(0)
+    await pool.end()
+  })
+
+  it('blocks replacement establishment during driver-initiated idle retirement', async () => {
+    const pool = new BoundedPool({
+      admissionMode: 'fifo',
+      Client: DelayedEndPgClient,
+      idleTimeoutMillis: 1,
+      max: 1,
+    } as unknown as BoundedPoolConfig)
+    const first = await pool.connect()
+    first.release()
+
+    await vi.waitFor(() => {
+      expect(DelayedEndPgClient.pendingEnds).toHaveLength(1)
+    })
+    const replacement = pool.connect()
+    await flushMicrotasks()
+
+    expect(DelayedEndPgClient.liveBackends).toBe(1)
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 1, queued: 0 },
+      driver: { total: 0, waiting: 0 },
+    })
+
+    DelayedEndPgClient.finishEnd()
+    const second = await replacement
+    expect(DelayedEndPgClient.liveBackends).toBe(1)
+    second.release(new Error('retire replacement'))
+    DelayedEndPgClient.finishEnd()
+    await pool.end()
+  })
+
+  it.each([
+    'promise',
+    'callback',
+  ] as const)('does not complete %s shutdown before idle backends physically end', async (style) => {
+    const pool = inMemoryPool(DelayedEndPgClient)
+    const client = await pool.connect()
+    client.release()
+
+    let closed = false
+    const closing =
+      style === 'promise'
+        ? pool.end().then(() => {
+            closed = true
+          })
+        : new Promise<void>((resolve) => {
+            pool.end(() => {
+              closed = true
+              resolve()
+            })
+          })
+    await flushMicrotasks()
+
+    expect(closed).toBe(false)
+    expect(DelayedEndPgClient.liveBackends).toBe(1)
+    expect(DelayedEndPgClient.pendingEnds).toHaveLength(1)
+
+    DelayedEndPgClient.finishEnd()
+    await closing
+    expect(closed).toBe(true)
+    expect(DelayedEndPgClient.liveBackends).toBe(0)
+  })
+
   it('fails admission closed if poisoned-client removal cannot be confirmed', async () => {
     const releaseFailure = new Error('release failed')
     const client = fakeClient({
@@ -299,8 +416,14 @@ describe('BoundedPool', () => {
       driver: { waiting: 0 },
     })
 
-    await pool.end()
-    await expect(next).rejects.toMatchObject({ code: 'uow.capacity' })
+    const rejected = expect(next).rejects.toMatchObject({ code: 'uow.capacity' })
+    let closed = false
+    void pool.end().then(() => {
+      closed = true
+    })
+    await rejected
+    await flushMicrotasks()
+    expect(closed).toBe(false)
     expect(driverEnd).toHaveBeenCalledOnce()
   })
 

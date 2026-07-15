@@ -17,9 +17,12 @@ type PoolConnectCallback = Parameters<Pool['connect']>[0]
  * must revalidate both members against pg-pool's implementation.
  */
 type PgPoolRetirementAdapter = {
+  readonly _clients: readonly PoolClient[]
   _pulseQueue(): void
   _remove(client: PoolClient, callback: () => void): void
 }
+
+const pgPoolRemove = (Pool.prototype as unknown as PgPoolRetirementAdapter)._remove
 
 export type BoundedPoolConfig = PoolConfig & {
   /** FIFO for ordinary work; priority for credential capture and control work. */
@@ -47,6 +50,8 @@ export type BoundedPoolSnapshot = {
  */
 export class BoundedPool extends Pool {
   readonly #admission: BoundedAdmissionController
+  #physicalRetirements = 0
+  readonly #physicalRetirementWaiters: Array<() => void> = []
 
   constructor(config: BoundedPoolConfig) {
     const { admissionMode, ...poolConfig } = config
@@ -95,10 +100,48 @@ export class BoundedPool extends Pool {
   override end(callback?: () => void): Promise<void> | undefined {
     this.#admission.close()
     if (callback) {
-      super.end(callback)
+      super.end(() => {
+        void this.#waitForPhysicalRetirements().then(callback)
+      })
       return undefined
     }
-    return super.end()
+    return super.end().then(() => this.#waitForPhysicalRetirements())
+  }
+
+  /**
+   * pg-pool removes a client from its logical count before asynchronous backend shutdown finishes.
+   * Intercept every driver retirement path (error, idle timeout, expiry, max-use, and pool end) so
+   * a replacement cannot be established while the old physical backend is still alive.
+   *
+   * `_remove` is an intentionally pinned pg-pool 3.14 seam. The dependency implementation and
+   * delayed-end regressions must be revalidated together on upgrade.
+   */
+  _remove(client: PoolClient, callback?: () => void): void {
+    this.#physicalRetirements += 1
+    let finished = false
+    const finish = (): void => {
+      if (finished) return
+      finished = true
+      this.removeListener('remove', onRemove)
+      this.#physicalRetirements -= 1
+      try {
+        callback?.()
+      } finally {
+        if (this.#physicalRetirements === 0) {
+          for (const resolve of this.#physicalRetirementWaiters.splice(0)) resolve()
+        }
+      }
+    }
+    const onRemove = (removedClient: PoolClient): void => {
+      if (removedClient === client) finish()
+    }
+
+    // Run before arbitrary observers: an observer exception must not hide a confirmed physical
+    // removal and permanently strand the runtime. The wrapped driver callback is idempotent.
+    this.prependListener('remove', onRemove)
+    // If pg-pool throws before confirmation, the listener and retirement count deliberately remain:
+    // admitting a replacement after an unconfirmed shutdown could exceed the role allowance.
+    pgPoolRemove.call(this, client, finish)
   }
 
   #checkout(options: AdmissionAcquireOptions): Promise<PoolClient> {
@@ -119,6 +162,7 @@ export class BoundedPool extends Pool {
 
     let client: PoolClient
     try {
+      await this.#waitForPhysicalRetirements()
       client = await super.connect()
     } catch (error) {
       lease.release()
@@ -128,13 +172,10 @@ export class BoundedPool extends Pool {
     if (signal?.aborted) {
       const cancellation = new CoordinationError('uow.cancelled')
       try {
-        client.release(cancellation)
+        this.#returnClient(client, client.release, lease, cancellation)
       } catch {
-        this.#retirePoisonedClient(client, lease)
         throw cancellation
       }
-
-      lease.release()
       throw cancellation
     }
 
@@ -148,34 +189,75 @@ export class BoundedPool extends Pool {
       }
 
       returned = true
-      try {
-        driverRelease.call(client, error)
-      } catch (releaseError) {
-        this.#retirePoisonedClient(client, lease)
-        throw releaseError
-      }
-
-      lease.release()
+      this.#returnClient(client, driverRelease, lease, error)
     }
 
     try {
       client.release = boundedRelease
     } catch (assignmentError) {
       try {
-        driverRelease.call(
+        this.#returnClient(
           client,
+          driverRelease,
+          lease,
           assignmentError instanceof Error ? assignmentError : true,
         )
       } catch {
-        this.#retirePoisonedClient(client, lease)
         throw assignmentError
       }
-
-      lease.release()
       throw assignmentError
     }
 
     return client
+  }
+
+  async #waitForPhysicalRetirements(): Promise<void> {
+    if (this.#physicalRetirements === 0) return
+    await new Promise<void>((resolve) => {
+      this.#physicalRetirementWaiters.push(resolve)
+    })
+  }
+
+  /**
+   * Returns an idle client immediately, but holds admission while pg-pool asynchronously retires
+   * an errored/expired/ending client. pg-pool removes retiring clients from its logical count before
+   * `client.end()` confirms the backend is gone; admitting a replacement in that window can exceed
+   * the physical role allowance even though `totalCount` remains within max.
+   */
+  #returnClient(
+    client: PoolClient,
+    driverRelease: PoolClient['release'],
+    lease: { release(): void },
+    error?: Error | boolean,
+  ): void {
+    const pool = this as unknown as PgPoolRetirementAdapter
+    const wasTracked = pool._clients.includes(client)
+    let removalObserved = false
+    const onRemove = (removedClient: PoolClient): void => {
+      if (removedClient !== client) return
+      removalObserved = true
+      this.removeListener('remove', onRemove)
+      lease.release()
+    }
+    this.on('remove', onRemove)
+
+    try {
+      driverRelease.call(client, error)
+    } catch (releaseError) {
+      this.removeListener('remove', onRemove)
+      this.#retirePoisonedClient(client, lease)
+      throw releaseError
+    }
+
+    if (!wasTracked || pool._clients.includes(client)) {
+      this.removeListener('remove', onRemove)
+      lease.release()
+      return
+    }
+
+    // A synchronous Client.end implementation may already have emitted remove and transferred the
+    // permit. Otherwise the listener deliberately retains admission until backend teardown.
+    if (removalObserved) this.removeListener('remove', onRemove)
   }
 
   /**

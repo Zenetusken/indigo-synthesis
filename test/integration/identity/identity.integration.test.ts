@@ -712,7 +712,7 @@ describe('identity database boundary', () => {
         SELECT count(*)::integer AS active
         FROM pg_stat_activity
         WHERE datname = current_database()
-          AND application_name = 'indigo-credential-lifecycle'
+          AND application_name = 'indigo-synthesis:control'
       `)
       expect(Number(lockConnections.rows[0]?.active ?? 0)).toBe(
         credentialLifecycleConnectionLimit,
@@ -820,7 +820,7 @@ describe('identity database boundary', () => {
         SELECT count(*)::integer AS active
         FROM pg_stat_activity
         WHERE datname = current_database()
-          AND application_name = 'indigo-credential-lifecycle'
+          AND application_name = 'indigo-synthesis:control'
       `)
       expect(Number(lockConnections.rows[0]?.active ?? 0)).toBe(
         credentialLifecycleConnectionLimit,
@@ -837,6 +837,7 @@ describe('identity database boundary', () => {
     const databaseUrl = process.env.DATABASE_URL
     if (!databaseUrl) throw new Error('Identity integration database URL is unavailable.')
 
+    await closeDb()
     process.env.DATABASE_URL = 'not-a-postgresql-url'
     resetServerConfigForTests()
     try {
@@ -846,6 +847,7 @@ describe('identity database boundary', () => {
         ).rejects.toThrow()
       }
     } finally {
+      await closeDb().catch(() => undefined)
       process.env.DATABASE_URL = databaseUrl
       resetServerConfigForTests()
     }

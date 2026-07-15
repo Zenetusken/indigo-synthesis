@@ -1,7 +1,7 @@
 import { relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-import { analyzeImportGraph, readTypeScriptSources } from './import-graph'
+import { analyzeImportGraph, readCodeSources } from './import-graph'
 
 const sourceRoot = resolve(process.cwd(), 'src')
 
@@ -398,7 +398,7 @@ function capabilityConstructionViolations(
 }
 
 describe('UnitOfWork and coordination architecture boundaries', () => {
-  const sourceFiles = readTypeScriptSources(sourceRoot)
+  const sourceFiles = readCodeSources(sourceRoot)
   const importGraph = analyzeImportGraph(sourceFiles, { sourceRoot })
 
   it('keeps neutral application coordination infrastructure-free', () => {

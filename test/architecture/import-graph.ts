@@ -33,7 +33,16 @@ type AnalyzeImportGraphOptions = {
   readonly sourceRoot: string
 }
 
-const sourceExtensions = ['.ts', '.tsx', '.mts', '.cts'] as const
+const sourceExtensions = [
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+] as const
 const assetExtensions = new Set([
   '.css',
   '.gif',
@@ -96,8 +105,12 @@ function resolveInternalImport(
 
 function scriptKindFor(path: string): ts.ScriptKind {
   if (path.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (path.endsWith('.jsx')) return ts.ScriptKind.JSX
   if (path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts')) {
     return ts.ScriptKind.TS
+  }
+  if (path.endsWith('.js') || path.endsWith('.mjs') || path.endsWith('.cjs')) {
+    return ts.ScriptKind.JS
   }
   return ts.ScriptKind.Unknown
 }
@@ -173,7 +186,7 @@ export function analyzeImportGraph(
   }
 }
 
-export function readTypeScriptSources(sourceRoot: string): ReadonlyMap<string, string> {
+export function readCodeSources(sourceRoot: string): ReadonlyMap<string, string> {
   const files = new Map<string, string>()
 
   const visit = (directory: string): void => {

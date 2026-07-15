@@ -1,6 +1,14 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres'
 import type { Pool, PoolClient } from 'pg'
 import { BoundedPool, type BoundedPoolSnapshot } from './bounded-pool'
+import {
+  credentialCaptureConnectionCount,
+  credentialControlConnectionCount,
+  externalHostConnectionCount,
+  submittedEmailAdmissionQueueLimit,
+  totalReservedConnectionCount,
+  trustedAdmissionQueueLimit,
+} from './connection-topology'
 import * as schema from './schema'
 
 export type Database = NodePgDatabase<typeof schema>
@@ -18,13 +26,14 @@ export type OrdinaryDatabasePool = {
   query: Pool['query']
 }
 
-export const credentialControlConnectionCount = 2
-export const credentialCaptureConnectionCount = 1
-export const externalHostConnectionCount = 1
-export const totalReservedConnectionCount =
-  credentialControlConnectionCount +
-  credentialCaptureConnectionCount +
-  externalHostConnectionCount
+export {
+  credentialCaptureConnectionCount,
+  credentialControlConnectionCount,
+  externalHostConnectionCount,
+  submittedEmailAdmissionQueueLimit,
+  totalReservedConnectionCount,
+  trustedAdmissionQueueLimit,
+}
 
 export type DatabaseConnectionBudget = {
   readonly applicationMax: number

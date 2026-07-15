@@ -6,7 +6,7 @@ import {
   analyzeImportGraph,
   findModuleCycles,
   isApplicationBoundaryViolation,
-  readTypeScriptSources,
+  readCodeSources,
 } from './import-graph'
 
 const sourceRoot = resolve(process.cwd(), 'src')
@@ -212,7 +212,7 @@ function projectPath(path: string): string {
 }
 
 describe('architecture boundaries', () => {
-  const sourceFiles = readTypeScriptSources(sourceRoot)
+  const sourceFiles = readCodeSources(sourceRoot)
   const importGraph = analyzeImportGraph(sourceFiles, { sourceRoot })
 
   it('binds supported runtime commands to loopback and preflights production', () => {
