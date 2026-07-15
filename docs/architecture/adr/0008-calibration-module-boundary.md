@@ -1,8 +1,9 @@
 # ADR 0008: Calibration as an engine training calls, with a UnitOfWork
 
-- Status: **proposed** — awaiting maintainer decision. Defines the boundary for the
-  calibration engine and commits to building the `UnitOfWork` it requires; the reviewed
-  methodology numbers remain a Gate 0 deliverable and are not decided here.
+- Status: **accepted** (2026-07-15, maintainer) — approved as Stage 2 of the
+  [development roadmap](../DEVELOPMENT_ROADMAP.md): the calibration boundary and the commitment
+  to build the `UnitOfWork` are greenlit. The reviewed methodology numbers remain a Gate 0
+  deliverable and are not decided here.
 - Date: 2026-07-14 (boundary inverted after two adversarial-review rounds — see Alternatives)
 - Relates to: [ADR 0001 modular monolith](0001-modular-monolith.md) (the `UnitOfWork`),
   [ADR 0003 deterministic methodology](0003-deterministic-methodology.md),
