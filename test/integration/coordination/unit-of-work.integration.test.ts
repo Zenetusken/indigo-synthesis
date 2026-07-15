@@ -1,11 +1,11 @@
 import { eq, sql } from 'drizzle-orm'
 import { integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
-import { Client, type PoolClient } from 'pg'
+import { Client } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {
-  AuthenticatedSessionReference,
+  AuthenticatedDestructiveAuthority,
   ContentLockPlanBindings,
-  DestructiveReauthenticationLease,
+  DestructiveReauthenticationAttemptRequest,
   ExactReplayAuthorizer,
   GlobalProductMutationRequest,
   InstallationMutationEpoch,
@@ -25,6 +25,10 @@ import {
   createInstallationMutationEpoch,
   installationMutationEpochMatches,
 } from '@/platform/application-coordination/lifecycle-values'
+import {
+  createPlatformMutationAuthorityIssuer,
+  type IssuedDestructiveAttempt,
+} from '@/platform/application-coordination/mutation-authority'
 import {
   PostgresUnitOfWork,
   type ScopedTransactionClient,
@@ -111,6 +115,7 @@ type WriteGateways = ReadGateways & {
   >
   insert(owner: 'a' | 'b', id: string): Promise<void>
   insertAfterDelay(owner: 'a' | 'b', id: string): Promise<void>
+  markReauthenticationSucceeded(): Promise<AuthenticatedDestructiveAuthority>
   exerciseScopedDrizzle(input: {
     readonly createdAt: Date
     readonly deleteTargetId: string
@@ -130,8 +135,14 @@ let runtime: DatabaseRuntime
 let inspector: Client
 let unitOfWork: PostgresUnitOfWork<ReadGateways, WriteGateways>
 
-const session = {} as AuthenticatedSessionReference
-const destructiveLease = {} as DestructiveReauthenticationLease<'instance-reset'>
+type RuntimeGlobal = typeof globalThis & {
+  indigoDatabaseRuntimeState?: unknown
+}
+
+const runtimeGlobal = globalThis as RuntimeGlobal
+let previousRuntimeState: unknown
+
+const authorityIssuer = createPlatformMutationAuthorityIssuer()
 const methodologyFactory = createContentLockProjectionFactory('methodology-target')
 const releasePair = [
   { kind: 'methodology' as const, id: 'methodology-development', version: '1' },
@@ -235,6 +246,7 @@ function gatewayContext(
   requireWriteAuthorized: () => void,
   exactReplayAuthorizer: ExactReplayAuthorizer | null,
   newCommandAuthorizer: NewCommandAuthorizer | null,
+  markReauthenticationSucceeded: () => AuthenticatedDestructiveAuthority,
 ) {
   const scopedDatabase = createScopedDrizzleDatabase(client)
   const table = (owner: 'a' | 'b') =>
@@ -364,6 +376,13 @@ function gatewayContext(
            SELECT $1 FROM (SELECT pg_sleep(0.05)) AS delayed`,
           [id],
         )
+      },
+      async markReauthenticationSucceeded() {
+        if (!identityRechecked) {
+          throw new Error('reauthentication succeeded before Identity')
+        }
+        await client.query('SELECT true AS reauthentication_succeeded')
+        return markReauthenticationSucceeded()
       },
       async exerciseScopedDrizzle(input: {
         readonly createdAt: Date
@@ -495,11 +514,16 @@ function gatewayContext(
 function createUnitOfWork() {
   return new PostgresUnitOfWork<ReadGateways, WriteGateways>({
     acquireOrdinary: (options) => runtime.acquireOrdinary(options),
-    resolvePrelockedSession: (lease, request) =>
-      resolvePlatformPrelockedSession(lease, prelockedOperationForRequest(request)),
+    resolvePrelockedSession: (lease, request, authorityClaim) =>
+      resolvePlatformPrelockedSession(
+        lease,
+        prelockedOperationForRequest(request),
+        authorityClaim,
+      ),
     createGatewayContext: ({
       client,
       exactReplayAuthorizer,
+      markReauthenticationSucceeded,
       newCommandAuthorizer,
       request,
       requireWriteAuthorized,
@@ -510,6 +534,7 @@ function createUnitOfWork() {
         requireWriteAuthorized,
         exactReplayAuthorizer,
         newCommandAuthorizer,
+        markReauthenticationSucceeded,
       ),
     lockTimeoutMs: 2_000,
   })
@@ -564,12 +589,12 @@ async function runSubject<Result>(input: {
     (plan) => {
       const request: SubjectProductMutationRequest = {
         operation: 'subject-product-mutation',
-        authority: {
-          kind: 'authenticated-session',
+        authority: authorityIssuer.authenticatedSession({
+          expectedEpoch: input.epoch,
           actorUserId: 'actor-1',
+          sessionId: `${input.commandId}:subject-session`,
           expectedRole: 'owner',
-          session,
-        },
+        }).authority,
         session: { kind: 'ordinary' },
         workflowPurpose: bindings.purpose,
         expectedEpoch: input.epoch,
@@ -618,12 +643,12 @@ async function runGlobal<Result>(input: {
     (plan) => {
       const request: GlobalProductMutationRequest = {
         operation: 'global-product-mutation',
-        authority: {
-          kind: 'authenticated-session',
+        authority: authorityIssuer.authenticatedSession({
+          expectedEpoch: input.epoch,
           actorUserId: 'actor-1',
+          sessionId: `${input.commandId}:global-session`,
           expectedRole: 'owner',
-          session,
-        },
+        }).authority,
         session: { kind: 'ordinary' },
         workflowPurpose: bindings.purpose,
         expectedEpoch: input.epoch,
@@ -675,12 +700,12 @@ async function runInitialPublication<Result>(input: {
     (plan) => {
       const request: SubjectProductMutationRequest = {
         operation: 'current-publication.initial',
-        authority: {
-          kind: 'authenticated-session',
+        authority: authorityIssuer.authenticatedSession({
+          expectedEpoch: input.epoch,
           actorUserId: 'actor-1',
+          sessionId: `${input.commandId}:publication-session`,
           expectedRole: 'owner',
-          session,
-        },
+        }).authority,
         session: { kind: 'ordinary' },
         workflowPurpose: bindings.purpose,
         expectedEpoch: input.epoch,
@@ -705,34 +730,57 @@ async function runInitialPublication<Result>(input: {
   )
 }
 
+type InstanceResetAttemptRequest = Extract<
+  DestructiveReauthenticationAttemptRequest,
+  { readonly authority: { readonly purpose: 'instance-reset' } }
+>
+
+async function promoteInstanceResetAuthority(input: {
+  readonly attempt: IssuedDestructiveAttempt<'instance-reset'>
+  readonly epoch: InstallationMutationEpoch
+  readonly lease: InstanceResetRequest['session']['lease']
+}): Promise<InstanceResetRequest['authority']> {
+  const request: InstanceResetAttemptRequest = {
+    operation: 'destructive-reauthentication-attempt',
+    authority: input.attempt.authority,
+    session: { kind: 'prelocked', lease: input.lease },
+    expectedEpoch: input.epoch,
+    productFence: 'shared',
+    subjectLock: null,
+    content: { kind: 'none' },
+    mode: { isolation: 'read-committed', access: 'read-write' },
+  }
+  const authority = await unitOfWork.run(request, async ({ gateways }) =>
+    gateways.markReauthenticationSucceeded(),
+  )
+  if (authority.purpose !== 'instance-reset') {
+    throw new Error('instance-reset attempt minted a mismatched authority')
+  }
+  return authority
+}
+
 async function runReset<Result>(input: {
   readonly callback: (gateways: WriteGateways) => Promise<Result>
   readonly epoch: InstallationMutationEpoch
 }): Promise<Result> {
+  const authenticated = authorityIssuer.authenticatedSession({
+    expectedEpoch: input.epoch,
+    actorUserId: 'actor-1',
+    sessionId: 'integration-instance-reset-session',
+    expectedRole: 'owner',
+  })
+  const attempt = authorityIssuer.instanceResetAttempt({ authenticated })
   const prelockedPort = createPlatformPrelockedSessionPort()
-  const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
-    async (options) => {
-      const client = await runtime.acquireTrustedControl(options)
-      return {
-        client,
-        close: async (destroyError) => {
-          client.release(destroyError())
-        },
-      }
-    },
-  )
+  const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
   return prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
+    const authority = await promoteInstanceResetAuthority({
+      attempt,
+      epoch: input.epoch,
+      lease,
+    })
     const request: InstanceResetRequest = {
       operation: 'instance-reset',
-      authority: {
-        kind: 'authenticated-destructive',
-        actorUserId: 'actor-1',
-        expectedRole: 'owner',
-        session,
-        purpose: 'instance-reset',
-        targetUserId: null,
-        reauthenticationLease: destructiveLease,
-      },
+      authority,
       session: { kind: 'prelocked', lease },
       expectedEpoch: input.epoch,
       productFence: 'exclusive',
@@ -745,6 +793,7 @@ async function runReset<Result>(input: {
 }
 
 beforeAll(async () => {
+  previousRuntimeState = runtimeGlobal.indigoDatabaseRuntimeState
   database = createDisposableIntegrationDatabase({
     administrationUrl: process.env.INTEGRATION_ADMIN_DATABASE_URL,
     suite: 'coordination_uow',
@@ -790,6 +839,7 @@ beforeAll(async () => {
      )`,
   )
   runtime = new DatabaseRuntime({ connectionString: database.databaseUrl, poolMax: 10 })
+  runtimeGlobal.indigoDatabaseRuntimeState = { kind: 'live', runtime }
   unitOfWork = createUnitOfWork()
 })
 
@@ -809,12 +859,27 @@ beforeEach(async () => {
 })
 
 afterAll(async () => {
-  await runtime?.close()
-  await inspector?.end()
-  await closeDb()
+  const closeOutcomes = await Promise.allSettled([
+    runtime?.close(),
+    inspector?.end(),
+    closeDb(),
+  ])
+  runtimeGlobal.indigoDatabaseRuntimeState = previousRuntimeState
   database?.restoreDatabaseUrl()
   resetServerConfigForTests()
-  await database?.cleanup()
+  let cleanupError: unknown
+  try {
+    await database?.cleanup()
+  } catch (error) {
+    cleanupError = error
+  }
+  const closeErrors = closeOutcomes.flatMap((outcome) =>
+    outcome.status === 'rejected' ? [outcome.reason] : [],
+  )
+  if (cleanupError !== undefined) closeErrors.push(cleanupError)
+  if (closeErrors.length > 0) {
+    throw new AggregateError(closeErrors, 'Coordination integration cleanup failed.')
+  }
 })
 
 describe('PostgreSQL UnitOfWork integration', () => {
@@ -1561,29 +1626,19 @@ describe('PostgreSQL UnitOfWork integration', () => {
     const betweenTransactions = deferred()
     const releaseOuterCallback = deferred()
     let backendPid = 0
-    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
-      async (options) => {
-        const client = await runtime.acquireTrustedControl(options)
-        return {
-          client,
-          close: async (destroyError) => {
-            client.release(destroyError())
-          },
-        }
-      },
-    )
+    const authenticated = authorityIssuer.authenticatedSession({
+      expectedEpoch: epoch,
+      actorUserId: 'actor-1',
+      sessionId: 'lost-prelocked-backend-session',
+      expectedRole: 'owner',
+    })
+    const attempt = authorityIssuer.instanceResetAttempt({ authenticated })
+    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
     const operation = prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
+      const authority = await promoteInstanceResetAuthority({ attempt, epoch, lease })
       const request: InstanceResetRequest = {
         operation: 'instance-reset',
-        authority: {
-          kind: 'authenticated-destructive',
-          actorUserId: 'actor-1',
-          expectedRole: 'owner',
-          session,
-          purpose: 'instance-reset',
-          targetUserId: null,
-          reauthenticationLease: destructiveLease,
-        },
+        authority,
         session: { kind: 'prelocked', lease },
         expectedEpoch: epoch,
         productFence: 'exclusive',
@@ -1603,103 +1658,85 @@ describe('PostgreSQL UnitOfWork integration', () => {
       (error: unknown) => ({ ok: false as const, error }),
     )
 
-    await betweenTransactions.promise
-    expect(prelockedPort.activeLeaseScopeCount()).toBe(1)
-    expect(runtime.snapshot().pools.control.admission.active).toBe(1)
-    await inspector.query('SELECT pg_terminate_backend($1)', [backendPid])
-    await expect(outcome).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'uow.connection-lost' },
-    })
-    await waitForBackendExit(backendPid)
-    expect(prelockedPort.activeLeaseScopeCount()).toBe(0)
-    expect(runtime.snapshot().pools.control.admission.active).toBe(0)
-    releaseOuterCallback.resolve()
+    try {
+      await betweenTransactions.promise
+      expect(prelockedPort.activeLeaseScopeCount()).toBe(1)
+      expect(runtime.snapshot().pools.control.admission.active).toBe(1)
+      await inspector.query('SELECT pg_terminate_backend($1)', [backendPid])
+      await expect(outcome).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'uow.connection-lost' },
+      })
+      await waitForBackendExit(backendPid)
+      expect(prelockedPort.activeLeaseScopeCount()).toBe(0)
+      expect(runtime.snapshot().pools.control.admission.active).toBe(0)
+      releaseOuterCallback.resolve()
 
-    await expect(
-      runReset({
-        epoch,
-        callback: async (gateways) => gateways.count('a'),
-      }),
-    ).resolves.toBe(0)
+      await expect(
+        runReset({
+          epoch,
+          callback: async (gateways) => gateways.count('a'),
+        }),
+      ).resolves.toBe(0)
+    } finally {
+      releaseOuterCallback.resolve()
+      await outcome
+    }
   })
 
-  it('scopes request-derived mutation modes to commit and rollback on one reserved backend', async () => {
+  it('scopes request-derived mutation modes to commit and rollback on reserved backends', async () => {
     const epoch = await currentEpoch()
     const prelockedPort = createPlatformPrelockedSessionPort()
-    let controlClient: PoolClient | undefined
-    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
-      async (options) => {
-        const client = await runtime.acquireTrustedControl(options)
-        controlClient = client
-        await client.query(
-          "SELECT set_config('indigo.user_creation_mode', 'owner-admin', false), set_config('indigo.deletion_mode', 'trainee-data', false)",
-        )
-        return {
-          client,
-          close: async (destroyError) => {
-            client.release(destroyError())
-          },
-        }
-      },
-    )
-
-    await prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
-      const request = (): InstanceResetRequest => ({
-        operation: 'instance-reset',
-        authority: {
-          kind: 'authenticated-destructive',
-          actorUserId: 'actor-1',
-          expectedRole: 'owner',
-          session,
-          purpose: 'instance-reset',
-          targetUserId: null,
-          reauthenticationLease: destructiveLease,
-        },
-        session: { kind: 'prelocked', lease },
+    const exercise = async (outcome: 'commit' | 'rollback'): Promise<void> => {
+      const authenticated = authorityIssuer.authenticatedSession({
         expectedEpoch: epoch,
-        productFence: 'exclusive',
-        subjectLock: null,
-        content: { kind: 'none' },
-        mode: { isolation: 'serializable', access: 'read-write' },
+        actorUserId: 'actor-1',
+        sessionId: `${outcome}-mutation-mode-session`,
+        expectedRole: 'owner',
       })
+      const attempt = authorityIssuer.instanceResetAttempt({ authenticated })
+      const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
 
-      await expect(
-        unitOfWork.run(request(), async ({ gateways }) => gateways.localModes()),
-      ).resolves.toEqual({
-        deletionMode: 'instance-reset',
-        userCreationMode: '',
-      })
-      if (!controlClient) throw new Error('missing reserved control client')
-      const afterCommit = await controlClient.query<{
-        deletion_mode: string | null
-        user_creation_mode: string | null
-      }>(
-        `SELECT current_setting('indigo.deletion_mode', true) AS deletion_mode,
-                current_setting('indigo.user_creation_mode', true) AS user_creation_mode`,
-      )
-      expect(afterCommit.rows[0]?.deletion_mode ?? '').toBe('')
-      expect(afterCommit.rows[0]?.user_creation_mode ?? '').toBe('')
+      await prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
+        const authority = await promoteInstanceResetAuthority({
+          attempt,
+          epoch,
+          lease,
+        })
+        const request: InstanceResetRequest = {
+          operation: 'instance-reset',
+          authority,
+          session: { kind: 'prelocked', lease },
+          expectedEpoch: epoch,
+          productFence: 'exclusive',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        }
 
-      await expect(
-        unitOfWork.run(request(), async ({ gateways }) => {
-          expect(await gateways.localModes()).toEqual({
+        if (outcome === 'commit') {
+          await expect(
+            unitOfWork.run(request, async ({ gateways }) => gateways.localModes()),
+          ).resolves.toEqual({
             deletionMode: 'instance-reset',
             userCreationMode: '',
           })
-          throw new Error('force rollback')
-        }),
-      ).rejects.toThrow('force rollback')
-      const afterRollback = await controlClient.query<{
-        deletion_mode: string | null
-        user_creation_mode: string | null
-      }>(
-        `SELECT current_setting('indigo.deletion_mode', true) AS deletion_mode,
-                current_setting('indigo.user_creation_mode', true) AS user_creation_mode`,
-      )
-      expect(afterRollback.rows[0]?.deletion_mode ?? '').toBe('')
-      expect(afterRollback.rows[0]?.user_creation_mode ?? '').toBe('')
-    })
+        } else {
+          await expect(
+            unitOfWork.run(request, async ({ gateways }) => {
+              expect(await gateways.localModes()).toEqual({
+                deletionMode: 'instance-reset',
+                userCreationMode: '',
+              })
+              throw new Error('force rollback')
+            }),
+          ).rejects.toThrow('force rollback')
+        }
+      })
+    }
+
+    await exercise('commit')
+    await exercise('rollback')
 
     expect(prelockedPort.activeLeaseScopeCount()).toBe(0)
   })

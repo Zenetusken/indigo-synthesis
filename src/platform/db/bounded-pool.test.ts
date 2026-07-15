@@ -27,8 +27,7 @@ function fakeClient(
   } = {},
 ): PoolClient {
   let released = false
-  const client = {
-    once: vi.fn(),
+  const client = Object.assign(new EventEmitter(), {
     query: vi.fn(
       (
         _text: unknown,
@@ -41,8 +40,7 @@ function fakeClient(
       released = true
       options.onRelease?.(error)
     }),
-    removeListener: vi.fn(),
-  }
+  })
 
   return client as unknown as PoolClient
 }
@@ -107,6 +105,37 @@ class DelayedEndPgClient extends InMemoryPgClient {
   }
 }
 
+const monitoredCheckoutError = new Error('client failed during monitored handoff')
+
+class NextTickErrorPgClient extends InMemoryPgClient {
+  static beforeError = (): void => undefined
+  static queryCalls = 0
+
+  override connect(callback: DriverConnectCallback): void {
+    setImmediate(() => {
+      callback()
+      process.nextTick(() => {
+        NextTickErrorPgClient.beforeError()
+        this.emit('error', monitoredCheckoutError)
+      })
+    })
+  }
+
+  query(...args: readonly unknown[]): void {
+    NextTickErrorPgClient.queryCalls += 1
+    const callback = args.at(-1)
+    if (typeof callback === 'function') {
+      callback(undefined, {
+        command: 'SELECT',
+        fields: [],
+        oid: 0,
+        rowCount: 1,
+        rows: [{ value: 1 }],
+      })
+    }
+  }
+}
+
 const releaseAssignmentFailure = new TypeError('release is not writable')
 
 class RejectBoundedReleaseClient extends InMemoryPgClient {
@@ -147,6 +176,8 @@ afterEach(() => {
   DelayedConnectPgClient.pending.length = 0
   DelayedEndPgClient.pendingEnds.length = 0
   DelayedEndPgClient.liveBackends = 0
+  NextTickErrorPgClient.beforeError = () => undefined
+  NextTickErrorPgClient.queryCalls = 0
 })
 
 describe('BoundedPool', () => {
@@ -277,6 +308,75 @@ describe('BoundedPool', () => {
     })
     expect(client.release).toHaveBeenCalledOnce()
     expect(pool.snapshot().admission.active).toBe(0)
+  })
+
+  it('owns and replays a next-tick error before a monitored checkout continuation', async () => {
+    const pool = inMemoryPool(NextTickErrorPgClient)
+    let consumerContinued = false
+    NextTickErrorPgClient.beforeError = () => {
+      expect(consumerContinued).toBe(false)
+    }
+
+    const acquired = await pool.acquireMonitored().then((monitored) => {
+      consumerContinued = true
+      return monitored
+    })
+    const replay = vi.fn()
+
+    const unsubscribe = acquired.subscribe(replay)
+    expect(replay).toHaveBeenCalledOnce()
+    expect(replay).toHaveBeenCalledWith(monitoredCheckoutError)
+    const [monitorListener] = (acquired.client as unknown as EventEmitter).listeners(
+      'error',
+    )
+    expect(monitorListener).toBeTypeOf('function')
+
+    acquired.client.release(false)
+    unsubscribe()
+    acquired.dispose()
+    expect((acquired.client as unknown as EventEmitter).listeners('error')).not.toContain(
+      monitorListener,
+    )
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 0 },
+      driver: { total: 0 },
+    })
+    await pool.end()
+  })
+
+  it('rejects and retires a raw checkout that fails before its continuation', async () => {
+    const pool = inMemoryPool(NextTickErrorPgClient)
+    let consumerContinued = false
+    NextTickErrorPgClient.beforeError = () => {
+      expect(consumerContinued).toBe(false)
+    }
+
+    await expect(
+      pool.acquire().then((client) => {
+        consumerContinued = true
+        return client
+      }),
+    ).rejects.toBe(monitoredCheckoutError)
+
+    expect(consumerContinued).toBe(false)
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 0, queued: 0 },
+      driver: { total: 0, waiting: 0 },
+    })
+    await pool.end()
+  })
+
+  it('rejects inherited Pool.query before dispatch when checkout fails in the handoff', async () => {
+    const pool = inMemoryPool(NextTickErrorPgClient)
+
+    await expect(pool.query('SELECT 1')).rejects.toBe(monitoredCheckoutError)
+
+    expect(NextTickErrorPgClient.queryCalls).toBe(0)
+    expect(pool.snapshot()).toMatchObject({
+      admission: { active: 0, queued: 0 },
+      driver: { total: 0, waiting: 0 },
+    })
+    await pool.end()
   })
 
   it('retires a poisoned pg-pool client before handing bounded admission onward', async () => {

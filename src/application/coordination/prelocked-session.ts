@@ -3,21 +3,29 @@ export type SubmittedEmailPrelockedOperation =
   | 'member-reset-redemption'
   | 'owner-recovery-web-redemption'
 
-export type TrustedPrelockedOperation =
-  | 'bootstrap-issuance'
+export type TrustedApplicationPrelockedOperation =
   | 'bootstrap-redemption'
   | 'checked-sign-out'
-  | 'expired-session-maintenance'
   | 'instance-reset'
   | 'local-user-create'
   | 'member-reset-issue'
+  | 'subject-deletion'
+
+export type ExternalHostPrelockedOperation =
+  | 'bootstrap-issuance'
+  | 'expired-session-maintenance'
   | 'owner-recovery-cli-redemption'
   | 'owner-recovery-issue'
-  | 'subject-deletion'
+
+/** Compatibility grouping for non-submitted operations; acquisition still distinguishes host. */
+export type TrustedPrelockedOperation =
+  | TrustedApplicationPrelockedOperation
+  | ExternalHostPrelockedOperation
 
 export type PrelockedSessionOperation =
   | SubmittedEmailPrelockedOperation
-  | TrustedPrelockedOperation
+  | TrustedApplicationPrelockedOperation
+  | ExternalHostPrelockedOperation
 
 /**
  * Platform-sealed capture result. Its private concrete state fixes operation, queue lane, exact

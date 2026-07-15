@@ -2,19 +2,19 @@ import { EventEmitter } from 'node:events'
 import type { PoolClient, QueryArrayResult, QueryResult, QueryResultRow } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  AuthenticatedSessionReference,
+  AuthenticatedDestructiveAuthority,
   ContentLockPlanBindings,
   DestructiveIdentityMutationRequest,
-  DestructiveReauthenticationLease,
+  DestructiveReauthenticationAttemptRequest,
   ExactReplayAuthorizer,
   GlobalProductMutationRequest,
-  HostBootstrapAuthority,
   HostBootstrapMutationRequest,
   InstanceResetRequest,
   NewCommandAuthorizer,
   SubjectDeletionRequest,
   SubjectExportRequest,
   SubjectProductMutationRequest,
+  UnitOfWorkRequest,
   UnitOfWorkScope,
 } from '@/application/coordination'
 import type { CanonicalValue } from '@/shared/canonical-json'
@@ -23,6 +23,14 @@ import {
   createContentLockProjectionFactory,
 } from './content-lock-plan'
 import { createInstallationMutationEpoch } from './lifecycle-values'
+import {
+  consumePreparedMutationAuthority,
+  createPlatformMutationAuthorityIssuer,
+  type IssuedDestructiveAttempt,
+  type IssuedProtectedDestructive,
+  type PlatformMutationAuthorityScope,
+  prepareMutationAuthorityClaim,
+} from './mutation-authority'
 import {
   PostgresUnitOfWork,
   type SafeQueryConfig,
@@ -116,6 +124,32 @@ function fakeClient(hook?: QueryHook): FakeClient {
     client: client as unknown as PoolClient,
     release,
     transcript,
+  }
+}
+
+function monitoredOrdinaryClient(client: PoolClient) {
+  let observed: Error | undefined
+  const listeners = new Set<(error: Error) => void>()
+  const onError = (error: Error): void => {
+    observed ??= error
+    for (const listener of listeners) listener(observed)
+  }
+  client.on('error', onError)
+  return {
+    client,
+    error: () => observed,
+    dispose() {
+      listeners.clear()
+      client.removeListener('error', onError)
+    },
+    subscribe(listener: (error: Error) => void) {
+      if (observed) {
+        listener(observed)
+        return () => undefined
+      }
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
   }
 }
 
@@ -377,7 +411,7 @@ function gatewayContext(
 
 function unitOfWork(database: FakeClient, hooks: GatewayTestHooks = {}) {
   return new PostgresUnitOfWork<ReadGateways, WriteGateways>({
-    acquireOrdinary: async () => database.client,
+    acquireOrdinary: async () => monitoredOrdinaryClient(database.client),
     resolvePrelockedSession: () => {
       throw new Error('test did not expect a prelocked session')
     },
@@ -405,8 +439,12 @@ function prelockedUnitOfWork() {
     acquireOrdinary: async () => {
       throw new Error('test expected a prelocked session')
     },
-    resolvePrelockedSession: (lease, request) =>
-      resolvePlatformPrelockedSession(lease, prelockedOperationForRequest(request)),
+    resolvePrelockedSession: (lease, request, authorityClaim) =>
+      resolvePlatformPrelockedSession(
+        lease,
+        prelockedOperationForRequest(request),
+        authorityClaim,
+      ),
     createGatewayContext: ({
       client,
       exactReplayAuthorizer,
@@ -425,11 +463,37 @@ function prelockedUnitOfWork() {
   })
 }
 
-function fakePrelockedAcquire(database: FakeClient) {
-  return async () => ({
-    client: database.client,
-    close: async (destroyError: () => Error | undefined) => {
-      database.client.release(destroyError())
+function installFakePrelockedRuntime(database: FakeClient): void {
+  const acquire = async () => {
+    let observed: Error | undefined
+    const listeners = new Set<(error: Error) => void>()
+    const onError = (error: Error): void => {
+      observed ??= error
+      for (const listener of listeners) listener(observed)
+    }
+    ;(database.client as unknown as EventEmitter).on('error', onError)
+    return {
+      client: database.client,
+      error: () => observed,
+      dispose: () => {
+        listeners.clear()
+        ;(database.client as unknown as EventEmitter).removeListener('error', onError)
+      },
+      subscribe: (listener: (error: Error) => void) => {
+        if (observed) {
+          listener(observed)
+          return () => undefined
+        }
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    }
+  }
+  Reflect.set(globalThis, 'indigoDatabaseRuntimeState', {
+    kind: 'live',
+    runtime: {
+      acquireSubmittedEmailMonitoredControl: acquire,
+      acquireTrustedMonitoredControl: acquire,
     },
   })
 }
@@ -438,12 +502,54 @@ const expectedEpoch = createInstallationMutationEpoch(
   '123e4567-e89b-42d3-a456-426614174000',
 )
 const parameterConversionFailure = new Error('parameter conversion failed')
-const session = {} as AuthenticatedSessionReference
+const authorityIssuer = createPlatformMutationAuthorityIssuer()
+const authenticated = authorityIssuer.authenticatedSession({
+  expectedEpoch,
+  actorUserId: 'actor-1',
+  sessionId: 'session-1',
+  expectedRole: 'owner',
+})
+const session = authenticated.authority.session
 const methodologyFactory = createContentLockProjectionFactory('methodology-target')
 const releasePair = [
   { kind: 'methodology' as const, id: 'methodology-development', version: '1' },
   { kind: 'template' as const, id: 'template-development', version: '1' },
 ]
+
+function promoteDestructive<
+  Purpose extends
+    | 'trainee-data-deletion'
+    | 'instance-reset'
+    | 'member-reset-issue'
+    | 'local-user-create',
+>(
+  issued: IssuedDestructiveAttempt<Purpose>,
+  operation:
+    | 'subject-deletion'
+    | 'instance-reset'
+    | 'member-reset-issue'
+    | 'local-user-create',
+  lease: object,
+): IssuedProtectedDestructive<Purpose> {
+  const request = {
+    operation: 'destructive-reauthentication-attempt',
+    authority: issued.authority,
+    session: { kind: 'prelocked', lease },
+    expectedEpoch: issued.expectedEpoch,
+    productFence: 'shared',
+    subjectLock: null,
+    content: { kind: 'none' },
+    mode: { isolation: 'read-committed', access: 'read-write' },
+  } as unknown as UnitOfWorkRequest
+  prepareMutationAuthorityClaim(request, operation)
+  const claim = consumePreparedMutationAuthority(request)
+  const authority = claim.markReauthenticationSucceeded()
+  claim.finish({ committed: true })
+  return {
+    authority,
+    expectedEpoch: issued.expectedEpoch,
+  } as IssuedProtectedDestructive<Purpose>
+}
 
 function exportRequest(): SubjectExportRequest {
   return {
@@ -570,103 +676,97 @@ describe('PostgresUnitOfWork', () => {
 
     const deletionDatabase = fakeClient()
     const deletionPort = createPlatformPrelockedSessionPort()
-    await deletionPort.withPrelockedSessionLease(
-      intents.subjectDeletion(fakePrelockedAcquire(deletionDatabase)),
-      (lease) => {
-        const request: SubjectDeletionRequest = {
-          operation: 'subject-deletion',
-          authority: {
-            kind: 'authenticated-destructive',
-            actorUserId: 'actor-1',
-            expectedRole: 'member',
-            session,
-            purpose: 'trainee-data-deletion',
-            targetUserId: null,
-            reauthenticationLease:
-              {} as DestructiveReauthenticationLease<'trainee-data-deletion'>,
-          },
-          session: { kind: 'prelocked', lease },
-          expectedEpoch,
-          productFence: 'shared',
-          subjectLock: { subjectUserId: 'actor-1', mode: 'exclusive' },
-          content: { kind: 'none' },
-          mode: { isolation: 'serializable', access: 'read-write' },
-        }
-        return prelockedUnitOfWork().run(request, async () => 'deleted')
-      },
-    )
+    const deletionAttempt = authorityIssuer.traineeDataDeletionAttempt({
+      authenticated,
+    })
+    installFakePrelockedRuntime(deletionDatabase)
+    const deletionIntent = intents.subjectDeletion(deletionAttempt)
+    await deletionPort.withPrelockedSessionLease(deletionIntent, (lease) => {
+      const deletionAuthority = promoteDestructive(
+        deletionAttempt,
+        'subject-deletion',
+        lease,
+      )
+      const request: SubjectDeletionRequest = {
+        operation: 'subject-deletion',
+        authority: deletionAuthority.authority,
+        session: { kind: 'prelocked', lease },
+        expectedEpoch,
+        productFence: 'shared',
+        subjectLock: { subjectUserId: 'actor-1', mode: 'exclusive' },
+        content: { kind: 'none' },
+        mode: { isolation: 'serializable', access: 'read-write' },
+      }
+      return prelockedUnitOfWork().run(request, async () => 'deleted')
+    })
     expect(transactionLocalStateValues(deletionDatabase)).toEqual([['', 'trainee-data']])
 
     const resetDatabase = fakeClient()
     const resetPort = createPlatformPrelockedSessionPort()
-    await resetPort.withPrelockedSessionLease(
-      intents.instanceReset(fakePrelockedAcquire(resetDatabase)),
-      (lease) => {
-        const request: InstanceResetRequest = {
-          operation: 'instance-reset',
-          authority: {
-            kind: 'authenticated-destructive',
-            actorUserId: 'actor-1',
-            expectedRole: 'owner',
-            session,
-            purpose: 'instance-reset',
-            targetUserId: null,
-            reauthenticationLease:
-              {} as DestructiveReauthenticationLease<'instance-reset'>,
-          },
-          session: { kind: 'prelocked', lease },
-          expectedEpoch,
-          productFence: 'exclusive',
-          subjectLock: null,
-          content: { kind: 'none' },
-          mode: { isolation: 'serializable', access: 'read-write' },
-        }
-        return prelockedUnitOfWork().run(request, async () => 'reset')
-      },
-    )
+    const resetAttempt = authorityIssuer.instanceResetAttempt({ authenticated })
+    installFakePrelockedRuntime(resetDatabase)
+    const resetIntent = intents.instanceReset(resetAttempt)
+    await resetPort.withPrelockedSessionLease(resetIntent, (lease) => {
+      const resetAuthority = promoteDestructive(resetAttempt, 'instance-reset', lease)
+      const request: InstanceResetRequest = {
+        operation: 'instance-reset',
+        authority: resetAuthority.authority,
+        session: { kind: 'prelocked', lease },
+        expectedEpoch,
+        productFence: 'exclusive',
+        subjectLock: null,
+        content: { kind: 'none' },
+        mode: { isolation: 'serializable', access: 'read-write' },
+      }
+      return prelockedUnitOfWork().run(request, async () => 'reset')
+    })
     expect(transactionLocalStateValues(resetDatabase)).toEqual([['', 'instance-reset']])
 
     const localUserDatabase = fakeClient()
     const localUserPort = createPlatformPrelockedSessionPort()
-    await localUserPort.withPrelockedSessionLease(
-      intents.localUserCreate(fakePrelockedAcquire(localUserDatabase)),
-      (lease) => {
-        const request: DestructiveIdentityMutationRequest = {
-          operation: 'destructive-identity-mutation',
-          authority: {
-            kind: 'authenticated-destructive',
-            actorUserId: 'actor-1',
-            expectedRole: 'owner',
-            session,
-            purpose: 'local-user-create',
-            targetUserId: 'target-1',
-            reauthenticationLease:
-              {} as DestructiveReauthenticationLease<'local-user-create'>,
-          },
-          session: { kind: 'prelocked', lease },
-          expectedEpoch,
-          productFence: 'shared',
-          subjectLock: null,
-          content: { kind: 'none' },
-          mode: { isolation: 'read-committed', access: 'read-write' },
-        }
-        return prelockedUnitOfWork().run(request, async () => 'created')
-      },
-    )
+    const localUserAttempt = authorityIssuer.localUserCreateAttempt({
+      authenticated,
+      targetUserId: 'target-1',
+      emailDigest: 'target-email-digest',
+    })
+    installFakePrelockedRuntime(localUserDatabase)
+    const localUserIntent = intents.localUserCreate(localUserAttempt)
+    await localUserPort.withPrelockedSessionLease(localUserIntent, (lease) => {
+      const localUserAuthority = promoteDestructive(
+        localUserAttempt,
+        'local-user-create',
+        lease,
+      )
+      const request: DestructiveIdentityMutationRequest = {
+        operation: 'destructive-identity-mutation',
+        authority: localUserAuthority.authority,
+        session: { kind: 'prelocked', lease },
+        expectedEpoch,
+        productFence: 'shared',
+        subjectLock: null,
+        content: { kind: 'none' },
+        mode: { isolation: 'read-committed', access: 'read-write' },
+      }
+      return prelockedUnitOfWork().run(request, async () => 'created')
+    })
     expect(transactionLocalStateValues(localUserDatabase)).toEqual([['owner-admin', '']])
 
     const bootstrapDatabase = fakeClient()
     const bootstrapPort = createPlatformPrelockedSessionPort()
+    const bootstrapAuthority = authorityIssuer.bootstrapRedemption({
+      expectedEpoch,
+      capabilityIdentity: 'bootstrap-capability',
+      codeIdentity: 'bootstrap-code',
+      preallocatedOwnerUserId: 'owner-1',
+      emailDigest: 'owner-email-digest',
+    })
+    installFakePrelockedRuntime(bootstrapDatabase)
     await bootstrapPort.withPrelockedSessionLease(
-      intents.bootstrapRedemption(fakePrelockedAcquire(bootstrapDatabase)),
+      intents.bootstrapRedemption(bootstrapAuthority),
       (lease) => {
         const request: HostBootstrapMutationRequest = {
           operation: 'host-bootstrap-mutation',
-          authority: {
-            kind: 'host-bootstrap',
-            mutation: 'redemption',
-            authority: {} as HostBootstrapAuthority<'redemption'>,
-          },
+          authority: bootstrapAuthority.authority,
           session: { kind: 'prelocked', lease },
           expectedEpoch,
           productFence: 'shared',
@@ -745,6 +845,421 @@ describe('PostgresUnitOfWork', () => {
     expect(database.release).toHaveBeenCalledWith()
   })
 
+  it('passes exact hidden session identity only to the transactional Identity gateway', async () => {
+    const database = fakeClient()
+    let captured: unknown
+    const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+      acquireOrdinary: async () => monitoredOrdinaryClient(database.client),
+      resolvePrelockedSession: () => {
+        throw new Error('unexpected prelocked session')
+      },
+      createGatewayContext: (input) => {
+        captured = input.capturedAuthority
+        return gatewayContext(
+          input.client,
+          input.requireWriteAuthorized,
+          input.exactReplayAuthorizer,
+          input.newCommandAuthorizer,
+        )
+      },
+    })
+
+    await expect(uow.run(exportRequest(), async () => 'rechecked')).resolves.toBe(
+      'rechecked',
+    )
+    expect(captured).toEqual({
+      kind: 'authenticated-session',
+      expectedEpoch,
+      actorUserId: 'actor-1',
+      sessionId: 'session-1',
+      expectedRole: 'owner',
+    })
+    expect(JSON.stringify(exportRequest())).not.toContain('session-1')
+  })
+
+  it('exposes only an opaque scope to the prelocked resolver and spends rejected admission', async () => {
+    type InstanceResetAttemptRequest = Extract<
+      DestructiveReauthenticationAttemptRequest,
+      { readonly authority: { readonly purpose: 'instance-reset' } }
+    >
+    const database = fakeClient()
+    const issuer = createPlatformMutationAuthorityIssuer()
+    const attempt = issuer.instanceResetAttempt({
+      authenticated: issuer.authenticatedSession({
+        expectedEpoch,
+        actorUserId: 'actor-1',
+        sessionId: 'resolver-session',
+        expectedRole: 'owner',
+      }),
+    })
+    const port = createPlatformPrelockedSessionPort()
+    installFakePrelockedRuntime(database)
+    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
+    const resolverError = new Error('resolver rejected admission')
+    let retainedScope: PlatformMutationAuthorityScope | null | undefined
+
+    await port.withPrelockedSessionLease(intent, async (lease) => {
+      const request: InstanceResetAttemptRequest = {
+        operation: 'destructive-reauthentication-attempt',
+        authority: attempt.authority,
+        session: { kind: 'prelocked', lease },
+        expectedEpoch,
+        productFence: 'shared',
+        subjectLock: null,
+        content: { kind: 'none' },
+        mode: { isolation: 'read-committed', access: 'read-write' },
+      }
+      const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+        acquireOrdinary: async () => {
+          throw new Error('expected a prelocked session')
+        },
+        resolvePrelockedSession: (_lease, _request, authorityScope) => {
+          retainedScope = authorityScope
+          expect(authorityScope).not.toBeNull()
+          expect(Object.keys(authorityScope ?? {})).toEqual([])
+          expect(Reflect.get(authorityScope ?? {}, 'markReauthenticationSucceeded')).toBe(
+            undefined,
+          )
+          expect(Reflect.get(authorityScope ?? {}, 'finish')).toBeUndefined()
+          throw resolverError
+        },
+        createGatewayContext: () => {
+          throw new Error('gateway construction must not run')
+        },
+      })
+
+      expect(() => uow.run(request, async () => 'unreachable')).toThrow(
+        expect.objectContaining({ code: 'uow.prelocked-session-invalid' }),
+      )
+      await Promise.resolve()
+      expect(() =>
+        resolvePlatformPrelockedSession(lease, 'instance-reset', retainedScope ?? null),
+      ).toThrow(expect.objectContaining({ code: 'uow.prelocked-session-invalid' }))
+      expect(() => uow.run({ ...request }, async () => 'unreachable')).toThrow(
+        expect.objectContaining({ code: 'identity.authority-stale' }),
+      )
+    })
+  })
+
+  it('mints destructive follow-on authority only after a callback-scoped proof query', async () => {
+    type ReauthenticationGateway = {
+      prove(): Promise<AuthenticatedDestructiveAuthority>
+    }
+    type InstanceResetAttemptRequest = Extract<
+      DestructiveReauthenticationAttemptRequest,
+      { readonly authority: { readonly purpose: 'instance-reset' } }
+    >
+
+    const runAttempt = async (input: {
+      readonly eager: boolean
+      readonly proofQuery: boolean
+    }): Promise<{
+      readonly authority: AuthenticatedDestructiveAuthority
+      readonly eagerError: unknown
+    }> => {
+      const database = fakeClient()
+      const issuer = createPlatformMutationAuthorityIssuer()
+      const attempt = issuer.instanceResetAttempt({
+        authenticated: issuer.authenticatedSession({
+          expectedEpoch,
+          actorUserId: 'actor-1',
+          sessionId: 'reauthentication-session',
+          expectedRole: 'owner',
+        }),
+      })
+      const port = createPlatformPrelockedSessionPort()
+      installFakePrelockedRuntime(database)
+      const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
+      let eagerError: unknown
+      const authority = await port.withPrelockedSessionLease(intent, async (lease) => {
+        const request: InstanceResetAttemptRequest = {
+          operation: 'destructive-reauthentication-attempt',
+          authority: attempt.authority,
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'shared',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'read-committed', access: 'read-write' },
+        }
+        const uow = new PostgresUnitOfWork<
+          ReauthenticationGateway,
+          ReauthenticationGateway
+        >({
+          acquireOrdinary: async () => {
+            throw new Error('expected a prelocked session')
+          },
+          resolvePrelockedSession: (leaseValue, requestValue, claim) =>
+            resolvePlatformPrelockedSession(
+              leaseValue,
+              prelockedOperationForRequest(requestValue),
+              claim,
+            ),
+          createGatewayContext: (gatewayInput) => {
+            if (input.eager) {
+              try {
+                gatewayInput.markReauthenticationSucceeded()
+              } catch (error) {
+                eagerError = error
+              }
+            }
+            const prove = async (): Promise<AuthenticatedDestructiveAuthority> => {
+              if (input.proofQuery) {
+                await gatewayInput.client.query('SELECT password-proof')
+              }
+              return gatewayInput.markReauthenticationSucceeded()
+            }
+            return {
+              recheckIdentity: async () => {
+                await gatewayInput.client.query('SELECT identity')
+              },
+              readGateways: { prove },
+              writeGateways: { prove },
+            }
+          },
+        })
+        return uow.run(request, async ({ gateways }) => gateways.prove())
+      })
+      return { authority, eagerError }
+    }
+
+    await expect(runAttempt({ eager: false, proofQuery: false })).rejects.toMatchObject({
+      code: 'identity.authority-stale',
+    })
+    const successful = await runAttempt({ eager: true, proofQuery: true })
+    expect(successful.eagerError).toMatchObject({ code: 'identity.authority-stale' })
+    expect(successful.authority).toMatchObject({
+      kind: 'authenticated-destructive',
+      actorUserId: 'actor-1',
+      purpose: 'instance-reset',
+      targetUserId: null,
+    })
+  })
+
+  it('revokes a retained destructive marker before COMMIT becomes observable', async () => {
+    type ProofGateway = { proveOnly(): Promise<void> }
+    type InstanceResetAttemptRequest = Extract<
+      DestructiveReauthenticationAttemptRequest,
+      { readonly authority: { readonly purpose: 'instance-reset' } }
+    >
+    let markCommitStarted: () => void = () => undefined
+    const commitStarted = new Promise<void>((resolve) => {
+      markCommitStarted = resolve
+    })
+    let releaseCommit: () => void = () => undefined
+    const commitBarrier = new Promise<void>((resolve) => {
+      releaseCommit = resolve
+    })
+    const database = fakeClient((text) => {
+      if (text !== 'COMMIT') return undefined
+      markCommitStarted()
+      return commitBarrier.then(() => queryResult([], 'COMMIT'))
+    })
+    const issuer = createPlatformMutationAuthorityIssuer()
+    const attempt = issuer.instanceResetAttempt({
+      authenticated: issuer.authenticatedSession({
+        expectedEpoch,
+        actorUserId: 'actor-1',
+        sessionId: 'retained-marker-session',
+        expectedRole: 'owner',
+      }),
+    })
+    const port = createPlatformPrelockedSessionPort()
+    installFakePrelockedRuntime(database)
+    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
+    let retainedMarker: (() => AuthenticatedDestructiveAuthority) | undefined
+
+    const operation = port.withPrelockedSessionLease(intent, async (lease) => {
+      const request: InstanceResetAttemptRequest = {
+        operation: 'destructive-reauthentication-attempt',
+        authority: attempt.authority,
+        session: { kind: 'prelocked', lease },
+        expectedEpoch,
+        productFence: 'shared',
+        subjectLock: null,
+        content: { kind: 'none' },
+        mode: { isolation: 'read-committed', access: 'read-write' },
+      }
+      const uow = new PostgresUnitOfWork<ProofGateway, ProofGateway>({
+        acquireOrdinary: async () => {
+          throw new Error('expected a prelocked session')
+        },
+        resolvePrelockedSession: (leaseValue, requestValue, claim) =>
+          resolvePlatformPrelockedSession(
+            leaseValue,
+            prelockedOperationForRequest(requestValue),
+            claim,
+          ),
+        createGatewayContext: (input) => {
+          expect(input.capturedAuthority).toEqual({
+            kind: 'destructive-reauthentication-attempt',
+            expectedEpoch,
+            actorUserId: 'actor-1',
+            sessionId: 'retained-marker-session',
+            expectedRole: 'owner',
+            purpose: 'instance-reset',
+            targetUserId: null,
+            emailDigest: null,
+          })
+          retainedMarker = input.markReauthenticationSucceeded
+          const proveOnly = async (): Promise<void> => {
+            await input.client.query('SELECT password-proof')
+          }
+          return {
+            recheckIdentity: async () => {
+              await input.client.query('SELECT identity')
+            },
+            readGateways: { proveOnly },
+            writeGateways: { proveOnly },
+          }
+        },
+      })
+      return uow.run(request, async ({ gateways }) => {
+        await gateways.proveOnly()
+        return 'denied'
+      })
+    })
+
+    await commitStarted
+    const marker = retainedMarker
+    if (!marker) throw new Error('marker was not captured')
+    expect(() => marker()).toThrow(
+      expect.objectContaining({ code: 'identity.authority-stale' }),
+    )
+    releaseCommit()
+    await expect(operation).resolves.toBe('denied')
+  })
+
+  it('never activates marked destructive authority after a non-clean outcome', async () => {
+    type ReauthenticationGateway = {
+      prove(): Promise<AuthenticatedDestructiveAuthority>
+    }
+    type InstanceResetAttemptRequest = Extract<
+      DestructiveReauthenticationAttemptRequest,
+      { readonly authority: { readonly purpose: 'instance-reset' } }
+    >
+    const cases = [
+      'callback-throw',
+      'cancelled',
+      'commit-unknown',
+      'cleanup-failure',
+    ] as const
+
+    for (const failure of cases) {
+      const injected = new Error(failure)
+      const database = fakeClient((text) => {
+        if (failure === 'commit-unknown' && text === 'COMMIT') {
+          return Promise.reject(injected)
+        }
+        if (failure === 'cleanup-failure' && text === 'RESET lock_timeout') {
+          return Promise.reject(injected)
+        }
+        return undefined
+      })
+      const issuer = createPlatformMutationAuthorityIssuer()
+      const attempt = issuer.instanceResetAttempt({
+        authenticated: issuer.authenticatedSession({
+          expectedEpoch,
+          actorUserId: 'actor-1',
+          sessionId: `${failure}-session`,
+          expectedRole: 'owner',
+        }),
+      })
+      const controller = new AbortController()
+      const port = createPlatformPrelockedSessionPort()
+      installFakePrelockedRuntime(database)
+      const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(attempt)
+      let promoted: AuthenticatedDestructiveAuthority | undefined
+      let checkedBeforeOuterClose = false
+
+      const assertPromotionIsStale = (): void => {
+        const authority = promoted
+        if (!authority) throw new Error(`${failure} did not reach successful proof`)
+        const protectedRequest = {
+          operation: 'instance-reset',
+          authority,
+          session: { kind: 'prelocked', lease: {} },
+          expectedEpoch,
+          productFence: 'exclusive',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        } as unknown as UnitOfWorkRequest
+        expect(() =>
+          prepareMutationAuthorityClaim(protectedRequest, 'instance-reset'),
+        ).toThrow(expect.objectContaining({ code: 'identity.authority-stale' }))
+      }
+
+      const outer = port.withPrelockedSessionLease(intent, async (lease) => {
+        const request: InstanceResetAttemptRequest = {
+          operation: 'destructive-reauthentication-attempt',
+          authority: attempt.authority,
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'shared',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'read-committed', access: 'read-write' },
+          signal: controller.signal,
+        }
+        const uow = new PostgresUnitOfWork<
+          ReauthenticationGateway,
+          ReauthenticationGateway
+        >({
+          acquireOrdinary: async () => {
+            throw new Error('expected a prelocked session')
+          },
+          resolvePrelockedSession: (leaseValue, requestValue, claim) =>
+            resolvePlatformPrelockedSession(
+              leaseValue,
+              prelockedOperationForRequest(requestValue),
+              claim,
+            ),
+          createGatewayContext: (input) => {
+            const prove = async (): Promise<AuthenticatedDestructiveAuthority> => {
+              await input.client.query('SELECT password-proof')
+              const authority = input.markReauthenticationSucceeded()
+              promoted = authority
+              return authority
+            }
+            return {
+              recheckIdentity: async () => {
+                await input.client.query('SELECT identity')
+              },
+              readGateways: { prove },
+              writeGateways: { prove },
+            }
+          },
+        })
+        const execution = uow.run(request, async ({ gateways }) => {
+          const authority = await gateways.prove()
+          if (failure === 'callback-throw') throw injected
+          if (failure === 'cancelled') controller.abort()
+          return authority
+        })
+        try {
+          await execution
+          throw new Error(`${failure} unexpectedly committed`)
+        } catch (error) {
+          if (failure === 'callback-throw' || failure === 'cancelled') {
+            assertPromotionIsStale()
+            checkedBeforeOuterClose = true
+            return
+          }
+          throw error
+        }
+      })
+
+      if (failure === 'callback-throw' || failure === 'cancelled') {
+        await expect(outer).resolves.toBeUndefined()
+        expect(checkedBeforeOuterClose).toBe(true)
+      } else {
+        await expect(outer).rejects.toBeDefined()
+        assertPromotionIsStale()
+      }
+    }
+  })
+
   it('scrubs stale privilege before lock failure on ordinary and prelocked backends', async () => {
     const lockFailure = Object.assign(new Error('lock unavailable'), { code: '55P03' })
     const staleDatabase = () => {
@@ -752,7 +1267,7 @@ describe('PostgresUnitOfWork', () => {
         deletionMode: 'trainee-data',
         userCreationMode: 'owner-admin',
       }
-      const database = fakeClient((text) => {
+      const database = fakeClient((text, values) => {
         if (
           text ===
           "SELECT set_config('indigo.user_creation_mode', '', false), set_config('indigo.deletion_mode', '', false)"
@@ -761,7 +1276,10 @@ describe('PostgresUnitOfWork', () => {
           state.userCreationMode = ''
           return Promise.resolve(queryResult())
         }
-        if (/pg_advisory_lock(?:_shared)?\(/.test(text)) {
+        if (
+          /pg_advisory_lock(?:_shared)?\(/.test(text) &&
+          !String(values[0]).startsWith('indigo:credential-lifecycle:')
+        ) {
           return Promise.reject(lockFailure)
         }
         return undefined
@@ -784,23 +1302,16 @@ describe('PostgresUnitOfWork', () => {
 
     const prelocked = staleDatabase()
     const port = createPlatformPrelockedSessionPort()
-    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
-      fakePrelockedAcquire(prelocked.database),
-    )
+    const resetAttempt = authorityIssuer.instanceResetAttempt({ authenticated })
+    installFakePrelockedRuntime(prelocked.database)
+    const intent =
+      createPlatformPrelockedSessionIntentFactory().instanceReset(resetAttempt)
     await expect(
       port.withPrelockedSessionLease(intent, (lease) => {
+        const resetAuthority = promoteDestructive(resetAttempt, 'instance-reset', lease)
         const request: InstanceResetRequest = {
           operation: 'instance-reset',
-          authority: {
-            kind: 'authenticated-destructive',
-            actorUserId: 'actor-1',
-            expectedRole: 'owner',
-            session,
-            purpose: 'instance-reset',
-            targetUserId: null,
-            reauthenticationLease:
-              {} as DestructiveReauthenticationLease<'instance-reset'>,
-          },
+          authority: resetAuthority.authority,
           session: { kind: 'prelocked', lease },
           expectedEpoch,
           productFence: 'exclusive',
@@ -812,9 +1323,16 @@ describe('PostgresUnitOfWork', () => {
       }),
     ).rejects.toMatchObject({ code: 'uow.lock-timeout' })
     expect(prelocked.state).toEqual({ deletionMode: '', userCreationMode: '' })
-    expect(prelocked.database.transcript[0]?.text).toContain(
-      "set_config('indigo.user_creation_mode', '', false)",
+    const prelockedScrub = prelocked.database.transcript.findIndex(({ text }) =>
+      text.includes("set_config('indigo.user_creation_mode', '', false)"),
     )
+    const failedProductLock = prelocked.database.transcript.findIndex(
+      ({ text, values }) =>
+        /pg_advisory_lock(?:_shared)?\(/.test(text) &&
+        values[0] === 'indigo:product-mutation-fence',
+    )
+    expect(prelockedScrub).toBeGreaterThan(-1)
+    expect(failedProductLock).toBeGreaterThan(prelockedScrub)
     expect(prelocked.database.release).toHaveBeenCalledWith(undefined)
     expect(port.activeLeaseScopeCount()).toBe(0)
   })
@@ -1641,7 +2159,7 @@ describe('PostgresUnitOfWork', () => {
 
     const earlyDatabase = fakeClient()
     const earlyUow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
-      acquireOrdinary: async () => earlyDatabase.client,
+      acquireOrdinary: async () => monitoredOrdinaryClient(earlyDatabase.client),
       resolvePrelockedSession: () => {
         throw new Error('unexpected prelocked session')
       },
@@ -1694,6 +2212,45 @@ describe('PostgresUnitOfWork', () => {
     expect(database.release).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'uow.transaction-aborted' }),
     )
+  })
+
+  it('retires a checkout error replayed before the ordinary continuation without SQL', async () => {
+    const database = fakeClient()
+    const connectionFailure = Object.assign(
+      new Error('connection failed during checkout handoff'),
+      { code: '08006' },
+    )
+    const dispose = vi.fn()
+    const unsubscribe = vi.fn()
+    const callback = vi.fn(async () => 'must not run')
+    const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+      acquireOrdinary: async () => ({
+        client: database.client,
+        error: () => connectionFailure,
+        dispose,
+        subscribe(listener) {
+          listener(connectionFailure)
+          return unsubscribe
+        },
+      }),
+      resolvePrelockedSession: () => {
+        throw new Error('unexpected prelocked session')
+      },
+      createGatewayContext: () => {
+        throw new Error('gateway construction must not run')
+      },
+    })
+
+    await expect(uow.run(exportRequest(), callback)).rejects.toMatchObject({
+      code: 'uow.connection-lost',
+    })
+
+    expect(callback).not.toHaveBeenCalled()
+    expect(database.transcript).toEqual([])
+    expect(database.release).toHaveBeenCalledOnce()
+    expect(database.release).toHaveBeenCalledWith(connectionFailure)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 
   it('maps query and emitted connection loss, skips SQL cleanup, and retires', async () => {
@@ -1971,7 +2528,7 @@ describe('PostgresUnitOfWork', () => {
     const database = fakeClient()
     let retained: ScopedTransactionClient | undefined
     const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
-      acquireOrdinary: async () => database.client,
+      acquireOrdinary: async () => monitoredOrdinaryClient(database.client),
       resolvePrelockedSession: () => {
         throw new Error('unexpected prelocked session')
       },
@@ -2013,7 +2570,7 @@ describe('PostgresUnitOfWork', () => {
   it('fails closed when Identity performs no first transactional query', async () => {
     const database = fakeClient()
     const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
-      acquireOrdinary: async () => database.client,
+      acquireOrdinary: async () => monitoredOrdinaryClient(database.client),
       resolvePrelockedSession: () => {
         throw new Error('unexpected prelocked session')
       },

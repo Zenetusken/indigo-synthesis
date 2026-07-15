@@ -657,8 +657,181 @@ function capabilityConstructionViolations(
   return violations
 }
 
+function mutationAuthorityRuntimeImportViolations(
+  files: ReadonlyMap<string, string>,
+  allowedRuntimeImports: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly string[] {
+  const mutationAuthorityPath = resolve(
+    sourceRoot,
+    'platform/application-coordination/mutation-authority.ts',
+  )
+  const graph = analyzeImportGraph(files, { sourceRoot })
+  const concreteSpecifiers = new Map<string, Set<string>>()
+  for (const edge of graph.edges) {
+    if (edge.to !== mutationAuthorityPath) continue
+    const specifiers = concreteSpecifiers.get(edge.from) ?? new Set<string>()
+    specifiers.add(edge.specifier)
+    concreteSpecifiers.set(edge.from, specifiers)
+  }
+
+  const violations: string[] = []
+  for (const computed of graph.computedImports) {
+    const source = projectPath(computed.from)
+    if (isProductionSource(source)) {
+      violations.push(
+        `${source}: computed ${computed.kind} could bypass mutation-authority import policy`,
+      )
+    }
+  }
+  for (const [path, sourceText] of files) {
+    const source = projectPath(path)
+    if (!isProductionSource(source) || path === mutationAuthorityPath) continue
+    const specifiers = concreteSpecifiers.get(path)
+    if (!specifiers) continue
+    const sourceFile = ts.createSourceFile(
+      path,
+      sourceText,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    )
+    const matchedSpecifiers = new Set<string>()
+    for (const statement of sourceFile.statements) {
+      if (
+        !ts.isImportDeclaration(statement) ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        !specifiers.has(statement.moduleSpecifier.text)
+      ) {
+        continue
+      }
+      matchedSpecifiers.add(statement.moduleSpecifier.text)
+      const clause = statement.importClause
+      if (!clause || clause.isTypeOnly) continue
+      if (
+        clause.name ||
+        (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+      ) {
+        violations.push(`${source}: broad mutation-authority runtime import`)
+        continue
+      }
+      if (!clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) continue
+      const allowed = allowedRuntimeImports.get(source) ?? new Set<string>()
+      for (const element of clause.namedBindings.elements) {
+        if (element.isTypeOnly) continue
+        const importedName = element.propertyName?.text ?? element.name.text
+        if (!allowed.has(importedName)) {
+          violations.push(
+            `${source}: unauthorized mutation-authority runtime import:${importedName}`,
+          )
+        }
+      }
+    }
+    for (const specifier of specifiers) {
+      if (!matchedSpecifiers.has(specifier)) {
+        violations.push(`${source}: non-static mutation-authority import:${specifier}`)
+      }
+    }
+  }
+  return violations.sort()
+}
+
+function externalHostConnectionSeamViolations(
+  files: ReadonlyMap<string, string>,
+  allowedConsumers: ReadonlySet<string>,
+): readonly string[] {
+  const prelockedSessionPath = resolve(
+    sourceRoot,
+    'platform/application-coordination/prelocked-session.ts',
+  )
+  const graph = analyzeImportGraph(files, { sourceRoot })
+  const targetSpecifiers = new Map<string, Set<string>>()
+  for (const edge of graph.edges) {
+    if (edge.to !== prelockedSessionPath || edge.from === prelockedSessionPath) continue
+    const specifiers = targetSpecifiers.get(edge.from) ?? new Set<string>()
+    specifiers.add(edge.specifier)
+    targetSpecifiers.set(edge.from, specifiers)
+  }
+  const restrictedSymbols = new Set([
+    'PlatformExternalHostConnection',
+    'withPlatformExternalHostConnection',
+  ])
+  const violations: string[] = []
+  for (const computed of graph.computedImports) {
+    const source = projectPath(computed.from)
+    if (isProductionSource(source)) {
+      violations.push(
+        `${source}: computed ${computed.kind} could bypass external-host connection seam policy`,
+      )
+    }
+  }
+
+  for (const [path, specifiers] of targetSpecifiers) {
+    const source = projectPath(path)
+    if (!isProductionSource(source)) continue
+    const sourceFile = ts.createSourceFile(
+      path,
+      files.get(path) ?? '',
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    )
+    for (const statement of sourceFile.statements) {
+      if (
+        ts.isImportDeclaration(statement) &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        specifiers.has(statement.moduleSpecifier.text)
+      ) {
+        const clause = statement.importClause
+        const bindings = clause?.namedBindings
+        const broad = clause?.name || !bindings || ts.isNamespaceImport(bindings)
+        const importsRestrictedSymbol =
+          bindings &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.some((element) =>
+            restrictedSymbols.has(element.propertyName?.text ?? element.name.text),
+          )
+        if (broad || (importsRestrictedSymbol && !allowedConsumers.has(source))) {
+          violations.push(`${source}: unauthorized external-host connection seam import`)
+        }
+      } else if (
+        ts.isExportDeclaration(statement) &&
+        statement.moduleSpecifier &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        specifiers.has(statement.moduleSpecifier.text)
+      ) {
+        const restricted =
+          !statement.exportClause ||
+          !ts.isNamedExports(statement.exportClause) ||
+          statement.exportClause.elements.some((element) =>
+            restrictedSymbols.has(element.propertyName?.text ?? element.name.text),
+          )
+        if (restricted) {
+          violations.push(
+            `${source}: unauthorized external-host connection seam re-export`,
+          )
+        }
+      }
+    }
+    for (const edge of graph.edges) {
+      if (
+        edge.from === path &&
+        edge.to === prelockedSessionPath &&
+        edge.kind !== 'import' &&
+        edge.kind !== 're-export'
+      ) {
+        violations.push(`${source}: non-static external-host connection seam import`)
+      }
+    }
+  }
+  return [...new Set(violations)].sort()
+}
+
 describe('UnitOfWork and coordination architecture boundaries', () => {
   const sourceFiles = readCodeSources(sourceRoot)
+  const productionFiles = new Map([
+    ...sourceFiles,
+    ...readCodeSources(resolve(process.cwd(), 'scripts')),
+  ])
   const importGraph = analyzeImportGraph(sourceFiles, { sourceRoot })
   const databaseRelations = new Set(
     [...sourceFiles]
@@ -927,6 +1100,138 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
       'coordination capability assertion:PlanAlias',
       'coordination capability assertion:Coordination.VerifiedContentLockPlan',
     ])
+  })
+
+  it('keeps concrete capability subclassing in the audited Platform issuers', () => {
+    const allowedIssuers = new Set([
+      'src/platform/application-coordination/content-lock-plan.ts',
+      'src/platform/application-coordination/lifecycle-values.ts',
+      'src/platform/application-coordination/mutation-authority.ts',
+      'src/platform/application-coordination/prelocked-session.ts',
+    ])
+    const violations = [...sourceFiles]
+      .filter(([path]) => {
+        const source = projectPath(path)
+        return (
+          isProductionSource(source) &&
+          source.startsWith('src/platform/') &&
+          !allowedIssuers.has(source)
+        )
+      })
+      .flatMap(([path, source]) =>
+        capabilityConstructionViolations(source, path)
+          .filter(({ reason }) => reason.startsWith('coordination capability subclass:'))
+          .map(({ line, reason }) => `${projectPath(path)}:${line} ${reason}`),
+      )
+
+    expect(violations).toEqual([])
+  })
+
+  it('keeps transaction-only mutation-authority helpers on exact production consumers', () => {
+    const allowedRuntimeImports = new Map<string, ReadonlySet<string>>([
+      [
+        'src/platform/application-coordination/postgres-unit-of-work.ts',
+        new Set(['consumePreparedMutationAuthority']),
+      ],
+      [
+        'src/platform/application-coordination/prelocked-session.ts',
+        new Set([
+          'assertPlatformMutationAuthorityScope',
+          'bindPlatformMutationAuthorityScope',
+          'consumePlatformCredentialPrelockPlan',
+          'revokePlatformMutationAuthorityScope',
+        ]),
+      ],
+      [
+        'src/platform/application-coordination/request-matrix.ts',
+        new Set(['prepareMutationAuthorityClaim']),
+      ],
+    ])
+    expect(
+      mutationAuthorityRuntimeImportViolations(productionFiles, allowedRuntimeImports),
+    ).toEqual([])
+
+    const rogueScript = resolve(process.cwd(), 'scripts/identity/rogue-authority.ts')
+    const syntheticFiles = new Map(productionFiles)
+    syntheticFiles.set(
+      rogueScript,
+      "import { consumePreparedMutationAuthority } from '@/platform/application-coordination/mutation-authority'\nvoid consumePreparedMutationAuthority\n",
+    )
+    expect(
+      mutationAuthorityRuntimeImportViolations(syntheticFiles, allowedRuntimeImports),
+    ).toContain(
+      'scripts/identity/rogue-authority.ts: unauthorized mutation-authority runtime import:consumePreparedMutationAuthority',
+    )
+
+    syntheticFiles.set(
+      rogueScript,
+      "const target = '@/platform/application-coordination/mutation-authority'\nvoid import(target)\n",
+    )
+    expect(
+      mutationAuthorityRuntimeImportViolations(syntheticFiles, allowedRuntimeImports),
+    ).toContain(
+      'scripts/identity/rogue-authority.ts: computed dynamic-import could bypass mutation-authority import policy',
+    )
+
+    syntheticFiles.set(
+      rogueScript,
+      "const target = '@/platform/application-coordination/mutation-authority'\nvoid require(target)\n",
+    )
+    expect(
+      mutationAuthorityRuntimeImportViolations(syntheticFiles, allowedRuntimeImports),
+    ).toContain(
+      'scripts/identity/rogue-authority.ts: computed require could bypass mutation-authority import policy',
+    )
+  })
+
+  it('reserves raw external-host connection ownership for an audited host adapter', () => {
+    // Add a single adapter here only when it owns the external flock/slot from creation to close.
+    const allowedExternalHostAdapters = new Set<string>()
+    expect(
+      externalHostConnectionSeamViolations(productionFiles, allowedExternalHostAdapters),
+    ).toEqual([])
+
+    const rogueScript = resolve(process.cwd(), 'scripts/identity/rogue-host.ts')
+    const syntheticFiles = new Map(productionFiles)
+    syntheticFiles.set(
+      rogueScript,
+      "import { withPlatformExternalHostConnection } from '@/platform/application-coordination/prelocked-session'\nvoid withPlatformExternalHostConnection\n",
+    )
+    expect(
+      externalHostConnectionSeamViolations(syntheticFiles, allowedExternalHostAdapters),
+    ).toContain(
+      'scripts/identity/rogue-host.ts: unauthorized external-host connection seam import',
+    )
+
+    syntheticFiles.set(
+      rogueScript,
+      "export * as HostConnection from '@/platform/application-coordination/prelocked-session'\n",
+    )
+    expect(
+      externalHostConnectionSeamViolations(syntheticFiles, allowedExternalHostAdapters),
+    ).toContain(
+      'scripts/identity/rogue-host.ts: unauthorized external-host connection seam re-export',
+    )
+
+    syntheticFiles.set(
+      rogueScript,
+      "const target = '@/platform/application-coordination/prelocked-session'\nvoid import(target)\n",
+    )
+    expect(
+      externalHostConnectionSeamViolations(syntheticFiles, allowedExternalHostAdapters),
+    ).toContain(
+      'scripts/identity/rogue-host.ts: computed dynamic-import could bypass external-host connection seam policy',
+    )
+
+    syntheticFiles.set(
+      rogueScript,
+      "const target = '@/platform/application-coordination/prelocked-session'\nvoid require(target)\n",
+    )
+    expect(
+      externalHostConnectionSeamViolations(syntheticFiles, allowedExternalHostAdapters),
+    ).toContain(
+      'scripts/identity/rogue-host.ts: computed require could bypass external-host connection seam policy',
+    )
   })
 
   it('keeps the non-Platform application surface away from raw content keys and content-plan crypto', () => {

@@ -92,12 +92,13 @@ describe('TypeScript import graph analysis', () => {
     ).toEqual(['../../modules/identity/infrastructure/users', '@/platform/db/client'])
   })
 
-  it('reports computed dynamic imports instead of silently omitting them', () => {
+  it('reports computed dynamic imports and requires instead of silently omitting them', () => {
     const graph = analyzeImportGraph(
       sourceFiles({
         'modules/alpha/application/a.ts': `
           const target = './runtime'
           void import(target)
+          void require(target)
         `,
       }),
       { sourceRoot },
@@ -107,6 +108,10 @@ describe('TypeScript import graph analysis', () => {
       {
         from: `${sourceRoot}/modules/alpha/application/a.ts`,
         kind: 'dynamic-import',
+      },
+      {
+        from: `${sourceRoot}/modules/alpha/application/a.ts`,
+        kind: 'require',
       },
     ])
   })

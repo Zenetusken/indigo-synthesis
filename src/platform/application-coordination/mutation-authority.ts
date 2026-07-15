@@ -89,6 +89,7 @@ type ScopeState = {
   readonly operation: PrelockedSessionOperation
   phase: ScopePhase
   active: boolean
+  prelockConsumed: boolean
   readonly initialCapability: OneUseCapabilityState
   pendingProtected: ProtectedCapabilityState | null
 }
@@ -130,6 +131,7 @@ type DestructiveBinding = {
 
 type AttemptCapabilityState = DestructiveBinding & {
   readonly kind: 'destructive-reauthentication-attempt'
+  readonly emailDigest: string | null
   readonly capability: DestructiveReauthenticationAttempt<DestructivePurpose>
   readonly scope: PlatformMutationAuthorityScope
   status: OneUseStatus
@@ -137,6 +139,7 @@ type AttemptCapabilityState = DestructiveBinding & {
 
 type ProtectedCapabilityState = DestructiveBinding & {
   readonly kind: 'authenticated-destructive'
+  readonly emailDigest: string | null
   readonly capability: DestructiveReauthenticationLease<DestructivePurpose>
   readonly scope: PlatformMutationAuthorityScope
   status: OneUseStatus
@@ -181,7 +184,9 @@ type ResetRedemptionCapabilityState = {
     readonly mutation: Mutation
     readonly expectedEpoch: InstallationMutationEpoch
     readonly codeIdentity: string
-    readonly targetUserId: string
+    readonly emailDigest: string | null
+    readonly hostInvocationId: string | null
+    readonly targetUserId: string | null
     readonly channel: ResetChannelByMutation[Mutation]
     readonly capability: CredentialLifecycleAuthority<Mutation>
     readonly scope: PlatformMutationAuthorityScope
@@ -230,6 +235,7 @@ type ExpiredSessionMaintenanceCapabilityState = {
   readonly hostInvocationId: string
   readonly cursor: string | null
   readonly batchSize: number
+  readonly resolvedAccountUserIds: readonly string[]
   readonly capability: HostInvocationAuthority<'expired-session-maintenance'>
   readonly scope: PlatformMutationAuthorityScope
   status: OneUseStatus
@@ -363,6 +369,7 @@ function createScope(
     operation,
     phase: 'issued',
     active: true,
+    prelockConsumed: false,
     initialCapability,
     pendingProtected: null,
   })
@@ -431,7 +438,10 @@ function destructiveBinding(
 }
 
 function issueAttempt<Purpose extends DestructivePurpose>(
-  binding: DestructiveBinding & { readonly purpose: Purpose },
+  binding: DestructiveBinding & {
+    readonly purpose: Purpose
+    readonly emailDigest?: string | null
+  },
   operation: PrelockedSessionOperation,
 ): IssuedDestructiveAttempt<Purpose> {
   const capability = new PlatformDestructiveAttempt<Purpose>(authorityConstructionToken)
@@ -439,6 +449,10 @@ function issueAttempt<Purpose extends DestructivePurpose>(
     {
       kind: 'destructive-reauthentication-attempt',
       ...binding,
+      emailDigest:
+        binding.emailDigest === undefined || binding.emailDigest === null
+          ? null
+          : canonicalString(binding.emailDigest),
       capability,
       status: 'fresh',
     },
@@ -493,6 +507,7 @@ export type PlatformMutationAuthorityIssuer = {
   localUserCreateAttempt(input: {
     readonly authenticated: IssuedAuthenticatedSession<'owner'>
     readonly targetUserId: string
+    readonly emailDigest: string
   }): IssuedDestructiveAttempt<'local-user-create'>
   emailSignIn(input: {
     readonly expectedEpoch: InstallationMutationEpoch
@@ -507,17 +522,20 @@ export type PlatformMutationAuthorityIssuer = {
   memberResetRedemption(input: {
     readonly expectedEpoch: InstallationMutationEpoch
     readonly codeIdentity: string
-    readonly targetUserId: string
+    readonly emailDigest: string
+    readonly targetUserId: string | null
   }): IssuedCredentialLifecycle<'member-reset-redemption'>
   ownerRecoveryWebRedemption(input: {
     readonly expectedEpoch: InstallationMutationEpoch
     readonly codeIdentity: string
+    readonly emailDigest: string
     readonly expectedOwnerUserId: string
   }): IssuedCredentialLifecycle<'owner-recovery-web-redemption'>
   ownerRecoveryCliRedemption(input: {
     readonly expectedEpoch: InstallationMutationEpoch
     readonly codeIdentity: string
     readonly expectedOwnerUserId: string
+    readonly hostInvocationId: string
   }): IssuedCredentialLifecycle<'owner-recovery-cli-redemption'>
   bootstrapIssuance(input: {
     readonly expectedEpoch: InstallationMutationEpoch
@@ -542,6 +560,7 @@ export type PlatformMutationAuthorityIssuer = {
     readonly hostInvocationId: string
     readonly cursor: string | null
     readonly batchSize: number
+    readonly resolvedAccountUserIds: readonly string[]
   }): IssuedExpiredSessionMaintenance
 }
 
@@ -603,7 +622,7 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
         'member-reset-issue',
       )
     },
-    localUserCreateAttempt({ authenticated, targetUserId }) {
+    localUserCreateAttempt({ authenticated, targetUserId, emailDigest }) {
       const binding = destructiveBinding(
         authenticated,
         'local-user-create',
@@ -611,7 +630,7 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
         'owner',
       )
       return issueAttempt(
-        { ...binding, purpose: 'local-user-create' },
+        { ...binding, purpose: 'local-user-create', emailDigest },
         'local-user-create',
       )
     },
@@ -663,7 +682,10 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
           mutation: 'member-reset-redemption',
           expectedEpoch: epoch,
           codeIdentity: canonicalString(input.codeIdentity),
-          targetUserId: canonicalString(input.targetUserId),
+          emailDigest: canonicalString(input.emailDigest),
+          hostInvocationId: null,
+          targetUserId:
+            input.targetUserId === null ? null : canonicalString(input.targetUserId),
           channel: 'member',
           capability,
           status: 'fresh',
@@ -683,6 +705,8 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
           mutation: 'owner-recovery-web-redemption',
           expectedEpoch: epoch,
           codeIdentity: canonicalString(input.codeIdentity),
+          emailDigest: canonicalString(input.emailDigest),
+          hostInvocationId: null,
           targetUserId: canonicalString(input.expectedOwnerUserId),
           channel: 'owner-web',
           capability,
@@ -703,6 +727,8 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
           mutation: 'owner-recovery-cli-redemption',
           expectedEpoch: epoch,
           codeIdentity: canonicalString(input.codeIdentity),
+          emailDigest: null,
+          hostInvocationId: canonicalString(input.hostInvocationId),
           targetUserId: canonicalString(input.expectedOwnerUserId),
           channel: 'owner-cli',
           capability,
@@ -800,6 +826,8 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
       ) {
         throw invalidInput()
       }
+      const resolvedAccountUserIds = canonicalAccountIds(input.resolvedAccountUserIds)
+      if (resolvedAccountUserIds.length > input.batchSize) throw invalidInput()
       const capability =
         new PlatformHostInvocationAuthority<'expired-session-maintenance'>(
           authorityConstructionToken,
@@ -812,6 +840,7 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
           hostInvocationId: canonicalString(input.hostInvocationId),
           cursor,
           batchSize: input.batchSize,
+          resolvedAccountUserIds,
           capability,
           status: 'fresh',
         },
@@ -930,13 +959,132 @@ export function bindPlatformMutationAuthorityScope<Authority extends MutationAut
   return state.scope
 }
 
+export type PlatformCredentialPrelockPlan = Readonly<{
+  readonly operation: PrelockedSessionOperation
+  readonly lane: 'external-host' | 'submitted-email' | 'trusted'
+  readonly instanceFence: 'exclusive' | 'shared'
+  readonly emailDigest: string | null
+  readonly accountUserIds: readonly string[]
+  readonly unknownAccountEmailDigest: string | null
+  readonly hostInvocationId: string | null
+}>
+
+function sortedDistinctAccountIds(values: readonly (string | null)[]): readonly string[] {
+  return Object.freeze(
+    [...new Set(values.filter((value): value is string => value !== null))].sort(),
+  )
+}
+
+function credentialPrelockPlan(scope: ScopeState): PlatformCredentialPrelockPlan {
+  const capability = scope.initialCapability
+  let lane: PlatformCredentialPrelockPlan['lane'] = 'trusted'
+  let instanceFence: PlatformCredentialPrelockPlan['instanceFence'] = 'shared'
+  let emailDigest: string | null = null
+  let accountUserIds: readonly string[] = Object.freeze([])
+  let unknownAccountEmailDigest: string | null = null
+  let hostInvocationId: string | null = null
+
+  switch (capability.kind) {
+    case 'destructive-reauthentication-attempt':
+      instanceFence = capability.purpose === 'instance-reset' ? 'exclusive' : 'shared'
+      emailDigest = capability.emailDigest
+      accountUserIds = sortedDistinctAccountIds([
+        capability.actorUserId,
+        capability.targetUserId,
+      ])
+      break
+    case 'authenticated-destructive':
+      throw new CoordinationError('uow.prelocked-session-invalid')
+    case 'credential-lifecycle':
+      switch (capability.mutation) {
+        case 'email-sign-in':
+          lane = 'submitted-email'
+          emailDigest = capability.emailDigest
+          accountUserIds = capability.resolvedAccountUserIds
+          if (accountUserIds.length === 0) {
+            unknownAccountEmailDigest = capability.emailDigest
+          }
+          break
+        case 'checked-sign-out':
+          accountUserIds = Object.freeze([capability.resolvedAccountUserId])
+          break
+        case 'member-reset-redemption':
+          lane = 'submitted-email'
+          emailDigest = capability.emailDigest
+          if (capability.targetUserId) {
+            accountUserIds = Object.freeze([capability.targetUserId])
+          } else {
+            unknownAccountEmailDigest = capability.emailDigest
+          }
+          break
+        case 'owner-recovery-web-redemption':
+          if (!capability.targetUserId) {
+            throw new CoordinationError('uow.prelocked-session-invalid')
+          }
+          lane = 'submitted-email'
+          emailDigest = capability.emailDigest
+          accountUserIds = Object.freeze([capability.targetUserId])
+          break
+        case 'owner-recovery-cli-redemption':
+          if (!capability.targetUserId || !capability.hostInvocationId) {
+            throw new CoordinationError('uow.prelocked-session-invalid')
+          }
+          lane = 'external-host'
+          accountUserIds = Object.freeze([capability.targetUserId])
+          hostInvocationId = capability.hostInvocationId
+          break
+      }
+      break
+    case 'host-bootstrap':
+      if (capability.mutation === 'issuance') {
+        lane = 'external-host'
+        hostInvocationId = capability.hostInvocationId
+      } else {
+        emailDigest = capability.emailDigest
+        accountUserIds = Object.freeze([capability.preallocatedOwnerUserId])
+      }
+      break
+    case 'owner-recovery-issue':
+      lane = 'external-host'
+      hostInvocationId = capability.hostInvocationId
+      accountUserIds = Object.freeze([capability.expectedOwnerUserId])
+      break
+    case 'expired-session-maintenance':
+      lane = 'external-host'
+      hostInvocationId = capability.hostInvocationId
+      accountUserIds = capability.resolvedAccountUserIds
+      break
+  }
+
+  return frozen({
+    operation: scope.operation,
+    lane,
+    instanceFence,
+    emailDigest,
+    accountUserIds,
+    unknownAccountEmailDigest,
+    hostInvocationId,
+  })
+}
+
+/** Consumed only by the exact Platform control-session adapter before any lease is exposed. */
+export function consumePlatformCredentialPrelockPlan(
+  authorityScope: PlatformMutationAuthorityScope,
+): PlatformCredentialPrelockPlan {
+  const scope = scopeStates.get(authorityScope)
+  if (!scope?.active || scope.phase !== 'ready' || scope.prelockConsumed) {
+    throw new CoordinationError('uow.prelocked-session-invalid')
+  }
+  const plan = credentialPrelockPlan(scope)
+  scope.prelockConsumed = true
+  return plan
+}
+
 export type CapturedIdentityAuthority =
   | (Omit<SessionReferenceState, 'expectedEpoch'> & {
       readonly expectedEpoch: InstallationMutationEpoch
     })
-  | (Omit<DestructiveBinding, 'session'> & {
-      readonly kind: 'destructive-reauthentication-attempt' | 'authenticated-destructive'
-    })
+  | CapturedDestructiveAuthority
   | Readonly<{
       readonly kind: 'credential-lifecycle'
       readonly mutation: 'email-sign-in'
@@ -951,17 +1099,7 @@ export type CapturedIdentityAuthority =
       readonly signedTokenDigest: string
       readonly resolvedAccountUserId: string
     }>
-  | Readonly<{
-      readonly kind: 'credential-lifecycle'
-      readonly mutation:
-        | 'member-reset-redemption'
-        | 'owner-recovery-web-redemption'
-        | 'owner-recovery-cli-redemption'
-      readonly expectedEpoch: InstallationMutationEpoch
-      readonly codeIdentity: string
-      readonly targetUserId: string
-      readonly channel: 'member' | 'owner-web' | 'owner-cli'
-    }>
+  | CapturedResetRedemptionAuthority
   | Readonly<{
       readonly kind: 'host-bootstrap'
       readonly mutation: 'issuance'
@@ -991,7 +1129,207 @@ export type CapturedIdentityAuthority =
       readonly hostInvocationId: string
       readonly cursor: string | null
       readonly batchSize: number
+      readonly resolvedAccountUserIds: readonly string[]
     }>
+
+type CapturedDestructiveBindingByPurpose = {
+  readonly 'trainee-data-deletion': {
+    readonly expectedRole: IdentityRole
+    readonly targetUserId: null
+    readonly emailDigest: null
+  }
+  readonly 'instance-reset': {
+    readonly expectedRole: 'owner'
+    readonly targetUserId: null
+    readonly emailDigest: null
+  }
+  readonly 'member-reset-issue': {
+    readonly expectedRole: 'owner'
+    readonly targetUserId: string
+    readonly emailDigest: null
+  }
+  readonly 'local-user-create': {
+    readonly expectedRole: 'owner'
+    readonly targetUserId: string
+    readonly emailDigest: string
+  }
+}
+
+type CapturedDestructiveAuthority = {
+  [Kind in 'destructive-reauthentication-attempt' | 'authenticated-destructive']: {
+    [Purpose in DestructivePurpose]: Readonly<
+      {
+        readonly kind: Kind
+        readonly expectedEpoch: InstallationMutationEpoch
+        readonly actorUserId: string
+        readonly sessionId: string
+        readonly purpose: Purpose
+      } & CapturedDestructiveBindingByPurpose[Purpose]
+    >
+  }[DestructivePurpose]
+}['destructive-reauthentication-attempt' | 'authenticated-destructive']
+
+type CapturedResetBindingByMutation = {
+  readonly 'member-reset-redemption': {
+    readonly emailDigest: string
+    readonly hostInvocationId: null
+    readonly targetUserId: string | null
+    readonly channel: 'member'
+  }
+  readonly 'owner-recovery-web-redemption': {
+    readonly emailDigest: string
+    readonly hostInvocationId: null
+    readonly targetUserId: string
+    readonly channel: 'owner-web'
+  }
+  readonly 'owner-recovery-cli-redemption': {
+    readonly emailDigest: null
+    readonly hostInvocationId: string
+    readonly targetUserId: string
+    readonly channel: 'owner-cli'
+  }
+}
+
+type CapturedResetRedemptionAuthority = {
+  [Mutation in ResetRedemptionMutation]: Readonly<
+    {
+      readonly kind: 'credential-lifecycle'
+      readonly mutation: Mutation
+      readonly expectedEpoch: InstallationMutationEpoch
+      readonly codeIdentity: string
+    } & CapturedResetBindingByMutation[Mutation]
+  >
+}[ResetRedemptionMutation]
+
+function capturedDestructiveAuthority(
+  state: AttemptCapabilityState | ProtectedCapabilityState,
+): CapturedDestructiveAuthority {
+  const common = {
+    kind: state.kind,
+    expectedEpoch: state.expectedEpoch,
+    actorUserId: state.actorUserId,
+    sessionId: state.sessionId,
+  } as const
+  switch (state.purpose) {
+    case 'trainee-data-deletion':
+      if (state.targetUserId !== null || state.emailDigest !== null)
+        throw staleAuthority()
+      return frozen({
+        ...common,
+        purpose: state.purpose,
+        expectedRole: state.expectedRole,
+        targetUserId: null,
+        emailDigest: null,
+      })
+    case 'instance-reset':
+      if (
+        state.expectedRole !== 'owner' ||
+        state.targetUserId !== null ||
+        state.emailDigest !== null
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        purpose: state.purpose,
+        expectedRole: state.expectedRole,
+        targetUserId: null,
+        emailDigest: null,
+      })
+    case 'member-reset-issue':
+      if (
+        state.expectedRole !== 'owner' ||
+        state.targetUserId === null ||
+        state.emailDigest !== null
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        purpose: state.purpose,
+        expectedRole: state.expectedRole,
+        targetUserId: state.targetUserId,
+        emailDigest: null,
+      })
+    case 'local-user-create':
+      if (
+        state.expectedRole !== 'owner' ||
+        state.targetUserId === null ||
+        state.emailDigest === null
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        purpose: state.purpose,
+        expectedRole: state.expectedRole,
+        targetUserId: state.targetUserId,
+        emailDigest: state.emailDigest,
+      })
+  }
+}
+
+function capturedResetRedemptionAuthority(
+  state: ResetRedemptionCapabilityState,
+): CapturedResetRedemptionAuthority {
+  const common = {
+    kind: state.kind,
+    expectedEpoch: state.expectedEpoch,
+    codeIdentity: state.codeIdentity,
+  } as const
+  switch (state.mutation) {
+    case 'member-reset-redemption':
+      if (
+        state.emailDigest === null ||
+        state.hostInvocationId !== null ||
+        state.channel !== 'member'
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        mutation: state.mutation,
+        emailDigest: state.emailDigest,
+        hostInvocationId: null,
+        targetUserId: state.targetUserId,
+        channel: state.channel,
+      })
+    case 'owner-recovery-web-redemption':
+      if (
+        state.emailDigest === null ||
+        state.hostInvocationId !== null ||
+        state.targetUserId === null ||
+        state.channel !== 'owner-web'
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        mutation: state.mutation,
+        emailDigest: state.emailDigest,
+        hostInvocationId: null,
+        targetUserId: state.targetUserId,
+        channel: state.channel,
+      })
+    case 'owner-recovery-cli-redemption':
+      if (
+        state.emailDigest !== null ||
+        state.hostInvocationId === null ||
+        state.targetUserId === null ||
+        state.channel !== 'owner-cli'
+      ) {
+        throw staleAuthority()
+      }
+      return frozen({
+        ...common,
+        mutation: state.mutation,
+        emailDigest: null,
+        hostInvocationId: state.hostInvocationId,
+        targetUserId: state.targetUserId,
+        channel: state.channel,
+      })
+  }
+}
 
 function capturedAuthority(state: CapabilityState): CapturedIdentityAuthority {
   switch (state.kind) {
@@ -999,15 +1337,7 @@ function capturedAuthority(state: CapabilityState): CapturedIdentityAuthority {
       return frozen({ ...state })
     case 'destructive-reauthentication-attempt':
     case 'authenticated-destructive':
-      return frozen({
-        kind: state.kind,
-        expectedEpoch: state.expectedEpoch,
-        actorUserId: state.actorUserId,
-        sessionId: state.sessionId,
-        expectedRole: state.expectedRole,
-        purpose: state.purpose,
-        targetUserId: state.targetUserId,
-      })
+      return capturedDestructiveAuthority(state)
     case 'credential-lifecycle':
       switch (state.mutation) {
         case 'email-sign-in':
@@ -1027,14 +1357,7 @@ function capturedAuthority(state: CapabilityState): CapturedIdentityAuthority {
             resolvedAccountUserId: state.resolvedAccountUserId,
           })
         default:
-          return frozen({
-            kind: state.kind,
-            mutation: state.mutation,
-            expectedEpoch: state.expectedEpoch,
-            codeIdentity: state.codeIdentity,
-            targetUserId: state.targetUserId,
-            channel: state.channel,
-          })
+          return capturedResetRedemptionAuthority(state)
       }
     case 'host-bootstrap':
       return state.mutation === 'issuance'
@@ -1069,6 +1392,7 @@ function capturedAuthority(state: CapabilityState): CapturedIdentityAuthority {
         hostInvocationId: state.hostInvocationId,
         cursor: state.cursor,
         batchSize: state.batchSize,
+        resolvedAccountUserIds: state.resolvedAccountUserIds,
       })
   }
 }
@@ -1120,7 +1444,11 @@ export function prepareMutationAuthorityClaim(
       capability.kind === 'authenticated-destructive'
         ? state.phase === 'protected-ready' && capability.status === 'fresh'
         : state.phase === 'ready' && capability.status === 'fresh'
-    if (state.operation !== expectedPrelockedOperation || !validPhase)
+    if (
+      state.operation !== expectedPrelockedOperation ||
+      !state.prelockConsumed ||
+      !validPhase
+    )
       throw staleAuthority()
     scope = capability.scope
   }
@@ -1198,6 +1526,7 @@ function markSuccessful(claim: ConsumedClaimState): AuthenticatedDestructiveAuth
     expectedRole: state.expectedRole,
     purpose: state.purpose,
     targetUserId: state.targetUserId,
+    emailDigest: state.emailDigest,
     capability,
     scope: state.scope,
     status: 'pending',
@@ -1293,16 +1622,21 @@ export function consumePreparedMutationAuthority(
 }
 
 export function assertPlatformMutationAuthorityScope(
-  claim: ConsumedMutationAuthorityClaim,
+  candidateScope: PlatformMutationAuthorityScope | null,
   expectedScope: PlatformMutationAuthorityScope,
   expectedOperation: PrelockedSessionOperation,
 ): void {
-  const claimState = consumedClaims.get(claim)
-  if (!claimIsActive(claimState) || claimState.prelockedScope !== expectedScope) {
-    throw new CoordinationError('uow.prelocked-session-invalid')
-  }
   const scope = scopeStates.get(expectedScope)
-  if (!scope?.active || scope.operation !== expectedOperation) {
+  const claimIsInFlight =
+    scope?.phase === 'direct-in-flight' ||
+    scope?.phase === 'attempt-in-flight' ||
+    scope?.phase === 'protected-in-flight'
+  if (
+    candidateScope !== expectedScope ||
+    !scope?.active ||
+    !claimIsInFlight ||
+    scope.operation !== expectedOperation
+  ) {
     throw new CoordinationError('uow.prelocked-session-invalid')
   }
 }

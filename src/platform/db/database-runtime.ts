@@ -1,6 +1,10 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres'
 import type { Pool, PoolClient } from 'pg'
-import { BoundedPool, type BoundedPoolSnapshot } from './bounded-pool'
+import {
+  BoundedPool,
+  type BoundedPoolSnapshot,
+  type MonitoredPoolClient,
+} from './bounded-pool'
 import {
   credentialCaptureConnectionCount,
   credentialControlConnectionCount,
@@ -158,8 +162,10 @@ export class DatabaseRuntime {
     return this.#ordinaryDatabase
   }
 
-  acquireOrdinary(options: { readonly signal?: AbortSignal } = {}): Promise<PoolClient> {
-    return this.#ordinaryPool.acquire(options)
+  acquireOrdinary(
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<MonitoredPoolClient> {
+    return this.#ordinaryPool.acquireMonitored(options)
   }
 
   acquireTrustedControl(
@@ -172,6 +178,24 @@ export class DatabaseRuntime {
     options: { readonly signal?: AbortSignal } = {},
   ): Promise<PoolClient> {
     return this.#credentialControlPool.acquire({
+      ...options,
+      priority: 'submitted-email',
+    })
+  }
+
+  acquireTrustedMonitoredControl(
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<MonitoredPoolClient> {
+    return this.#credentialControlPool.acquireMonitored({
+      ...options,
+      priority: 'trusted',
+    })
+  }
+
+  acquireSubmittedEmailMonitoredControl(
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<MonitoredPoolClient> {
+    return this.#credentialControlPool.acquireMonitored({
       ...options,
       priority: 'submitted-email',
     })

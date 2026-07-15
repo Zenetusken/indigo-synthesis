@@ -65,15 +65,26 @@ describe('DatabaseRuntime', () => {
     const ordinary = runtime.ordinaryPoolForCompatibility()
     const denied = new Error('stop before driver access')
     const acquire = vi.spyOn(BoundedPool.prototype, 'acquire').mockRejectedValue(denied)
+    const acquireMonitored = vi
+      .spyOn(BoundedPool.prototype, 'acquireMonitored')
+      .mockRejectedValue(denied)
 
     expect(Object.keys(ordinary).sort()).toEqual(['connect', 'query'])
+    await expect(runtime.acquireOrdinary()).rejects.toBe(denied)
     await expect(runtime.acquireTrustedControl()).rejects.toBe(denied)
     await expect(runtime.acquireSubmittedEmailControl()).rejects.toBe(denied)
     await expect(runtime.acquireTrustedCapture()).rejects.toBe(denied)
     await expect(runtime.acquireSubmittedEmailCapture()).rejects.toBe(denied)
+    await expect(runtime.acquireTrustedMonitoredControl()).rejects.toBe(denied)
+    await expect(runtime.acquireSubmittedEmailMonitoredControl()).rejects.toBe(denied)
     expect(acquire.mock.calls).toEqual([
       [{ priority: 'trusted' }],
       [{ priority: 'submitted-email' }],
+      [{ priority: 'trusted' }],
+      [{ priority: 'submitted-email' }],
+    ])
+    expect(acquireMonitored.mock.calls).toEqual([
+      [{}],
       [{ priority: 'trusted' }],
       [{ priority: 'submitted-email' }],
     ])

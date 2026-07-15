@@ -16,6 +16,7 @@ import {
   installationMutationEpochWireValue,
   subjectDataGenerationWireValue,
 } from './lifecycle-values'
+import { prepareMutationAuthorityClaim } from './mutation-authority'
 
 type AuthorityProfile =
   | { readonly kind: 'authenticated-session'; readonly role: 'any' | 'owner' }
@@ -737,5 +738,10 @@ export function captureUnitOfWorkRequest(value: unknown): UnitOfWorkRequest {
     throw invalidRequest()
   }
   if (raw.signal !== undefined) captured.signal = raw.signal
-  return Object.freeze(captured) as UnitOfWorkRequest
+  const request = Object.freeze(captured) as UnitOfWorkRequest
+  prepareMutationAuthorityClaim(
+    request,
+    profile.session === 'ordinary' ? null : profile.session,
+  )
+  return request
 }

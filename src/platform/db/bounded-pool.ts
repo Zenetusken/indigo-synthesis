@@ -39,6 +39,45 @@ export type BoundedPoolSnapshot = {
   }
 }
 
+export type MonitoredPoolClient = {
+  readonly client: PoolClient
+  readonly error: () => Error | undefined
+  readonly dispose: () => void
+  readonly subscribe: (listener: (error: Error) => void) => () => void
+}
+
+function monitorCheckedOutClient(client: PoolClient): MonitoredPoolClient {
+  let observed: Error | undefined
+  const listeners = new Set<(error: Error) => void>()
+  const onError = (error: Error): void => {
+    if (observed) return
+    observed = error instanceof Error ? error : new Error('Database client error.')
+    for (const listener of listeners) listener(observed)
+  }
+  client.on('error', onError)
+  return {
+    client,
+    error: () => observed,
+    dispose() {
+      listeners.clear()
+      client.removeListener('error', onError)
+    },
+    subscribe(listener) {
+      if (observed) {
+        listener(observed)
+        return () => undefined
+      }
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
+
+type DriverCheckout = {
+  readonly client: PoolClient
+  readonly monitor: MonitoredPoolClient
+}
+
 /**
  * A node-postgres pool whose public checkout boundary is guarded by bounded admission.
  *
@@ -66,11 +105,22 @@ export class BoundedPool extends Pool {
   override connect(): Promise<PoolClient>
   override connect(callback: PoolConnectCallback): void
   override connect(callback?: PoolConnectCallback): Promise<PoolClient> | undefined {
-    const checkout = this.#checkout({})
-    if (!callback) return checkout
+    if (!callback) return this.#checkout({})
 
-    void checkout.then(
-      (client) => callback(undefined, client, client.release),
+    void this.#checkoutOwned({}).then(
+      (checkout) => {
+        const error = checkout.monitor.error()
+        if (error) {
+          try {
+            checkout.client.release(error)
+          } catch {
+            // Preserve the owned connection error delivered to the callback.
+          }
+          callback(error, undefined, () => undefined)
+          return
+        }
+        callback(undefined, checkout.client, checkout.client.release)
+      },
       (error: Error) => callback(error, undefined, () => undefined),
     )
   }
@@ -81,6 +131,11 @@ export class BoundedPool extends Pool {
    */
   acquire(options: AdmissionAcquireOptions = {}): Promise<PoolClient> {
     return this.#checkout(options)
+  }
+
+  /** Attaches error ownership in pg-pool's checkout callback before the client can escape. */
+  acquireMonitored(options: AdmissionAcquireOptions = {}): Promise<MonitoredPoolClient> {
+    return this.#checkoutOwned(options).then((checkout) => checkout.monitor)
   }
 
   snapshot(): BoundedPoolSnapshot {
@@ -145,6 +200,19 @@ export class BoundedPool extends Pool {
   }
 
   #checkout(options: AdmissionAcquireOptions): Promise<PoolClient> {
+    return this.#checkoutOwned(options).then((checkout) => {
+      const error = checkout.monitor.error()
+      if (!error) return checkout.client
+      try {
+        checkout.client.release(error)
+      } catch {
+        // The checked-out client was still retired through the bounded release path.
+      }
+      throw error
+    })
+  }
+
+  #checkoutOwned(options: AdmissionAcquireOptions): Promise<DriverCheckout> {
     // Keep this call outside an async function: invalid priority use remains a synchronous
     // programmer error, while capacity/cancellation remains a normal rejected acquisition.
     const admission = this.#admission.acquire(options)
@@ -154,20 +222,21 @@ export class BoundedPool extends Pool {
   async #connectAdmitted(
     lease: { release(): void },
     signal: AbortSignal | undefined,
-  ): Promise<PoolClient> {
+  ): Promise<DriverCheckout> {
     if (signal?.aborted) {
       lease.release()
       throw new CoordinationError('uow.cancelled')
     }
 
-    let client: PoolClient
+    let checkout: DriverCheckout
     try {
       await this.#waitForPhysicalRetirements()
-      client = await super.connect()
+      checkout = await this.#driverCheckout()
     } catch (error) {
       lease.release()
       throw error
     }
+    const { client } = checkout
 
     if (signal?.aborted) {
       const cancellation = new CoordinationError('uow.cancelled')
@@ -175,6 +244,8 @@ export class BoundedPool extends Pool {
         this.#returnClient(client, client.release, lease, cancellation)
       } catch {
         throw cancellation
+      } finally {
+        checkout.monitor.dispose()
       }
       throw cancellation
     }
@@ -189,7 +260,16 @@ export class BoundedPool extends Pool {
       }
 
       returned = true
-      this.#returnClient(client, driverRelease, lease, error)
+      try {
+        this.#returnClient(
+          client,
+          driverRelease,
+          lease,
+          checkout.monitor.error() ?? error,
+        )
+      } finally {
+        checkout.monitor.dispose()
+      }
     }
 
     try {
@@ -204,11 +284,43 @@ export class BoundedPool extends Pool {
         )
       } catch {
         throw assignmentError
+      } finally {
+        checkout.monitor.dispose()
       }
       throw assignmentError
     }
 
-    return client
+    return checkout
+  }
+
+  #driverCheckout(): Promise<DriverCheckout> {
+    return new Promise<DriverCheckout>((resolve, reject) => {
+      let settled = false
+      const finish = (error: Error | undefined, client: PoolClient | undefined) => {
+        if (settled) return
+        settled = true
+        if (error || !client) {
+          reject(error ?? new Error('Database checkout returned no client.'))
+          return
+        }
+        resolve({
+          client,
+          monitor: monitorCheckedOutClient(client),
+        })
+      }
+      const returned = super.connect((error, client) => finish(error, client)) as unknown
+      if (
+        returned &&
+        typeof returned === 'object' &&
+        'then' in returned &&
+        typeof returned.then === 'function'
+      ) {
+        void (returned as Promise<PoolClient>).then(
+          (client) => finish(undefined, client),
+          (error: Error) => finish(error, undefined),
+        )
+      }
+    })
   }
 
   async #waitForPhysicalRetirements(): Promise<void> {

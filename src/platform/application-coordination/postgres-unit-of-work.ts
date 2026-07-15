@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { performance } from 'node:perf_hooks'
 import type { PoolClient, QueryArrayResult, QueryResult, QueryResultRow } from 'pg'
 import {
+  type AuthenticatedDestructiveAuthority,
   type ContentLockedUnitOfWorkExecution,
   type ContentLockedUnitOfWorkRequest,
   CoordinationError,
@@ -24,6 +25,18 @@ import {
   type ConsumedContentLockPlan,
   consumeVerifiedContentLockPlan,
 } from './content-lock-plan'
+import {
+  type CapturedIdentityAuthority,
+  type ConsumedMutationAuthorityClaim,
+  consumePreparedMutationAuthority,
+  type PlatformMutationAuthorityScope,
+} from './mutation-authority'
+import {
+  connectionFailure,
+  guardedInFlightQuery,
+  InFlightQueryUncertain,
+  lockTimeout,
+} from './postgres-query-guard'
 import { bindPrelockedSessionExecution } from './prelocked-session'
 import { captureUnitOfWorkRequest } from './request-matrix'
 import { transactionLocalStateForRequest } from './transaction-local-state'
@@ -72,17 +85,29 @@ export type ResolvedPrelockedSession = {
   destroy(error: Error): void
 }
 
+export type MonitoredOrdinaryClient = {
+  readonly client: PoolClient
+  readonly error: () => Error | undefined
+  readonly dispose: () => void
+  readonly subscribe: (listener: (error: Error) => void) => () => void
+}
+
 export type PostgresUnitOfWorkOptions<ReadGateways, WriteGateways> = {
   readonly acquireOrdinary: (options: {
     readonly signal?: AbortSignal
-  }) => Promise<PoolClient>
+  }) => Promise<MonitoredOrdinaryClient>
   readonly resolvePrelockedSession: (
     lease: PrelockedSessionLease<PrelockedSessionOperation>,
     request: UnitOfWorkRequest,
+    authorityScope: PlatformMutationAuthorityScope | null,
   ) => ResolvedPrelockedSession
   readonly createGatewayContext: (input: {
     readonly client: ScopedTransactionClient
     readonly request: UnitOfWorkRequest
+    /** Canonical pre-queue identity inputs; the transactional gateway must re-attest them. */
+    readonly capturedAuthority: CapturedIdentityAuthority
+    /** Only a destructive-attempt gateway may call this, after successful password proof. */
+    readonly markReauthenticationSucceeded: () => AuthenticatedDestructiveAuthority
     /** Owner DML methods call this immediately before issuing their first write. */
     readonly requireWriteAuthorized: () => void
     /** Injected only into owning receipt gateways; exact replay grants no write authority. */
@@ -163,32 +188,6 @@ class AsyncWorkTracker {
       if (timeout) clearTimeout(timeout)
     }
   }
-}
-
-class InFlightQueryUncertain extends Error {
-  constructor(readonly publicError: CoordinationError) {
-    super(publicError.message)
-    this.name = 'InFlightQueryUncertain'
-  }
-}
-
-function connectionFailure(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  const code = 'code' in error && typeof error.code === 'string' ? error.code : ''
-  return (
-    /^08/.test(code) ||
-    ['EPIPE', 'ECONNRESET', 'ECONNREFUSED', '57P01', '57P02', '57P03'].includes(code) ||
-    /connection (?:terminated|closed)|not queryable|socket hang up/i.test(error.message)
-  )
-}
-
-function lockTimeout(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    typeof error.code === 'string' &&
-    error.code === '55P03'
-  )
 }
 
 type StableQuery = {
@@ -444,43 +443,6 @@ function isMutationStatement(sql: string): boolean {
     mutationFunctionPattern.test(normalized) ||
     /\bSELECT\b[^;]*\bINTO\b/i.test(normalized)
   )
-}
-
-function guardedInFlightQuery<Result>(input: {
-  readonly promise: Promise<Result>
-  readonly signal?: AbortSignal
-  readonly timeoutMs: number
-  readonly timeoutError: CoordinationError
-  readonly onUncertain: (error: InFlightQueryUncertain) => void
-}): Promise<Result> {
-  if (input.signal?.aborted) {
-    const error = new InFlightQueryUncertain(new CoordinationError('uow.cancelled'))
-    void input.promise.catch(() => undefined)
-    input.onUncertain(error)
-    return Promise.reject(error)
-  }
-  return new Promise<Result>((resolve, reject) => {
-    let settled = false
-    const finish = (callback: () => void): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      input.signal?.removeEventListener('abort', onAbort)
-      callback()
-    }
-    const failUncertain = (publicError: CoordinationError): void => {
-      const error = new InFlightQueryUncertain(publicError)
-      finish(() => reject(error))
-      input.onUncertain(error)
-    }
-    const onAbort = (): void => failUncertain(new CoordinationError('uow.cancelled'))
-    const timeout = setTimeout(() => failUncertain(input.timeoutError), input.timeoutMs)
-    input.signal?.addEventListener('abort', onAbort, { once: true })
-    void input.promise.then(
-      (value) => finish(() => resolve(value)),
-      (error) => finish(() => reject(error)),
-    )
-  })
 }
 
 class TransactionQueryTracker {
@@ -934,6 +896,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
     callback: unknown,
   ): Promise<Result> | ContentLockedUnitOfWorkExecution<Result> {
     const request = captureUnitOfWorkRequest(requestValue)
+    const authorityClaim = consumePreparedMutationAuthority(request)
     const failure =
       this.#nesting.getStore() !== undefined
         ? new CoordinationError('uow.nested')
@@ -941,10 +904,11 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
           ? new TypeError('UnitOfWork callback must be a function.')
           : undefined
     const execution = failure
-      ? this.#rejectedExecution<Result>(request, failure)
+      ? this.#rejectedExecution<Result>(request, authorityClaim, failure)
       : this.#nesting.run(true, () =>
           this.#run(
             request,
+            authorityClaim,
             callback as (
               scope: UnitOfWorkScope<ReadGateways | WriteGateways>,
             ) => Promise<Result>,
@@ -956,13 +920,18 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
 
   async #rejectedExecution<Result>(
     request: UnitOfWorkRequest,
+    authorityClaim: ConsumedMutationAuthorityClaim,
     error: unknown,
   ): Promise<Result> {
-    if (request.content.kind === 'verified') {
-      const consumed = consumeVerifiedContentLockPlan(request.content.plan, request)
-      consumed.finish()
+    try {
+      if (request.content.kind === 'verified') {
+        const consumed = consumeVerifiedContentLockPlan(request.content.plan, request)
+        consumed.finish()
+      }
+      throw error
+    } finally {
+      authorityClaim.finish({ committed: false })
     }
-    throw error
   }
 
   #bindExecution<Result>(
@@ -983,12 +952,19 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
 
   async #run<Result>(
     request: UnitOfWorkRequest,
+    authorityClaim: ConsumedMutationAuthorityClaim,
     callback: (scope: UnitOfWorkScope<ReadGateways | WriteGateways>) => Promise<Result>,
   ): Promise<Result> {
-    const consumedContent =
-      request.content.kind === 'verified'
-        ? consumeVerifiedContentLockPlan(request.content.plan, request)
-        : null
+    let consumedContent: ConsumedContentLockPlan | null
+    try {
+      consumedContent =
+        request.content.kind === 'verified'
+          ? consumeVerifiedContentLockPlan(request.content.plan, request)
+          : null
+    } catch (error) {
+      authorityClaim.finish({ committed: false })
+      throw error
+    }
     let client: PoolClient | undefined
     let ordinary = false
     let destroyPrelocked: ((error: Error) => void) | undefined
@@ -1002,6 +978,9 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
     let queryTracker: TransactionQueryTracker | undefined
     let gatewayTracker: GatewayInvocationTracker<ReadGateways | WriteGateways> | undefined
     let connectionError: Error | undefined
+    let ordinaryMonitor: MonitoredOrdinaryClient | undefined
+    let unsubscribeOrdinaryMonitor: (() => void) | undefined
+    let ownsDirectConnectionListener = false
     const connectionAbort = new AbortController()
     const uncertaintyAbort = new AbortController()
     let operationSignal = combinedSignal([
@@ -1016,12 +995,17 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
 
     try {
       if (request.session.kind === 'ordinary') {
-        client = await this.#options.acquireOrdinary({ signal: operationSignal })
+        ordinaryMonitor = await this.#options.acquireOrdinary({
+          signal: operationSignal,
+        })
+        client = ordinaryMonitor.client
         ordinary = true
+        unsubscribeOrdinaryMonitor = ordinaryMonitor.subscribe(onConnectionError)
       } else {
         const resolved = this.#options.resolvePrelockedSession(
           request.session.lease as PrelockedSessionLease<PrelockedSessionOperation>,
           request,
+          authorityClaim.prelockedScope,
         )
         client = resolved.client
         destroyPrelocked = resolved.destroy
@@ -1031,9 +1015,15 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
           resolved.signal,
           connectionAbort.signal,
         ])
+        client.on('error', onConnectionError)
+        ownsDirectConnectionListener = true
       }
       operationSignal = combinedSignal([operationSignal, connectionAbort.signal])
-      client.on('error', onConnectionError)
+      if (connectionError) {
+        poison = connectionError
+        skipDatabaseCleanup = true
+        throw new CoordinationError('uow.connection-lost')
+      }
 
       try {
         await queryWithGuard(
@@ -1063,6 +1053,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
         operationSignal,
       )
       consumedContent?.assertActive()
+      authorityClaim.assertActive()
       if (operationSignal?.aborted) throw new CoordinationError('uow.cancelled')
 
       await queryWithGuard(
@@ -1099,25 +1090,39 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
         () => consumedContent?.assertWriteAuthorized(),
       )
       queryTracker = tracker
+      let reauthenticationMarkerOpen = false
+      const identityQueryCount = tracker.queryCount()
+      let reauthenticationQueryFloor = Number.POSITIVE_INFINITY
       const gatewayContext = this.#options.createGatewayContext({
         client: tracker.scopedClient,
         request,
+        capturedAuthority: authorityClaim.capturedAuthority,
+        markReauthenticationSucceeded: () => {
+          if (
+            !reauthenticationMarkerOpen ||
+            tracker.queryCount() <= reauthenticationQueryFloor
+          ) {
+            throw new CoordinationError('identity.authority-stale')
+          }
+          return authorityClaim.markReauthenticationSucceeded()
+        },
         requireWriteAuthorized: () => consumedContent?.assertWriteAuthorized(),
         exactReplayAuthorizer: consumedContent?.exactReplayAuthorizer ?? null,
         newCommandAuthorizer: consumedContent?.newCommandAuthorizer ?? null,
       })
       tracker.open()
-      const identityQueryCount = tracker.queryCount()
       await settleWithSignal(gatewayContext.recheckIdentity(), operationSignal)
       if (tracker.queryCount() <= identityQueryCount || tracker.hasDetachedWork()) {
         throw new CoordinationError('identity.authority-stale')
       }
+      reauthenticationQueryFloor = tracker.queryCount()
       if (tracker.uncertainError() !== undefined) {
         poison ??= tracker.uncertainError()
         skipDatabaseCleanup = true
         throw new CoordinationError('uow.connection-lost')
       }
       consumedContent?.assertActive()
+      authorityClaim.assertActive()
       if (operationSignal?.aborted) throw new CoordinationError('uow.cancelled')
 
       const transactionLocalState = transactionLocalStateForRequest(request)
@@ -1160,6 +1165,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
             : gatewayContext.writeGateways
         const scopedGateways = invocations.wrap(gateways)
         invocations.open()
+        reauthenticationMarkerOpen = true
         callbackPromise = Promise.resolve(
           callback({
             gateways: scopedGateways,
@@ -1182,6 +1188,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
         outcome = { ok: false, error }
       }
 
+      reauthenticationMarkerOpen = false
       tracker.revoke()
       invocations.revoke()
       if (!callbackSettled && callbackPromise) {
@@ -1229,6 +1236,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
       if (outcome.ok) {
         try {
           consumedContent?.assertReadyToCommit(outcome.value)
+          authorityClaim.assertActive()
         } catch (error) {
           outcome = { ok: false, error }
         }
@@ -1379,7 +1387,11 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
         } catch (error) {
           cleanupError ??= error
         } finally {
-          client.removeListener('error', onConnectionError)
+          unsubscribeOrdinaryMonitor?.()
+          ordinaryMonitor?.dispose()
+          if (ownsDirectConnectionListener) {
+            client.removeListener('error', onConnectionError)
+          }
           finishPrelocked?.()
         }
 
@@ -1390,6 +1402,13 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
           }
         }
       }
+      authorityClaim.finish({
+        committed:
+          transactionCommitted &&
+          finalOutcome?.ok === true &&
+          poison === undefined &&
+          !skipDatabaseCleanup,
+      })
     }
 
     if (!finalOutcome) throw new CoordinationError('uow.cleanup-failed')

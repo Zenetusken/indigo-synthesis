@@ -46,11 +46,13 @@ export {
   SubjectDataGeneration,
 } from './mutation-authority'
 export type {
+  ExternalHostPrelockedOperation,
   PrelockedSessionIntent,
   PrelockedSessionOperation,
   PrelockedSessionOptions,
   PrelockedSessionPort,
   SubmittedEmailPrelockedOperation,
+  TrustedApplicationPrelockedOperation,
   TrustedPrelockedOperation,
 } from './prelocked-session'
 export { PrelockedSessionLease } from './prelocked-session'
