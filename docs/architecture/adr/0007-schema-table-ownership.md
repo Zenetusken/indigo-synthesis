@@ -1,8 +1,13 @@
 # ADR 0007: Schema/table write-fence and residual boundary debt
 
-- Status: **proposed** — awaiting maintainer decision. This revision is a *provisional
-  debt ratification* template (post adversarial review). It is **not** accepted and must
-  **not** be treated as a silent rewrite of AGENTS.md / ARCHITECTURE.md.
+- Status: **Part A accepted & shipped (#9); Part B decided — build the proper boundary**
+  (2026-07-15). The maintainer chose to build Part B (module ports + a shared `UnitOfWork`,
+  pursued via [ADR 0008](0008-calibration-module-boundary.md)) rather than accept this ADR's
+  *provisional debt ratification* option as the terminal boundary. The write-fence (Part A) is
+  confirmed the **interim** guardrail; its Programs↔Training `additionalWriters` debt grants are
+  targeted for removal as Part B lands ([development roadmap](../DEVELOPMENT_ROADMAP.md)
+  Stages 6/9). AGENTS.md / ARCHITECTURE.md remain the binding target — not silently rewritten;
+  O6 doc convergence happens when Part B lands.
 - Date: 2026-07-14 (revised same day after adversarial review)
 - Relates to: [ADR 0001](0001-modular-monolith.md) (modular monolith deployment shape only)
 - Amends (only if this ADR is **accepted**): see [Consequences](#consequences) — either

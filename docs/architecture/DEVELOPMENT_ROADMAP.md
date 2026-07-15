@@ -74,7 +74,9 @@ These are the decisions a new developer must understand. Each links to where it 
   census (O2–O5). *Note:* there is **no in-repo CI**; the fence and tests run under
   `pnpm test` / `pnpm validate` (local / pre-merge). Adding CI to actually gate merges is an
   open item.
-- **Merged spec/plan:** the calibration engine spec + **ADR 0008** (status *proposed*) (**#10**).
+- **Merged & accepted:** the calibration engine spec + **ADR 0008** — status **accepted**
+  (2026-07-15, #10). Part B is the committed direction; ADR 0007's Part B disposition is
+  recorded (build the proper boundary — the write-fence is interim, not terminal).
 - **Tabled:** the local-LLM arc continuation (lives on the `feat/schema-ownership-spec` branch).
 - **Open production-release blockers** ([MVP_STATUS](../MVP_STATUS.md)): (1) Methodology Gate 0,
   (2) reviewed content release, (3) WCAG/device review, (4) schema ownership — Part A shipped,
@@ -92,15 +94,16 @@ Stages 0–1 are done; the rest are ordered by dependency.
 The manifest + compile-time bijection + runtime O2–O5. The interim guardrail every later stage
 verifies against.
 
-### Stage 1 — Calibration engine spec + ADR 0008 *(DONE, #10, proposed)*
+### Stage 1 — Calibration engine spec + ADR 0008 *(DONE, #10)*
 The converged boundary and the falsifiable K1–K7 definition of done.
 
-### Stage 2 — Accept ADR 0008 + the Part B commitment *(DECISION — maintainer)*
+### Stage 2 — Accept ADR 0008 + the Part B commitment *(DONE — accepted 2026-07-15)*
 - **Goal:** accept the calibration boundary and the commitment to build the `UnitOfWork` / Part B.
 - **Depends on:** Stage 1. **Unblocks:** all build stages below.
-- **DoD:** ADR 0008 status → `accepted`; ADR 0007 Part B disposition recorded.
-- **Decisions:** the "always proper architecture" principle. *(This is a human decision point,
-  not code.)*
+- **DoD (met):** ADR 0008 status → **accepted**; ADR 0007 Part B disposition recorded (build the
+  proper boundary; the write-fence is interim).
+- **Decisions:** the "always proper architecture" principle (D1). **Next: Stage 3 — build the
+  `UnitOfWork`.**
 
 ### Stage 3 — Build the `UnitOfWork` *(foundational)*
 - **Goal:** the `src/application/workflows/` layer + a `UnitOfWork` port whose PostgreSQL adapter
@@ -196,9 +199,9 @@ The converged boundary and the falsifiable K1–K7 definition of done.
 
 ```text
 Stage 0  write-fence (DONE #9)
-Stage 1  calibration spec + ADR 0008 (DONE #10, proposed)
+Stage 1  calibration spec + ADR 0008 (DONE #10)
    │
-Stage 2  ACCEPT ADR 0008 + Part B  (maintainer decision)
+Stage 2  ACCEPT ADR 0008 + Part B  (DONE 2026-07-15)
    │
 Stage 3  build UnitOfWork ──────────────────────────────┐
    │                                                     │

@@ -6,7 +6,7 @@ Scope owner: architecture / product (methodology numbers gated by Gate 0)
 Relates to: [ADR 0001 modular monolith](adr/0001-modular-monolith.md) (the `UnitOfWork` this
 arc builds), [ADR 0003 deterministic methodology](adr/0003-deterministic-methodology.md),
 [ADR 0006 optional grounded language](adr/0006-optional-local-grounded-language.md),
-[ADR 0007 schema/table write-fence](adr/0007-schema-table-ownership.md), proposed
+[ADR 0007 schema/table write-fence](adr/0007-schema-table-ownership.md), accepted
 [ADR 0008 calibration module boundary](adr/0008-calibration-module-boundary.md), and the
 [Methodology v1 decision pack](../product/METHODOLOGY_V1_DECISION_PACK.md) (Gate 0).
 
