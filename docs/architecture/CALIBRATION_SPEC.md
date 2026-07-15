@@ -41,10 +41,10 @@ rounding, a plate model, and a re-test cadence. Everything neurotype-scoped is d
 **Current app** has the *plumbing* but no engine. Critically, the future-load **decision is a
 training-internal atomic concern**: its active-vs-invalidated status is decided by a single
 locked read (`future-load-explanation-cache.ts`, one `pg_advisory_xact_lock(userId)`) that
-joins `adjustment_decision`, `workout_session.status`, `session_feedback`, and
-`training_fact_correction`. Three of those are training's session-lifecycle tables — so the
-**decision gate cannot leave training** without violating the fence or shearing that
-linearized read. This drives the boundary in §8. Loads today come from
+joins `adjustment_decision`, `adjustment_decision_invalidation` (the invalidation flag the
+gate actually checks), `workout_session.status`, `session_feedback`, and
+`training_fact_correction` — all training-owned. So the **decision gate cannot leave
+training** without violating the fence or shearing that linearized read. This drives the boundary in §8. Loads today come from
 `UNREVIEWED_DEVELOPMENT_TEMPLATE`; there is **no calibration math** in the codebase.
 
 ---
@@ -193,14 +193,14 @@ No cross-module split of any atomic write.
 | derived e1RM / working-max state | **new, `calibration`** | owned; updated via a training→calibration port (facts passed in) |
 | decision cluster (`adjustment_decision`, `adjustment_decision_invalidation`, `future_load_explanation_cache`) | **stays `training`** | training records the calibration-computed decision; the atomic gate is untouched |
 | prescription cluster (`program_revision`, `planned_workout`, `exercise_prescription`, `set_prescription`) | stays `programs` | written via a **Programs write port** inside the `UnitOfWork`; the four `training` debt grants are removed |
-| `program_revision_lineage` | **moves `training` → `programs`** | written by the Programs port with the revision (an **owner change**, verified by O1 coverage + O2, not O3) |
+| `program_revision_lineage` | **stays `training`** | it is read by training's correction recursive CTEs (`workouts.ts:203, 489`) and sourced from training sessions; training writes it in its part of the `UnitOfWork`. Its FKs into programs' revisions are allowed cross-module FKs (ARCHITECTURE), not a boundary violation |
 | `safety_hold` | unchanged (`athletes` owner + pre-existing `training` session-pain debt) | calibration signals `raise_hold`; the completion workflow raises it via the **athletes owner path** in the `UnitOfWork`; unifying `safety_hold`'s writers is separate debt (out of scope) |
 
 ### 8.4 The `UnitOfWork` (ADR 0001, built by this arc)
 
 On completion, a `src/application/workflows/` completion workflow opens a `UnitOfWork` and,
-in one transaction: **training** records the decision (computed via the calibration port),
-the **Programs write port** persists the revision + `program_revision_lineage` +
+in one transaction: **training** records the decision (computed via the calibration port) and
+writes its own `program_revision_lineage`, the **Programs write port** persists the revision +
 prescriptions, the **calibration port** updates e1RM state, and the **athletes owner path**
 raises `safety_hold` if `raise_hold` was signaled. All bind to the same transaction and
 commit or roll back together (ARCHITECTURE.md "Cross-module composition"). **Calibration is
@@ -211,18 +211,18 @@ public ports; nothing reaches across tables.
 
 `training` stops writing the four-table cluster (the writes move behind the Programs port), so
 its four `additionalWriters` debt grants are **removed** — verified by the **landed** O2
-(`training` no longer writes them) and O3 (no stale grant), `schema-ownership.test.ts` (#9).
-`program_revision_lineage`'s move is an **owner change** (`training`→`programs`), verified by
-O1 coverage + O2, **not** the O3 stale-grant check. `safety_hold`'s pre-existing training debt
-is **not** retired here. The debt is not asserted retired until the slice lands green.
+(`training` no longer writes them) and the O3 stale-grant check (no removed grant left behind),
+`schema-ownership.test.ts` (#9), run by `pnpm test` / `pnpm validate` (there is no in-repo CI;
+enforcement is the local/pre-merge suite). `program_revision_lineage` **stays `training`**, so
+no owner change is needed there. `safety_hold`'s pre-existing training debt is **not** retired
+here. The debt is not asserted retired until the slice lands green.
 
 ### 8.6 Required `ownership.ts` changes
 
 Add `'calibration'` to `ModuleId`; add the calibration schema file (new e1RM/working-max
-tables, auto-covered by the schema-derived `SqlTableName` + glob scanner); move
-`program_revision_lineage` to `programs`; remove the four Programs↔Training debt grants. The
-decision cluster is unchanged (`training`). Calibration is a writer (not in
-`NON_WRITING_MODULES`).
+tables, auto-covered by the schema-derived `SqlTableName` + glob scanner); remove the four
+Programs↔Training debt grants. The decision cluster and `program_revision_lineage` are
+unchanged (`training`). Calibration is a writer (not in `NON_WRITING_MODULES`).
 
 ---
 

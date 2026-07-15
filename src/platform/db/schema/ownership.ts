@@ -19,9 +19,11 @@
  *   build if a table is added, renamed, or dropped without a matching manifest
  *   edit. This realizes spec §4.1's mapped-type contract.
  * - Runtime (O2–O5): the write census and authorization checks live in
- *   test/architecture/schema-ownership.test.ts (landed in #9) and run in CI, so
- *   *authorization* is enforced, not merely declared; *coverage* (O1) is
- *   additionally enforced here by the type system.
+ *   test/architecture/schema-ownership.test.ts (landed in #9), run by
+ *   `pnpm test` / `pnpm validate` — so *authorization* is checked by the suite,
+ *   not merely declared. (There is no in-repo CI pipeline; the check is the
+ *   local / pre-merge suite.) *coverage* (O1) is additionally enforced here by
+ *   the type system.
  *
  * Keys are SQL table names (the `pgTable` first argument), not Drizzle export
  * bindings.

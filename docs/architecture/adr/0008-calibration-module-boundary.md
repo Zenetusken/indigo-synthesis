@@ -15,16 +15,17 @@
 The `profile → plan → train → learn` loop has no engine that turns an athlete's attested
 baseline into working loads and recalibrates them from performed work. The future-load
 **decision is a training-internal atomic concern**: its active-vs-invalidated status is
-decided by one locked read (`future-load-explanation-cache.ts`) joining `adjustment_decision`
-with `workout_session.status`, `session_feedback`, and `training_fact_correction` — three of
-which are training's session-lifecycle tables. That gate **cannot leave training** without
-violating the ADR 0007 write-fence or shearing the linearized read (two adversarial reviews
-confirmed this). With neurotype excluded, per-athlete load calibration is the product's
-personalization mechanism.
+decided by one locked read (`future-load-explanation-cache.ts`) joining `adjustment_decision`,
+`adjustment_decision_invalidation`, `workout_session.status`, `session_feedback`, and
+`training_fact_correction` — all training-owned session-lifecycle tables. That gate **cannot
+leave training** without violating the ADR 0007 write-fence or shearing the linearized read
+(two adversarial reviews confirmed this). With neurotype excluded, per-athlete load
+calibration is the product's personalization mechanism.
 
-Separately, `training` writes the four-table `program_revision` / prescription cluster (and
-`program_revision_lineage`) directly on completion — the Programs↔Training co-write ADR 0007
-fenced as `additionalWriters` debt. Retiring it properly is a multi-module atomic write,
+Separately, `training` writes the four-table `program_revision` / prescription cluster
+directly on completion — the Programs↔Training co-write ADR 0007 fenced as `additionalWriters`
+debt (`program_revision_lineage` is training's own provenance table, read by training's
+correction path — not part of that debt). Retiring it properly is a multi-module atomic write,
 which requires the `UnitOfWork` [ADR 0001](0001-modular-monolith.md) describes and that has
 been deferred.
 
@@ -51,10 +52,10 @@ write requires.
 5. The LLM **explains** each decision and never makes one
    ([ADR 0006](0006-optional-local-grounded-language.md)); journeys work with it off.
 6. On completion, a `src/application/workflows/` workflow opens a **`UnitOfWork`**: training
-   records the decision, a **Programs write port** persists the revision +
-   `program_revision_lineage` + prescriptions, the **calibration port** updates e1RM state, and
-   the **athletes owner path** raises `safety_hold` when signaled — one transaction, atomic.
-   `training` stops writing the prescription cluster; nothing reaches across tables.
+   records the decision and writes its own `program_revision_lineage`, a **Programs write
+   port** persists the revision + prescriptions, the **calibration port** updates e1RM state,
+   and the **athletes owner path** raises `safety_hold` when signaled — one transaction,
+   atomic. `training` stops writing the prescription cluster; nothing reaches across tables.
 
 ## Consequences
 
@@ -63,11 +64,12 @@ write requires.
   cannot be expressed without it.
 - **The Programs↔Training co-write retires when this lands — verified, not asserted.** The four
   `training` `additionalWriters` grants are removed; the **landed** O2/O3 checks
-  (`schema-ownership.test.ts`, #9) fail if `training` still writes the cluster or a grant is
-  stale. `program_revision_lineage`'s move is an owner change (O1/O2-verified, not O3).
-  `safety_hold`'s pre-existing training debt is not retired here.
-- `ownership.ts` gains `'calibration'` in `ModuleId`, a new schema file, `program_revision_lineage`
-  re-homed to `programs`, and the four removed debt grants. The decision cluster is unchanged.
+  (`schema-ownership.test.ts`, #9, run by `pnpm test` / `pnpm validate` — there is no in-repo
+  CI) fail if `training` still writes the cluster or a grant is left stale.
+  `program_revision_lineage` stays `training` (its own provenance table). `safety_hold`'s
+  pre-existing training debt is not retired here.
+- `ownership.ts` gains `'calibration'` in `ModuleId`, a new schema file, and the four removed
+  debt grants. The decision cluster and `program_revision_lineage` are unchanged (`training`).
 - Reviewed numbers stay Gate 0; production still rejects the dev config.
 
 ## Alternatives considered
