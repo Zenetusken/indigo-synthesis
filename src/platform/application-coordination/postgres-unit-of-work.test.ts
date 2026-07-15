@@ -4,9 +4,15 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   AuthenticatedSessionReference,
   ContentLockPlanBindings,
+  DestructiveIdentityMutationRequest,
+  DestructiveReauthenticationLease,
   ExactReplayAuthorizer,
   GlobalProductMutationRequest,
+  HostBootstrapAuthority,
+  HostBootstrapMutationRequest,
+  InstanceResetRequest,
   NewCommandAuthorizer,
+  SubjectDeletionRequest,
   SubjectExportRequest,
   SubjectProductMutationRequest,
   UnitOfWorkScope,
@@ -17,7 +23,17 @@ import {
   createContentLockProjectionFactory,
 } from './content-lock-plan'
 import { createInstallationMutationEpoch } from './lifecycle-values'
-import { PostgresUnitOfWork, type ScopedTransactionClient } from './postgres-unit-of-work'
+import {
+  PostgresUnitOfWork,
+  type SafeQueryConfig,
+  type ScopedTransactionClient,
+} from './postgres-unit-of-work'
+import {
+  createPlatformPrelockedSessionIntentFactory,
+  createPlatformPrelockedSessionPort,
+  prelockedOperationForRequest,
+  resolvePlatformPrelockedSession,
+} from './prelocked-session'
 
 type TranscriptEntry = {
   readonly text: string
@@ -51,7 +67,12 @@ function queryResult<Row extends QueryResultRow>(
 function fakeClient(hook?: QueryHook): FakeClient {
   const transcript: TranscriptEntry[] = []
   const release = vi.fn()
-  const query = (async (text: string, values: readonly unknown[] = []) => {
+  const query = (async (
+    input: string | SafeQueryConfig,
+    suppliedValues: readonly unknown[] = [],
+  ) => {
+    const text = typeof input === 'string' ? input : input.text
+    const values = typeof input === 'string' ? suppliedValues : (input.values ?? [])
     transcript.push({ text, values })
     const hooked = hook?.(text, values)
     if (hooked) return hooked
@@ -71,6 +92,16 @@ function fakeClient(hook?: QueryHook): FakeClient {
   }
 }
 
+function transactionLocalStateValues(
+  database: FakeClient,
+): readonly (readonly unknown[])[] {
+  return database.transcript
+    .filter(({ text }) =>
+      text.includes("set_config('indigo.user_creation_mode', $1, true)"),
+    )
+    .map(({ values }) => values)
+}
+
 type ReadGateways = {
   read(): Promise<string>
 }
@@ -83,6 +114,7 @@ type WriteGateways = ReadGateways & {
   caseExpression(): Promise<void>
   callProcedure(): Promise<void>
   createTemporaryTable(): Promise<void>
+  conversionFailure(mode: 'awaited' | 'caught' | 'ignored'): Promise<void>
   dblinkMutation(): Promise<void>
   endAfterBackslashLiteral(): Promise<void>
   endTransaction(): Promise<void>
@@ -93,6 +125,10 @@ type WriteGateways = ReadGateways & {
   largeObjectWrite(): Promise<void>
   pauseBeforeWrite(): Promise<void>
   prepareMutation(): Promise<void>
+  queryWithMutableValues(
+    values: unknown[],
+    form?: 'config' | 'positional',
+  ): Promise<unknown>
   queryWithAccessorText(): Promise<void>
   queryWithCallbackConfig(): Promise<void>
   queryWithSubmittable(): Promise<void>
@@ -152,6 +188,19 @@ function gatewayContext(
       async createTemporaryTable() {
         await client.query('SELECT 1 INTO LOCAL TEMPORARY TABLE retained_state')
       },
+      async conversionFailure(mode: 'awaited' | 'caught' | 'ignored') {
+        requireWriteAuthorized()
+        await client.query('INSERT conversion-prior-write')
+        const rejected = client.query('SELECT $1 AS conversion-failure', [
+          {
+            toPostgres() {
+              throw parameterConversionFailure
+            },
+          },
+        ])
+        if (mode === 'awaited') await rejected
+        else if (mode === 'caught') void rejected.catch(() => undefined)
+      },
       async dblinkMutation() {
         await client.query(
           "SELECT dblink_exec('foreign', 'INSERT INTO escaped VALUES (1)')",
@@ -183,6 +232,19 @@ function gatewayContext(
       },
       async prepareMutation() {
         await client.query('PREPARE retained_mutation AS INSERT prepared-write')
+      },
+      async queryWithMutableValues(
+        values: unknown[],
+        form: 'config' | 'positional' = 'positional',
+      ) {
+        const result =
+          form === 'config'
+            ? await client.query<{ value: unknown }>({
+                text: 'SELECT $1 AS mutable-value',
+                values,
+              })
+            : await client.query<{ value: unknown }>('SELECT $1 AS mutable-value', values)
+        return result.rows[0]?.value
       },
       async queryWithAccessorText() {
         await client.query({
@@ -262,9 +324,44 @@ function unitOfWork(database: FakeClient, hooks: GatewayTestHooks = {}) {
   })
 }
 
+function prelockedUnitOfWork() {
+  return new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+    acquireOrdinary: async () => {
+      throw new Error('test expected a prelocked session')
+    },
+    resolvePrelockedSession: (lease, request) =>
+      resolvePlatformPrelockedSession(lease, prelockedOperationForRequest(request)),
+    createGatewayContext: ({
+      client,
+      exactReplayAuthorizer,
+      newCommandAuthorizer,
+      requireWriteAuthorized,
+    }) =>
+      gatewayContext(
+        client,
+        requireWriteAuthorized,
+        exactReplayAuthorizer,
+        newCommandAuthorizer,
+      ),
+    lockTimeoutMs: 20,
+    detachedDrainTimeoutMs: 20,
+    queryTimeoutMs: 100,
+  })
+}
+
+function fakePrelockedAcquire(database: FakeClient) {
+  return async () => ({
+    client: database.client,
+    close: async (destroyError: () => Error | undefined) => {
+      database.client.release(destroyError())
+    },
+  })
+}
+
 const expectedEpoch = createInstallationMutationEpoch(
   '123e4567-e89b-42d3-a456-426614174000',
 )
+const parameterConversionFailure = new Error('parameter conversion failed')
 const session = {} as AuthenticatedSessionReference
 const methodologyFactory = createContentLockProjectionFactory('methodology-target')
 const releasePair = [
@@ -392,7 +489,130 @@ async function withInitialPublication<Result>(
 }
 
 describe('PostgresUnitOfWork', () => {
-  it('locks in canonical order before BEGIN and makes Identity the first transaction query', async () => {
+  it('derives the only sanctioned transaction-local settings from validated requests', async () => {
+    const intents = createPlatformPrelockedSessionIntentFactory()
+
+    const deletionDatabase = fakeClient()
+    const deletionPort = createPlatformPrelockedSessionPort()
+    await deletionPort.withPrelockedSessionLease(
+      intents.subjectDeletion(fakePrelockedAcquire(deletionDatabase)),
+      (lease) => {
+        const request: SubjectDeletionRequest = {
+          operation: 'subject-deletion',
+          authority: {
+            kind: 'authenticated-destructive',
+            actorUserId: 'actor-1',
+            expectedRole: 'member',
+            session,
+            purpose: 'trainee-data-deletion',
+            targetUserId: null,
+            reauthenticationLease:
+              {} as DestructiveReauthenticationLease<'trainee-data-deletion'>,
+          },
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'shared',
+          subjectLock: { subjectUserId: 'actor-1', mode: 'exclusive' },
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        }
+        return prelockedUnitOfWork().run(request, async () => 'deleted')
+      },
+    )
+    expect(transactionLocalStateValues(deletionDatabase)).toEqual([['', 'trainee-data']])
+
+    const resetDatabase = fakeClient()
+    const resetPort = createPlatformPrelockedSessionPort()
+    await resetPort.withPrelockedSessionLease(
+      intents.instanceReset(fakePrelockedAcquire(resetDatabase)),
+      (lease) => {
+        const request: InstanceResetRequest = {
+          operation: 'instance-reset',
+          authority: {
+            kind: 'authenticated-destructive',
+            actorUserId: 'actor-1',
+            expectedRole: 'owner',
+            session,
+            purpose: 'instance-reset',
+            targetUserId: null,
+            reauthenticationLease:
+              {} as DestructiveReauthenticationLease<'instance-reset'>,
+          },
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'exclusive',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        }
+        return prelockedUnitOfWork().run(request, async () => 'reset')
+      },
+    )
+    expect(transactionLocalStateValues(resetDatabase)).toEqual([['', 'instance-reset']])
+
+    const localUserDatabase = fakeClient()
+    const localUserPort = createPlatformPrelockedSessionPort()
+    await localUserPort.withPrelockedSessionLease(
+      intents.localUserCreate(fakePrelockedAcquire(localUserDatabase)),
+      (lease) => {
+        const request: DestructiveIdentityMutationRequest = {
+          operation: 'destructive-identity-mutation',
+          authority: {
+            kind: 'authenticated-destructive',
+            actorUserId: 'actor-1',
+            expectedRole: 'owner',
+            session,
+            purpose: 'local-user-create',
+            targetUserId: 'target-1',
+            reauthenticationLease:
+              {} as DestructiveReauthenticationLease<'local-user-create'>,
+          },
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'shared',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'read-committed', access: 'read-write' },
+        }
+        return prelockedUnitOfWork().run(request, async () => 'created')
+      },
+    )
+    expect(transactionLocalStateValues(localUserDatabase)).toEqual([['owner-admin', '']])
+
+    const bootstrapDatabase = fakeClient()
+    const bootstrapPort = createPlatformPrelockedSessionPort()
+    await bootstrapPort.withPrelockedSessionLease(
+      intents.bootstrapRedemption(fakePrelockedAcquire(bootstrapDatabase)),
+      (lease) => {
+        const request: HostBootstrapMutationRequest = {
+          operation: 'host-bootstrap-mutation',
+          authority: {
+            kind: 'host-bootstrap',
+            mutation: 'redemption',
+            authority: {} as HostBootstrapAuthority<'redemption'>,
+          },
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'shared',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        }
+        return prelockedUnitOfWork().run(request, async () => 'bootstrapped')
+      },
+    )
+    expect(transactionLocalStateValues(bootstrapDatabase)).toEqual([
+      ['bootstrap-owner', ''],
+    ])
+
+    const ordinaryDatabase = fakeClient()
+    await expect(
+      unitOfWork(ordinaryDatabase).run(exportRequest(), async () => 'exported'),
+    ).resolves.toBe('exported')
+    expect(transactionLocalStateValues(ordinaryDatabase)).toEqual([['', '']])
+  })
+
+  it('locks before BEGIN, makes Identity first, then installs request-derived privilege', async () => {
     const database = fakeClient()
     const uow = unitOfWork(database)
     const resultValue = { committed: true }
@@ -410,6 +630,9 @@ describe('PostgresUnitOfWork', () => {
     const commitIndex = database.transcript.findIndex(({ text }) => text === 'COMMIT')
     const lockEntries = database.transcript.filter(({ text }) =>
       /pg_advisory_lock(?:_shared)?\(/.test(text),
+    )
+    expect(database.transcript[0]?.text).toBe(
+      "SELECT set_config('indigo.user_creation_mode', '', false), set_config('indigo.deletion_mode', '', false)",
     )
     expect(lockEntries.map(({ values }) => values[0])).toEqual([
       'indigo:credential-lifecycle:instance-fence',
@@ -429,6 +652,10 @@ describe('PostgresUnitOfWork', () => {
       'BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE',
     )
     expect(database.transcript[beginIndex + 1]?.text).toBe('SELECT identity')
+    expect(database.transcript[beginIndex + 2]).toEqual({
+      text: "SELECT set_config('indigo.user_creation_mode', $1, true), set_config('indigo.deletion_mode', $2, true)",
+      values: ['', ''],
+    })
     expect(commitIndex).toBeGreaterThan(beginIndex)
     expect(
       database.transcript
@@ -440,6 +667,80 @@ describe('PostgresUnitOfWork', () => {
       'indigo:credential-lifecycle:instance-fence',
     ])
     expect(database.release).toHaveBeenCalledWith()
+  })
+
+  it('scrubs stale privilege before lock failure on ordinary and prelocked backends', async () => {
+    const lockFailure = Object.assign(new Error('lock unavailable'), { code: '55P03' })
+    const staleDatabase = () => {
+      const state = {
+        deletionMode: 'trainee-data',
+        userCreationMode: 'owner-admin',
+      }
+      const database = fakeClient((text) => {
+        if (
+          text ===
+          "SELECT set_config('indigo.user_creation_mode', '', false), set_config('indigo.deletion_mode', '', false)"
+        ) {
+          state.deletionMode = ''
+          state.userCreationMode = ''
+          return Promise.resolve(queryResult())
+        }
+        if (/pg_advisory_lock(?:_shared)?\(/.test(text)) {
+          return Promise.reject(lockFailure)
+        }
+        return undefined
+      })
+      return { database, state }
+    }
+
+    const ordinary = staleDatabase()
+    await expect(
+      unitOfWork(ordinary.database).run(exportRequest(), async () => 'never'),
+    ).rejects.toMatchObject({ code: 'uow.lock-timeout' })
+    expect(ordinary.state).toEqual({ deletionMode: '', userCreationMode: '' })
+    expect(ordinary.database.transcript[0]?.text).toContain(
+      "set_config('indigo.user_creation_mode', '', false)",
+    )
+    expect(
+      ordinary.database.transcript.some(({ text }) => text.startsWith('BEGIN')),
+    ).toBe(false)
+    expect(ordinary.database.release).toHaveBeenCalledWith()
+
+    const prelocked = staleDatabase()
+    const port = createPlatformPrelockedSessionPort()
+    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
+      fakePrelockedAcquire(prelocked.database),
+    )
+    await expect(
+      port.withPrelockedSessionLease(intent, (lease) => {
+        const request: InstanceResetRequest = {
+          operation: 'instance-reset',
+          authority: {
+            kind: 'authenticated-destructive',
+            actorUserId: 'actor-1',
+            expectedRole: 'owner',
+            session,
+            purpose: 'instance-reset',
+            targetUserId: null,
+            reauthenticationLease:
+              {} as DestructiveReauthenticationLease<'instance-reset'>,
+          },
+          session: { kind: 'prelocked', lease },
+          expectedEpoch,
+          productFence: 'exclusive',
+          subjectLock: null,
+          content: { kind: 'none' },
+          mode: { isolation: 'serializable', access: 'read-write' },
+        }
+        return prelockedUnitOfWork().run(request, async () => 'never')
+      }),
+    ).rejects.toMatchObject({ code: 'uow.lock-timeout' })
+    expect(prelocked.state).toEqual({ deletionMode: '', userCreationMode: '' })
+    expect(prelocked.database.transcript[0]?.text).toContain(
+      "set_config('indigo.user_creation_mode', '', false)",
+    )
+    expect(prelocked.database.release).toHaveBeenCalledWith(undefined)
+    expect(port.activeLeaseScopeCount()).toBe(0)
   })
 
   it('orders credential, product, subject, content, and owner-row locks before DML', async () => {
@@ -853,6 +1154,164 @@ describe('PostgresUnitOfWork', () => {
     )
   })
 
+  it('snapshots positional query values before node-postgres can dispatch queued work', async () => {
+    let releaseQuery: () => void = () => undefined
+    const queued = new Promise<void>((resolve) => {
+      releaseQuery = resolve
+    })
+    const database = fakeClient((text, values) => {
+      if (text !== 'SELECT $1 AS mutable-value') return undefined
+      return queued.then(() => queryResult([{ value: values[0] }]))
+    })
+    const values: unknown[] = ['admitted']
+
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        const result = gateways.queryWithMutableValues(values)
+        values[0] = 'mutated-after-admission'
+        releaseQuery()
+        return result
+      }),
+    ).resolves.toBe('admitted')
+
+    expect(
+      database.transcript.find(({ text }) => text === 'SELECT $1 AS mutable-value')
+        ?.values,
+    ).toEqual(['admitted'])
+  })
+
+  it.each([
+    'positional',
+    'config',
+  ] as const)('materializes nested mutable %s values before queued dispatch', async (form) => {
+    let releaseQuery: () => void = () => undefined
+    const queued = new Promise<void>((resolve) => {
+      releaseQuery = resolve
+    })
+    const database = fakeClient((text, values) => {
+      if (text !== 'SELECT $1 AS mutable-value') return undefined
+      return queued.then(() => queryResult([{ value: values }]))
+    })
+    const binary = Buffer.from([1, 2, 3])
+    const date = new Date('2020-06-15T16:17:18.019Z')
+    const nestedArray = ['admitted-array']
+    const json = { value: 'admitted-json' }
+    const typedArray = new Uint8Array([4, 5, 6])
+    const postgresValue = {
+      value: 'admitted-postgres',
+      toPostgres() {
+        return this.value
+      },
+    }
+    let accessorValue = 'admitted-accessor'
+    const accessorJson = {
+      get value() {
+        return accessorValue
+      },
+    }
+    const customJson = {
+      value: 'admitted-to-json',
+      toJSON() {
+        return { value: this.value }
+      },
+    }
+    const undefinedJson = {
+      toJSON() {
+        return undefined
+      },
+    }
+    const values: unknown[] = [
+      binary,
+      date,
+      nestedArray,
+      json,
+      typedArray,
+      postgresValue,
+      accessorJson,
+      customJson,
+      undefinedJson,
+    ]
+
+    const result = withWriteRequest(unitOfWork(database), async (gateways) => {
+      const pending = gateways.queryWithMutableValues(values, form)
+      binary[0] = 9
+      date.setUTCFullYear(2030)
+      nestedArray[0] = 'mutated-array'
+      json.value = 'mutated-json'
+      typedArray[0] = 9
+      postgresValue.value = 'mutated-postgres'
+      accessorValue = 'mutated-accessor'
+      customJson.value = 'mutated-to-json'
+      releaseQuery()
+      return pending
+    })
+
+    await expect(result).resolves.toEqual([
+      Buffer.from([1, 2, 3]),
+      expect.stringContaining('2020'),
+      '{"admitted-array"}',
+      '{"value":"admitted-json"}',
+      Buffer.from([4, 5, 6]),
+      'admitted-postgres',
+      '{"value":"admitted-accessor"}',
+      '{"value":"admitted-to-json"}',
+      null,
+    ])
+  })
+
+  it('rejects parameter counts beyond the PostgreSQL Bind limit before allocation', async () => {
+    const database = fakeClient()
+    const oversized: unknown[] = []
+    oversized.length = 65_536
+
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.queryWithMutableValues(oversized)
+        return 'must not commit'
+      }),
+    ).rejects.toThrow('Scoped transaction queries must expose stable SQL text.')
+    expect(
+      database.transcript.some(({ text }) => text === 'SELECT $1 AS mutable-value'),
+    ).toBe(false)
+  })
+
+  it.each([
+    'ignored',
+    'caught',
+  ] as const)('tracks a %s parameter-conversion failure and rolls back prior work', async (mode) => {
+    const database = fakeClient()
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.conversionFailure(mode)
+        return 'must not commit'
+      }),
+    ).rejects.toMatchObject({ code: 'uow.detached-work' })
+    expect(
+      database.transcript.some(({ text }) => text === 'INSERT conversion-prior-write'),
+    ).toBe(true)
+    expect(
+      database.transcript.some(({ text }) => text === 'SELECT $1 AS conversion-failure'),
+    ).toBe(false)
+    expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
+    expect(database.transcript.some(({ text }) => text === 'COMMIT')).toBe(false)
+    expect(database.release).toHaveBeenCalledWith(expect.any(Error))
+  })
+
+  it('preserves an awaited parameter-conversion error without dispatch', async () => {
+    const database = fakeClient()
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.conversionFailure('awaited')
+        return 'never'
+      }),
+    ).rejects.toBe(parameterConversionFailure)
+    expect(
+      database.transcript.some(({ text }) => text === 'SELECT $1 AS conversion-failure'),
+    ).toBe(false)
+    expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
+    expect(database.release).toHaveBeenCalledWith()
+  })
+
   it('commits an exact replay without fresh attestation but never grants replay DML', async () => {
     const replayDatabase = fakeClient()
     const storedResult = { publicationId: 'persisted-publication' }
@@ -1134,6 +1593,35 @@ describe('PostgresUnitOfWork', () => {
   })
 
   it('maps BEGIN and COMMIT uncertainty and destroys rather than pools the client', async () => {
+    const scrubFailure = new Error('session privilege scrub rejected')
+    const simulatedSessionState = {
+      destroyed: false,
+      userCreationMode: 'owner-admin',
+    }
+    const scrubDatabase = fakeClient((text) => {
+      if (
+        text.includes("set_config('indigo.user_creation_mode', '', false)") &&
+        text.includes("set_config('indigo.deletion_mode', '', false)")
+      ) {
+        return Promise.reject(scrubFailure)
+      }
+      return undefined
+    })
+    scrubDatabase.release.mockImplementation((error) => {
+      simulatedSessionState.destroyed = error === scrubFailure
+    })
+    await expect(
+      unitOfWork(scrubDatabase).run(exportRequest(), async () => 'never'),
+    ).rejects.toMatchObject({ code: 'uow.begin-failed' })
+    expect(simulatedSessionState).toEqual({
+      destroyed: true,
+      userCreationMode: 'owner-admin',
+    })
+    expect(scrubDatabase.transcript.some(({ text }) => text.startsWith('BEGIN'))).toBe(
+      false,
+    )
+    expect(scrubDatabase.release).toHaveBeenCalledWith(scrubFailure)
+
     const beginFailure = new Error('begin failed')
     const beginDatabase = fakeClient((text) =>
       text.startsWith('BEGIN') ? Promise.reject(beginFailure) : undefined,
@@ -1142,6 +1630,34 @@ describe('PostgresUnitOfWork', () => {
       withWriteRequest(unitOfWork(beginDatabase), async () => 'never'),
     ).rejects.toMatchObject({ code: 'uow.begin-failed' })
     expect(beginDatabase.release).toHaveBeenCalledWith(beginFailure)
+
+    const setupFailure = new Error('transaction setup rejected')
+    const setupDatabase = fakeClient((text) =>
+      text.includes("set_config('indigo.user_creation_mode', $1, true)")
+        ? Promise.reject(setupFailure)
+        : undefined,
+    )
+    await expect(
+      unitOfWork(setupDatabase).run(exportRequest(), async () => 'never'),
+    ).rejects.toMatchObject({ code: 'uow.begin-failed' })
+    expect(setupDatabase.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
+    expect(setupDatabase.release).toHaveBeenCalledWith()
+
+    const setupConnectionFailure = Object.assign(new Error('connection lost in setup'), {
+      code: '08006',
+    })
+    const setupConnectionDatabase = fakeClient((text) =>
+      text.includes("set_config('indigo.user_creation_mode', $1, true)")
+        ? Promise.reject(setupConnectionFailure)
+        : undefined,
+    )
+    await expect(
+      unitOfWork(setupConnectionDatabase).run(exportRequest(), async () => 'never'),
+    ).rejects.toMatchObject({ code: 'uow.connection-lost' })
+    expect(
+      setupConnectionDatabase.transcript.some(({ text }) => text === 'ROLLBACK'),
+    ).toBe(false)
+    expect(setupConnectionDatabase.release).toHaveBeenCalledWith(setupConnectionFailure)
 
     const commitFailure = new Error('commit outcome unknown')
     const commitDatabase = fakeClient((text) =>
@@ -1198,6 +1714,7 @@ describe('PostgresUnitOfWork', () => {
     await expect(uow.run(exportRequest(), async () => 'never')).rejects.toMatchObject({
       code: 'identity.authority-stale',
     })
+    expect(transactionLocalStateValues(database)).toEqual([])
     expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
   })
 })

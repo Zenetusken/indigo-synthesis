@@ -1,4 +1,4 @@
-import { Client } from 'pg'
+import { Client, type PoolClient } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {
   AuthenticatedSessionReference,
@@ -45,6 +45,10 @@ import { migrateDatabase } from '@/platform/db/migrate'
 type ReadGateways = {
   backendPid(): Promise<number>
   count(owner: 'a' | 'b'): Promise<number>
+  localModes(): Promise<{
+    readonly deletionMode: string
+    readonly userCreationMode: string
+  }>
 }
 
 type VerifiedContentScope = Extract<UnitOfWorkContentScope, { readonly kind: 'verified' }>
@@ -204,12 +208,37 @@ function gatewayContext(
     )
     return result.rows[0]?.count ?? -1
   }
+  const localModes = async () => {
+    const result = await client.query<{
+      deletion_mode: string
+      user_creation_mode: string
+    }>(
+      `SELECT current_setting('indigo.deletion_mode', true) AS deletion_mode,
+              current_setting('indigo.user_creation_mode', true) AS user_creation_mode`,
+    )
+    return {
+      deletionMode: result.rows[0]?.deletion_mode ?? '',
+      userCreationMode: result.rows[0]?.user_creation_mode ?? '',
+    }
+  }
   return {
     recheckIdentity: async () => {
-      const result = await client.query<{ epoch: string }>(
-        `SELECT product_mutation_epoch::text AS epoch
+      const result = await client.query<{
+        deletion_mode: string
+        epoch: string
+        user_creation_mode: string
+      }>(
+        `SELECT product_mutation_epoch::text AS epoch,
+                current_setting('indigo.deletion_mode', true) AS deletion_mode,
+                current_setting('indigo.user_creation_mode', true) AS user_creation_mode
          FROM installation_state WHERE singleton = 1`,
       )
+      if (
+        (result.rows[0]?.deletion_mode ?? '') !== '' ||
+        (result.rows[0]?.user_creation_mode ?? '') !== ''
+      ) {
+        throw new Error('request-derived privilege preceded the Identity recheck')
+      }
       if (
         !installationMutationEpochMatches(request.expectedEpoch, result.rows[0]?.epoch)
       ) {
@@ -217,10 +246,11 @@ function gatewayContext(
       }
       identityRechecked = true
     },
-    readGateways: { backendPid, count },
+    readGateways: { backendPid, count, localModes },
     writeGateways: {
       backendPid,
       count,
+      localModes,
       async attestCurrentContent(content: VerifiedContentScope) {
         if (!identityRechecked) throw new Error('content attested before Identity')
         const result = await client.query<{
@@ -1287,6 +1317,86 @@ describe('PostgreSQL UnitOfWork integration', () => {
         callback: async (gateways) => gateways.count('a'),
       }),
     ).resolves.toBe(0)
+  })
+
+  it('scopes request-derived mutation modes to commit and rollback on one reserved backend', async () => {
+    const epoch = await currentEpoch()
+    const prelockedPort = createPlatformPrelockedSessionPort()
+    let controlClient: PoolClient | undefined
+    const intent = createPlatformPrelockedSessionIntentFactory().instanceReset(
+      async (options) => {
+        const client = await runtime.acquireTrustedControl(options)
+        controlClient = client
+        await client.query(
+          "SELECT set_config('indigo.user_creation_mode', 'owner-admin', false), set_config('indigo.deletion_mode', 'trainee-data', false)",
+        )
+        return {
+          client,
+          close: async (destroyError) => {
+            client.release(destroyError())
+          },
+        }
+      },
+    )
+
+    await prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
+      const request = (): InstanceResetRequest => ({
+        operation: 'instance-reset',
+        authority: {
+          kind: 'authenticated-destructive',
+          actorUserId: 'actor-1',
+          expectedRole: 'owner',
+          session,
+          purpose: 'instance-reset',
+          targetUserId: null,
+          reauthenticationLease: destructiveLease,
+        },
+        session: { kind: 'prelocked', lease },
+        expectedEpoch: epoch,
+        productFence: 'exclusive',
+        subjectLock: null,
+        content: { kind: 'none' },
+        mode: { isolation: 'serializable', access: 'read-write' },
+      })
+
+      await expect(
+        unitOfWork.run(request(), async ({ gateways }) => gateways.localModes()),
+      ).resolves.toEqual({
+        deletionMode: 'instance-reset',
+        userCreationMode: '',
+      })
+      if (!controlClient) throw new Error('missing reserved control client')
+      const afterCommit = await controlClient.query<{
+        deletion_mode: string | null
+        user_creation_mode: string | null
+      }>(
+        `SELECT current_setting('indigo.deletion_mode', true) AS deletion_mode,
+                current_setting('indigo.user_creation_mode', true) AS user_creation_mode`,
+      )
+      expect(afterCommit.rows[0]?.deletion_mode ?? '').toBe('')
+      expect(afterCommit.rows[0]?.user_creation_mode ?? '').toBe('')
+
+      await expect(
+        unitOfWork.run(request(), async ({ gateways }) => {
+          expect(await gateways.localModes()).toEqual({
+            deletionMode: 'instance-reset',
+            userCreationMode: '',
+          })
+          throw new Error('force rollback')
+        }),
+      ).rejects.toThrow('force rollback')
+      const afterRollback = await controlClient.query<{
+        deletion_mode: string | null
+        user_creation_mode: string | null
+      }>(
+        `SELECT current_setting('indigo.deletion_mode', true) AS deletion_mode,
+                current_setting('indigo.user_creation_mode', true) AS user_creation_mode`,
+      )
+      expect(afterRollback.rows[0]?.deletion_mode ?? '').toBe('')
+      expect(afterRollback.rows[0]?.user_creation_mode ?? '').toBe('')
+    })
+
+    expect(prelockedPort.activeLeaseScopeCount()).toBe(0)
   })
 
   it('cancels a blocked advisory waiter and retires its physical backend', async () => {

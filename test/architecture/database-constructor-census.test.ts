@@ -275,6 +275,7 @@ describe('PostgreSQL constructor census', () => {
     const allowed = new Map<string, readonly string[]>([
       ['src/platform/db/bounded-pool.ts', ['named:Pool->Pool']],
       ['src/platform/db/disposable-integration-database.ts', ['named:Client->Client']],
+      ['src/platform/db/postgres-value.ts', ['default:pg']],
       ['scripts/db/backup-restore-drill.ts', ['named:Client->Client']],
       ['scripts/db/reset-e2e.ts', ['named:Client->Client']],
     ])
@@ -304,6 +305,7 @@ describe('PostgreSQL constructor census', () => {
           'function:createDisposableIntegrationDatabase',
         ],
       ],
+      ['src/platform/db/postgres-value.ts', ['function:prepareStablePostgresValue']],
       ['scripts/db/backup-restore-drill.ts', []],
       ['scripts/db/reset-e2e.ts', []],
     ])

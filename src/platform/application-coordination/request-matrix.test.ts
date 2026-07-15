@@ -7,6 +7,7 @@ import type {
 } from '@/application/coordination'
 import { createInstallationMutationEpoch } from './lifecycle-values'
 import { captureUnitOfWorkRequest } from './request-matrix'
+import { transactionLocalStateForRequest } from './transaction-local-state'
 
 const epoch = createInstallationMutationEpoch('123e4567-e89b-42d3-a456-426614174000')
 const opaque = (): object => ({})
@@ -292,6 +293,24 @@ describe('Platform UnitOfWork request matrix', () => {
       expect(Object.isFrozen(captured.session)).toBe(true)
       expect(Object.isFrozen(captured.mode)).toBe(true)
       expect(Object.isFrozen(captured.content)).toBe(true)
+    }
+  })
+
+  it('maps all 25 captured rows onto the closed two-setting privilege matrix', () => {
+    expect(validRequests).toHaveLength(25)
+    for (const [label, request] of validRequests) {
+      const state = transactionLocalStateForRequest(captureUnitOfWorkRequest(request))
+      const expected =
+        label === 'subject deletion'
+          ? { userCreationMode: '', deletionMode: 'trainee-data' }
+          : label === 'instance reset'
+            ? { userCreationMode: '', deletionMode: 'instance-reset' }
+            : label === 'local user creation'
+              ? { userCreationMode: 'owner-admin', deletionMode: '' }
+              : label === 'bootstrap redemption'
+                ? { userCreationMode: 'bootstrap-owner', deletionMode: '' }
+                : { userCreationMode: '', deletionMode: '' }
+      expect(state, label).toEqual(expected)
     }
   })
 

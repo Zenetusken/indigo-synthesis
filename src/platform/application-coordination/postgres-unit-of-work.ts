@@ -18,6 +18,7 @@ import type {
   PrelockedSessionLease,
   PrelockedSessionOperation,
 } from '@/application/coordination/prelocked-session'
+import { prepareStablePostgresValue } from '@/platform/db/postgres-value'
 import {
   bindContentLockedUnitOfWorkExecution,
   type ConsumedContentLockPlan,
@@ -25,10 +26,12 @@ import {
 } from './content-lock-plan'
 import { bindPrelockedSessionExecution } from './prelocked-session'
 import { captureUnitOfWorkRequest } from './request-matrix'
+import { transactionLocalStateForRequest } from './transaction-local-state'
 
 const credentialLockNamespace = 'indigo:credential-lifecycle:'
 const credentialInstanceFenceKey = `${credentialLockNamespace}instance-fence`
 const productMutationFenceKey = 'indigo:product-mutation-fence'
+const maximumPostgresParameterCount = 65_535
 
 type SessionLock = {
   readonly key: string
@@ -184,12 +187,24 @@ function lockTimeout(error: unknown): boolean {
   )
 }
 
-function stableQuery(args: readonly unknown[]): {
-  readonly args: readonly unknown[]
+type StableQuery = {
+  readonly form: 'config' | 'positional'
   readonly sql: string
-} | null {
+  readonly values: readonly unknown[] | undefined
+}
+
+function stableQuery(args: readonly unknown[]): StableQuery | null {
   const query = args[0]
-  if (typeof query === 'string') return { args, sql: query }
+  if (typeof query === 'string') {
+    if (args.length < 1 || args.length > 2) return null
+    const capturedValues = captureQueryValues(args[1])
+    if (capturedValues === null) return null
+    return {
+      form: 'positional',
+      sql: query,
+      values: capturedValues,
+    }
+  }
   if (query === null || typeof query !== 'object' || args.length !== 1) return null
 
   const descriptors = Object.getOwnPropertyDescriptors(query)
@@ -207,40 +222,84 @@ function stableQuery(args: readonly unknown[]): {
     return null
   }
 
-  const values = descriptors.values?.value
-  if (values !== undefined && !Array.isArray(values)) return null
-  const stableConfig = Object.create(null) as {
-    text: string
-    values?: readonly unknown[]
+  const capturedValues = captureQueryValues(descriptors.values?.value)
+  if (capturedValues === null) return null
+  return {
+    form: 'config',
+    sql: textDescriptor.value,
+    values: capturedValues,
   }
-  stableConfig.text = textDescriptor.value
+}
+
+function captureQueryValues(values: unknown): readonly unknown[] | undefined | null {
+  if (values === undefined) return undefined
+  if (!Array.isArray(values)) return null
+  const valueDescriptors = Object.getOwnPropertyDescriptors(values)
+  const lengthDescriptor = Reflect.get(valueDescriptors, 'length') as
+    | PropertyDescriptor
+    | undefined
+  if (
+    !lengthDescriptor ||
+    !('value' in lengthDescriptor) ||
+    typeof lengthDescriptor.value !== 'number' ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > maximumPostgresParameterCount
+  ) {
+    return null
+  }
+  const length = lengthDescriptor.value
+  if (
+    Reflect.ownKeys(valueDescriptors).some((key) => {
+      if (key === 'length') return false
+      if (typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(key)) return true
+      const index = Number(key)
+      if (!Number.isSafeInteger(index) || index < 0 || index >= length) return true
+      const descriptor = Reflect.get(valueDescriptors, key) as
+        | PropertyDescriptor
+        | undefined
+      return !descriptor || !('value' in descriptor)
+    })
+  ) {
+    return null
+  }
+  const capturedValues = Array.from<unknown>({ length })
+  for (let index = 0; index < capturedValues.length; index += 1) {
+    const descriptor = valueDescriptors[String(index)]
+    if (descriptor && 'value' in descriptor) capturedValues[index] = descriptor.value
+  }
+  return Object.freeze(capturedValues)
+}
+
+function materializePgValues(
+  values: readonly unknown[] | undefined,
+): readonly (Buffer | null | string)[] | undefined {
+  if (values === undefined) return undefined
+  const materialized = values.map(prepareStablePostgresValue)
+  return Object.freeze(materialized)
+}
+
+function materializeQueryArgs(query: StableQuery): readonly unknown[] {
+  const values = materializePgValues(query.values)
+  if (query.form === 'positional') {
+    return values === undefined ? [query.sql] : [query.sql, values]
+  }
+  const config = Object.create(null) as SafeQueryConfig
+  Object.defineProperty(config, 'text', {
+    configurable: false,
+    enumerable: true,
+    value: query.sql,
+    writable: false,
+  })
   if (values !== undefined) {
-    const valueDescriptors = Object.getOwnPropertyDescriptors(values)
-    const lengthDescriptor = valueDescriptors.length
-    if (
-      !lengthDescriptor ||
-      !('value' in lengthDescriptor) ||
-      !Number.isSafeInteger(lengthDescriptor.value) ||
-      lengthDescriptor.value < 0 ||
-      Reflect.ownKeys(valueDescriptors).some((key) => {
-        if (key === 'length') return false
-        if (typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(key)) return true
-        const descriptor = Reflect.get(valueDescriptors, key) as
-          | PropertyDescriptor
-          | undefined
-        return !descriptor || !('value' in descriptor)
-      })
-    ) {
-      return null
-    }
-    const capturedValues = Array.from<unknown>({ length: lengthDescriptor.value })
-    for (let index = 0; index < capturedValues.length; index += 1) {
-      const descriptor = valueDescriptors[String(index)]
-      if (descriptor && 'value' in descriptor) capturedValues[index] = descriptor.value
-    }
-    stableConfig.values = Object.freeze(capturedValues)
+    Object.defineProperty(config, 'values', {
+      configurable: false,
+      enumerable: true,
+      value: values,
+      writable: false,
+    })
   }
-  return { args: [Object.freeze(stableConfig)], sql: textDescriptor.value }
+  return [Object.freeze(config)]
 }
 
 const mutationStatementPattern =
@@ -427,26 +486,32 @@ class TransactionQueryTracker {
     this.#onUncertain(error)
   }
 
+  #rejectQuery(error: unknown): Promise<never> {
+    return this.#work.track(Promise.reject(error))
+  }
+
   readonly scopedClient: ScopedTransactionClient = {
     query: ((...args: readonly unknown[]) => {
       this.#work.assertActive()
       if (this.#signal?.aborted) {
-        return Promise.reject(new CoordinationError('uow.cancelled'))
+        return this.#rejectQuery(new CoordinationError('uow.cancelled'))
       }
       if (typeof args.at(-1) === 'function') {
-        return Promise.reject(
+        return this.#rejectQuery(
           new TypeError('Scoped transaction queries must use the Promise interface.'),
         )
       }
       const query = stableQuery(args)
       if (query === null) {
-        return Promise.reject(
+        return this.#rejectQuery(
           new TypeError('Scoped transaction queries must expose stable SQL text.'),
         )
       }
       const normalizedSql = sqlCodeForInspection(query.sql)
       if (hasControlledStatement(normalizedSql, transactionControlStatementPattern)) {
-        return Promise.reject(new TypeError('Transaction control belongs to UnitOfWork.'))
+        return this.#rejectQuery(
+          new TypeError('Transaction control belongs to UnitOfWork.'),
+        )
       }
       if (
         hasControlledStatement(normalizedSql, sessionControlStatementPattern) ||
@@ -456,18 +521,24 @@ class TransactionQueryTracker {
         /\bSELECT\b[^;]*\bINTO\b/i.test(normalizedSql) ||
         coordinationPrimitivePattern.test(normalizedSql)
       ) {
-        return Promise.reject(
+        return this.#rejectQuery(
           new TypeError('Connection and lock control belongs to UnitOfWork.'),
         )
       }
       if (isMutationStatement(query.sql)) this.#requireWriteAuthorized()
 
+      let queryArgs: readonly unknown[]
+      try {
+        queryArgs = materializeQueryArgs(query)
+      } catch (error) {
+        return this.#rejectQuery(error)
+      }
       let promise: Promise<unknown>
       try {
         promise = Reflect.apply(
           this.#client.query,
           this.#client,
-          query.args,
+          queryArgs,
         ) as Promise<unknown>
       } catch (error) {
         promise = Promise.reject(error)
@@ -921,6 +992,27 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
       operationSignal = combinedSignal([operationSignal, connectionAbort.signal])
       client.on('error', onConnectionError)
 
+      try {
+        await queryWithGuard(
+          client,
+          "SELECT set_config('indigo.user_creation_mode', '', false), set_config('indigo.deletion_mode', '', false)",
+          undefined,
+          {
+            signal: operationSignal,
+            timeoutMs: this.#options.queryTimeoutMs,
+            timeoutError: new CoordinationError('uow.connection-lost'),
+          },
+        )
+      } catch (error) {
+        // This is the security scrub for session-scoped state on a reused backend. If it did
+        // not certainly complete, the backend must never return to either pool or outer lease.
+        poison = error
+        skipDatabaseCleanup = true
+        if (error instanceof InFlightQueryUncertain) throw error.publicError
+        if (connectionFailure(error)) throw new CoordinationError('uow.connection-lost')
+        throw new CoordinationError('uow.begin-failed')
+      }
+
       await this.#acquireLocks(
         client,
         requestLocks(request, consumedContent),
@@ -984,6 +1076,33 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
       }
       consumedContent?.assertActive()
       if (operationSignal?.aborted) throw new CoordinationError('uow.cancelled')
+
+      const transactionLocalState = transactionLocalStateForRequest(request)
+      try {
+        await queryWithGuard(
+          client,
+          "SELECT set_config('indigo.user_creation_mode', $1, true), set_config('indigo.deletion_mode', $2, true)",
+          [transactionLocalState.userCreationMode, transactionLocalState.deletionMode],
+          {
+            signal: operationSignal,
+            timeoutMs: this.#options.queryTimeoutMs,
+            timeoutError: new CoordinationError('uow.connection-lost'),
+          },
+        )
+      } catch (error) {
+        if (error instanceof InFlightQueryUncertain) {
+          poison = error
+          skipDatabaseCleanup = true
+          throw error.publicError
+        }
+        if (connectionFailure(error)) {
+          poison = error
+          skipDatabaseCleanup = true
+          throw new CoordinationError('uow.connection-lost')
+        }
+        throw new CoordinationError('uow.begin-failed')
+      }
+
       consumedContent?.activateCommandAuthorizers()
 
       let outcome: CallbackOutcome<Result>
