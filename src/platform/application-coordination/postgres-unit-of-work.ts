@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { performance } from 'node:perf_hooks'
-import type { PoolClient, QueryResult, QueryResultRow } from 'pg'
+import type { PoolClient, QueryArrayResult, QueryResult, QueryResultRow } from 'pg'
 import {
   type ContentLockedUnitOfWorkExecution,
   type ContentLockedUnitOfWorkRequest,
@@ -51,6 +51,10 @@ export type ScopedTransactionClient = {
   query<Row extends QueryResultRow = QueryResultRow>(
     config: SafeQueryConfig,
   ): Promise<QueryResult<Row>>
+  queryArray<Row extends unknown[] = unknown[]>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryArrayResult<Row>>
 }
 
 export type PostgresUnitOfWorkGatewayContext<ReadGateways, WriteGateways> = {
@@ -279,12 +283,14 @@ function materializePgValues(
   return Object.freeze(materialized)
 }
 
-function materializeQueryArgs(query: StableQuery): readonly unknown[] {
-  const values = materializePgValues(query.values)
-  if (query.form === 'positional') {
-    return values === undefined ? [query.sql] : [query.sql, values]
+function materializedQueryConfig(
+  query: StableQuery,
+  values: readonly (Buffer | null | string)[] | undefined,
+  rowMode: 'array' | null,
+): SafeQueryConfig & { readonly rowMode?: 'array' } {
+  const config = Object.create(null) as SafeQueryConfig & {
+    readonly rowMode?: 'array'
   }
-  const config = Object.create(null) as SafeQueryConfig
   Object.defineProperty(config, 'text', {
     configurable: false,
     enumerable: true,
@@ -299,7 +305,29 @@ function materializeQueryArgs(query: StableQuery): readonly unknown[] {
       writable: false,
     })
   }
-  return [Object.freeze(config)]
+  if (rowMode !== null) {
+    Object.defineProperty(config, 'rowMode', {
+      configurable: false,
+      enumerable: true,
+      value: rowMode,
+      writable: false,
+    })
+  }
+  return Object.freeze(config)
+}
+
+function materializeQueryArgs(
+  query: StableQuery,
+  rowMode: 'array' | null,
+): readonly unknown[] {
+  const values = materializePgValues(query.values)
+  if (rowMode !== null) {
+    return [materializedQueryConfig(query, values, rowMode)]
+  }
+  if (query.form === 'positional') {
+    return values === undefined ? [query.sql] : [query.sql, values]
+  }
+  return [materializedQueryConfig(query, values, null)]
 }
 
 const mutationStatementPattern =
@@ -490,81 +518,96 @@ class TransactionQueryTracker {
     return this.#work.track(Promise.reject(error))
   }
 
-  readonly scopedClient: ScopedTransactionClient = {
-    query: ((...args: readonly unknown[]) => {
-      this.#work.assertActive()
-      if (this.#signal?.aborted) {
-        return this.#rejectQuery(new CoordinationError('uow.cancelled'))
-      }
-      if (typeof args.at(-1) === 'function') {
-        return this.#rejectQuery(
-          new TypeError('Scoped transaction queries must use the Promise interface.'),
-        )
-      }
-      const query = stableQuery(args)
-      if (query === null) {
-        return this.#rejectQuery(
-          new TypeError('Scoped transaction queries must expose stable SQL text.'),
-        )
-      }
-      const normalizedSql = sqlCodeForInspection(query.sql)
-      if (hasControlledStatement(normalizedSql, transactionControlStatementPattern)) {
-        return this.#rejectQuery(
-          new TypeError('Transaction control belongs to UnitOfWork.'),
-        )
-      }
-      if (
-        hasControlledStatement(normalizedSql, sessionControlStatementPattern) ||
-        retainedSessionCommandPattern.test(normalizedSql) ||
-        hasControlledStatement(normalizedSql, opaqueOrDdlStatementPattern) ||
-        temporarySessionObjectPattern.test(normalizedSql) ||
-        /\bSELECT\b[^;]*\bINTO\b/i.test(normalizedSql) ||
-        coordinationPrimitivePattern.test(normalizedSql)
-      ) {
-        return this.#rejectQuery(
-          new TypeError('Connection and lock control belongs to UnitOfWork.'),
-        )
-      }
-      if (isMutationStatement(query.sql)) this.#requireWriteAuthorized()
+  #executeQuery(args: readonly unknown[], rowMode: 'array' | null): Promise<unknown> {
+    this.#work.assertActive()
+    if (this.#signal?.aborted) {
+      return this.#rejectQuery(new CoordinationError('uow.cancelled'))
+    }
+    if (typeof args.at(-1) === 'function') {
+      return this.#rejectQuery(
+        new TypeError('Scoped transaction queries must use the Promise interface.'),
+      )
+    }
+    let query: StableQuery | null
+    try {
+      query = stableQuery(args)
+    } catch (error) {
+      return this.#rejectQuery(error)
+    }
+    if (query === null) {
+      return this.#rejectQuery(
+        new TypeError('Scoped transaction queries must expose stable SQL text.'),
+      )
+    }
+    if (rowMode !== null && query.form !== 'positional') {
+      return this.#rejectQuery(
+        new TypeError('Scoped array queries must use positional SQL text.'),
+      )
+    }
+    const normalizedSql = sqlCodeForInspection(query.sql)
+    if (hasControlledStatement(normalizedSql, transactionControlStatementPattern)) {
+      return this.#rejectQuery(
+        new TypeError('Transaction control belongs to UnitOfWork.'),
+      )
+    }
+    if (
+      hasControlledStatement(normalizedSql, sessionControlStatementPattern) ||
+      retainedSessionCommandPattern.test(normalizedSql) ||
+      hasControlledStatement(normalizedSql, opaqueOrDdlStatementPattern) ||
+      temporarySessionObjectPattern.test(normalizedSql) ||
+      /\bSELECT\b[^;]*\bINTO\b/i.test(normalizedSql) ||
+      coordinationPrimitivePattern.test(normalizedSql)
+    ) {
+      return this.#rejectQuery(
+        new TypeError('Connection and lock control belongs to UnitOfWork.'),
+      )
+    }
+    if (isMutationStatement(query.sql)) this.#requireWriteAuthorized()
 
-      let queryArgs: readonly unknown[]
-      try {
-        queryArgs = materializeQueryArgs(query)
-      } catch (error) {
-        return this.#rejectQuery(error)
+    let queryArgs: readonly unknown[]
+    try {
+      queryArgs = materializeQueryArgs(query, rowMode)
+    } catch (error) {
+      return this.#rejectQuery(error)
+    }
+    let promise: Promise<unknown>
+    try {
+      promise = Reflect.apply(
+        this.#client.query,
+        this.#client,
+        queryArgs,
+      ) as Promise<unknown>
+    } catch (error) {
+      promise = Promise.reject(error)
+    }
+    this.#queryCount += 1
+    const mapped = promise.catch((error: unknown) => {
+      if (lockTimeout(error)) throw new CoordinationError('uow.lock-timeout')
+      if (connectionFailure(error)) {
+        this.#markUncertain(
+          new InFlightQueryUncertain(new CoordinationError('uow.connection-lost')),
+        )
+        throw new CoordinationError('uow.connection-lost')
       }
-      let promise: Promise<unknown>
-      try {
-        promise = Reflect.apply(
-          this.#client.query,
-          this.#client,
-          queryArgs,
-        ) as Promise<unknown>
-      } catch (error) {
-        promise = Promise.reject(error)
-      }
-      this.#queryCount += 1
-      const mapped = promise.catch((error: unknown) => {
-        if (lockTimeout(error)) throw new CoordinationError('uow.lock-timeout')
-        if (connectionFailure(error)) {
-          this.#markUncertain(
-            new InFlightQueryUncertain(new CoordinationError('uow.connection-lost')),
-          )
-          throw new CoordinationError('uow.connection-lost')
-        }
-        throw error
-      })
-      const visible = guardedInFlightQuery({
-        promise: mapped,
-        signal: this.#signal,
-        timeoutMs: this.#queryTimeoutMs,
-        timeoutError: new CoordinationError('uow.connection-lost'),
-        onUncertain: (error) => {
-          this.#markUncertain(error)
-        },
-      })
-      return this.#work.track(promise, visible)
-    }) as ScopedTransactionClient['query'],
+      throw error
+    })
+    const visible = guardedInFlightQuery({
+      promise: mapped,
+      signal: this.#signal,
+      timeoutMs: this.#queryTimeoutMs,
+      timeoutError: new CoordinationError('uow.connection-lost'),
+      onUncertain: (error) => {
+        this.#markUncertain(error)
+      },
+    })
+    return this.#work.track(promise, visible)
+  }
+
+  readonly scopedClient: ScopedTransactionClient = {
+    query: ((...args: readonly unknown[]) =>
+      this.#executeQuery(args, null)) as ScopedTransactionClient['query'],
+    queryArray: ((...args: readonly unknown[]) =>
+      this.#executeQuery(args, 'array')) as ScopedTransactionClient['queryArray'],
   }
 
   open(): void {

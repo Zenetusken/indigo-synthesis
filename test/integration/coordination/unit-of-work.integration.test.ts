@@ -1,3 +1,5 @@
+import { eq, sql } from 'drizzle-orm'
+import { integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 import { Client, type PoolClient } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {
@@ -33,6 +35,7 @@ import {
   prelockedOperationForRequest,
   resolvePlatformPrelockedSession,
 } from '@/platform/application-coordination/prelocked-session'
+import { createScopedDrizzleDatabase } from '@/platform/application-coordination/scoped-drizzle'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
 import { DatabaseRuntime } from '@/platform/db/database-runtime'
@@ -41,6 +44,50 @@ import {
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
+import { installationState } from '@/platform/db/schema'
+
+const drizzleLeft = pgTable('uow_test_drizzle_left', {
+  id: text('id').primaryKey(),
+  label: text('label').notNull(),
+  value: integer('value').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+})
+
+const drizzleRight = pgTable('uow_test_drizzle_right', {
+  id: text('id').primaryKey(),
+  leftId: text('left_id').notNull(),
+  label: text('label').notNull(),
+})
+
+type ScopedDrizzleExercise = {
+  readonly deleted: { readonly id: string; readonly label: string }
+  readonly installation: {
+    readonly createdAt: Date
+    readonly epoch: string
+    readonly updatedAt: Date
+  }
+  readonly insertedLeft: {
+    readonly createdAt: Date
+    readonly id: string
+    readonly label: string
+    readonly value: number
+  }
+  readonly insertedRight: {
+    readonly id: string
+    readonly label: string
+    readonly leftId: string
+  }
+  readonly joined: {
+    readonly left: {
+      readonly createdAt: Date
+      readonly id: string
+      readonly label: string
+    }
+    readonly right: { readonly id: string; readonly label: string }
+  }
+  readonly pid: number
+  readonly updatedLeft: { readonly id: string; readonly value: number }
+}
 
 type ReadGateways = {
   backendPid(): Promise<number>
@@ -64,6 +111,11 @@ type WriteGateways = ReadGateways & {
   >
   insert(owner: 'a' | 'b', id: string): Promise<void>
   insertAfterDelay(owner: 'a' | 'b', id: string): Promise<void>
+  exerciseScopedDrizzle(input: {
+    readonly createdAt: Date
+    readonly deleteTargetId: string
+    readonly prefix: string
+  }): Promise<ScopedDrizzleExercise>
   recordReceipt(
     commandId: string,
     stableIntentHash: string,
@@ -184,6 +236,7 @@ function gatewayContext(
   exactReplayAuthorizer: ExactReplayAuthorizer | null,
   newCommandAuthorizer: NewCommandAuthorizer | null,
 ) {
+  const scopedDatabase = createScopedDrizzleDatabase(client)
   const table = (owner: 'a' | 'b') =>
     owner === 'a' ? 'uow_test_owner_a' : 'uow_test_owner_b'
   let identityRechecked = false
@@ -311,6 +364,102 @@ function gatewayContext(
            SELECT $1 FROM (SELECT pg_sleep(0.05)) AS delayed`,
           [id],
         )
+      },
+      async exerciseScopedDrizzle(input: {
+        readonly createdAt: Date
+        readonly deleteTargetId: string
+        readonly prefix: string
+      }): Promise<ScopedDrizzleExercise> {
+        requireWriteAuthorized()
+        const leftId = `${input.prefix}-left`
+        const rightId = `${input.prefix}-right`
+        const insertedLeft = (
+          await scopedDatabase
+            .insert(drizzleLeft)
+            .values({
+              createdAt: input.createdAt,
+              id: leftId,
+              label: `${input.prefix}-left-label`,
+              value: 1,
+            })
+            .returning()
+        )[0]
+        if (!insertedLeft) throw new Error('missing scoped Drizzle left insert')
+
+        const insertedRight = (
+          await scopedDatabase
+            .insert(drizzleRight)
+            .values({
+              id: rightId,
+              label: `${input.prefix}-right-label`,
+              leftId,
+            })
+            .returning()
+        )[0]
+        if (!insertedRight) throw new Error('missing scoped Drizzle right insert')
+
+        const updatedLeft = (
+          await scopedDatabase
+            .update(drizzleLeft)
+            .set({ value: 2 })
+            .where(eq(drizzleLeft.id, leftId))
+            .returning({ id: drizzleLeft.id, value: drizzleLeft.value })
+        )[0]
+        if (!updatedLeft) throw new Error('missing scoped Drizzle left update')
+
+        const joined = (
+          await scopedDatabase
+            .select({
+              left: {
+                createdAt: drizzleLeft.createdAt,
+                id: drizzleLeft.id,
+                label: drizzleLeft.label,
+              },
+              right: { id: drizzleRight.id, label: drizzleRight.label },
+            })
+            .from(drizzleLeft)
+            .innerJoin(drizzleRight, eq(drizzleLeft.id, drizzleRight.leftId))
+            .where(eq(drizzleLeft.id, leftId))
+        )[0]
+        if (!joined) throw new Error('missing scoped Drizzle joined row')
+
+        const pid = (
+          await scopedDatabase
+            .select({ pid: sql<number>`pg_backend_pid()` })
+            .from(installationState)
+            .where(eq(installationState.singleton, 1))
+        )[0]?.pid
+        if (!pid) throw new Error('missing scoped Drizzle backend pid')
+
+        const deleted = (
+          await scopedDatabase
+            .delete(drizzleRight)
+            .where(eq(drizzleRight.id, input.deleteTargetId))
+            .returning({ id: drizzleRight.id, label: drizzleRight.label })
+        )[0]
+        if (!deleted) throw new Error('missing scoped Drizzle deletion target')
+
+        const installation = (
+          await scopedDatabase
+            .select({
+              createdAt: installationState.createdAt,
+              epoch: installationState.productMutationEpoch,
+              updatedAt: installationState.updatedAt,
+            })
+            .from(installationState)
+            .where(eq(installationState.singleton, 1))
+        )[0]
+        if (!installation) throw new Error('missing scoped Drizzle installation row')
+
+        return {
+          deleted,
+          installation,
+          insertedLeft,
+          insertedRight,
+          joined,
+          pid,
+          updatedLeft,
+        }
       },
       async recordReceipt(commandId: string, stableIntentHash: string, result: string) {
         if (
@@ -612,6 +761,21 @@ beforeAll(async () => {
   await inspector.query('CREATE TABLE uow_test_owner_a (id text PRIMARY KEY)')
   await inspector.query('CREATE TABLE uow_test_owner_b (id text PRIMARY KEY)')
   await inspector.query(
+    `CREATE TABLE uow_test_drizzle_left (
+       id text PRIMARY KEY,
+       label text NOT NULL,
+       value integer NOT NULL,
+       created_at timestamptz NOT NULL
+     )`,
+  )
+  await inspector.query(
+    `CREATE TABLE uow_test_drizzle_right (
+       id text PRIMARY KEY,
+       left_id text NOT NULL,
+       label text NOT NULL
+     )`,
+  )
+  await inspector.query(
     `CREATE TABLE uow_test_receipt (
        command_id text PRIMARY KEY,
        stable_intent_hash text NOT NULL,
@@ -631,7 +795,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await inspector.query(
-    'TRUNCATE uow_test_owner_a, uow_test_owner_b, uow_test_receipt, uow_test_content_source',
+    `TRUNCATE uow_test_owner_a, uow_test_owner_b, uow_test_receipt,
+       uow_test_content_source, uow_test_drizzle_left, uow_test_drizzle_right`,
   )
   await inspector.query(
     `INSERT INTO uow_test_content_source
@@ -653,6 +818,146 @@ afterAll(async () => {
 })
 
 describe('PostgreSQL UnitOfWork integration', () => {
+  it('runs scoped Drizzle DML and positional mapping on the tracked backend', async () => {
+    const epoch = await currentEpoch()
+    const createdAt = new Date('2025-01-02T03:04:05.678Z')
+    await inspector.query(
+      `INSERT INTO uow_test_drizzle_right (id, left_id, label)
+       VALUES ('commit-delete-target', 'external-left', 'commit-delete-label')`,
+    )
+
+    const result = await runSubject({
+      commandId: 'scoped-drizzle-commit',
+      epoch,
+      subjectId: 'subject-scoped-drizzle-commit',
+      callback: async ({ gateways }) => {
+        const before = await gateways.backendPid()
+        const exercise = await gateways.exerciseScopedDrizzle({
+          createdAt,
+          deleteTargetId: 'commit-delete-target',
+          prefix: 'commit',
+        })
+        const after = await gateways.backendPid()
+        return { after, before, exercise }
+      },
+    })
+
+    expect([result.before, result.exercise.pid, result.after]).toEqual([
+      result.before,
+      result.before,
+      result.before,
+    ])
+    expect(result.exercise.insertedLeft).toEqual({
+      createdAt,
+      id: 'commit-left',
+      label: 'commit-left-label',
+      value: 1,
+    })
+    expect(result.exercise.insertedRight).toEqual({
+      id: 'commit-right',
+      label: 'commit-right-label',
+      leftId: 'commit-left',
+    })
+    expect(result.exercise.updatedLeft).toEqual({ id: 'commit-left', value: 2 })
+    expect(result.exercise.joined).toEqual({
+      left: {
+        createdAt,
+        id: 'commit-left',
+        label: 'commit-left-label',
+      },
+      right: { id: 'commit-right', label: 'commit-right-label' },
+    })
+    expect(result.exercise.deleted).toEqual({
+      id: 'commit-delete-target',
+      label: 'commit-delete-label',
+    })
+    expect(
+      installationMutationEpochMatches(epoch, result.exercise.installation.epoch),
+    ).toBe(true)
+    expect(result.exercise.installation.createdAt).toBeInstanceOf(Date)
+    expect(result.exercise.installation.updatedAt).toBeInstanceOf(Date)
+    expect(result.exercise.installation.createdAt.toISOString()).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/,
+    )
+    expect(result.exercise.installation.updatedAt.toISOString()).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/,
+    )
+    expect(
+      await inspector.query(
+        `SELECT id, label, value, created_at FROM uow_test_drizzle_left
+         WHERE id = 'commit-left'`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          created_at: createdAt,
+          id: 'commit-left',
+          label: 'commit-left-label',
+          value: 2,
+        },
+      ],
+    })
+    expect(
+      await inspector.query(
+        `SELECT id, left_id, label FROM uow_test_drizzle_right
+         WHERE id IN ('commit-right', 'commit-delete-target') ORDER BY id`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          id: 'commit-right',
+          label: 'commit-right-label',
+          left_id: 'commit-left',
+        },
+      ],
+    })
+  })
+
+  it('rolls every scoped Drizzle mutation back with the callback error', async () => {
+    const epoch = await currentEpoch()
+    const original = new Error('scoped Drizzle rollback')
+    await inspector.query(
+      `INSERT INTO uow_test_drizzle_right (id, left_id, label)
+       VALUES ('rollback-delete-target', 'external-left', 'rollback-delete-label')`,
+    )
+
+    await expect(
+      runSubject({
+        commandId: 'scoped-drizzle-rollback',
+        epoch,
+        subjectId: 'subject-scoped-drizzle-rollback',
+        callback: async ({ gateways }) => {
+          await gateways.exerciseScopedDrizzle({
+            createdAt: new Date('2025-02-03T04:05:06.789Z'),
+            deleteTargetId: 'rollback-delete-target',
+            prefix: 'rollback',
+          })
+          throw original
+        },
+      }),
+    ).rejects.toBe(original)
+    expect(
+      await inspector.query(
+        `SELECT count(*)::int AS count FROM uow_test_drizzle_left
+         WHERE id = 'rollback-left'`,
+      ),
+    ).toMatchObject({ rows: [{ count: 0 }] })
+    expect(
+      await inspector.query(
+        `SELECT id, left_id, label FROM uow_test_drizzle_right
+         WHERE id IN ('rollback-right', 'rollback-delete-target') ORDER BY id`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          id: 'rollback-delete-target',
+          label: 'rollback-delete-label',
+          left_id: 'external-left',
+        },
+      ],
+    })
+  })
+
   it('commits two owner gateways on one backend and rolls both back after failure', async () => {
     const epoch = await currentEpoch()
     const pids = await runSubject({

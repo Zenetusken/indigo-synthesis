@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import type { PoolClient, QueryResult, QueryResultRow } from 'pg'
+import type { PoolClient, QueryArrayResult, QueryResult, QueryResultRow } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   AuthenticatedSessionReference,
@@ -36,6 +36,9 @@ import {
 } from './prelocked-session'
 
 type TranscriptEntry = {
+  readonly argumentCount: number
+  readonly input: string | SafeQueryConfig
+  readonly rowMode: unknown
   readonly text: string
   readonly values: readonly unknown[]
 }
@@ -49,7 +52,8 @@ type FakeClient = {
 type QueryHook = (
   text: string,
   values: readonly unknown[],
-) => Promise<QueryResult<QueryResultRow>> | undefined
+  rowMode: unknown,
+) => Promise<unknown> | undefined
 
 function queryResult<Row extends QueryResultRow>(
   rows: readonly Row[] = [],
@@ -64,19 +68,42 @@ function queryResult<Row extends QueryResultRow>(
   }
 }
 
+function queryArrayResult<Row extends unknown[]>(
+  rows: readonly Row[] = [],
+  command = 'SELECT',
+): QueryArrayResult<Row> {
+  return {
+    command,
+    fields: [],
+    oid: 0,
+    rowCount: rows.length,
+    rows: [...rows],
+  }
+}
+
 function fakeClient(hook?: QueryHook): FakeClient {
   const transcript: TranscriptEntry[] = []
   const release = vi.fn()
-  const query = (async (
-    input: string | SafeQueryConfig,
-    suppliedValues: readonly unknown[] = [],
-  ) => {
+  const query = (async (...args: readonly unknown[]) => {
+    const [input, suppliedValues = []] = args as readonly [
+      string | SafeQueryConfig,
+      (readonly unknown[])?,
+    ]
     const text = typeof input === 'string' ? input : input.text
     const values = typeof input === 'string' ? suppliedValues : (input.values ?? [])
-    transcript.push({ text, values })
-    const hooked = hook?.(text, values)
+    const rowMode = typeof input === 'string' ? undefined : Reflect.get(input, 'rowMode')
+    transcript.push({ argumentCount: args.length, input, rowMode, text, values })
+    const hooked = hook?.(text, values, rowMode)
     if (hooked) return hooked
     if (text.includes('pg_advisory_unlock')) return queryResult([{ unlocked: true }])
+    if (rowMode === 'array') {
+      if (text === 'SELECT identity') return queryArrayResult([['current']])
+      if (text === 'SELECT read-array') return queryArrayResult([['read-array']])
+      if (text === 'SELECT $1 AS mutable-value') {
+        return queryArrayResult([[values[0]]])
+      }
+      return queryArrayResult()
+    }
     if (text === 'SELECT identity') return queryResult([{ authority: 'current' }])
     if (text === 'SELECT read-value') return queryResult([{ value: 'read' }])
     if (text.startsWith('BEGIN')) return queryResult([], 'BEGIN')
@@ -104,11 +131,13 @@ function transactionLocalStateValues(
 
 type ReadGateways = {
   read(): Promise<string>
+  readArray(): Promise<string>
 }
 
 type WriteGateways = ReadGateways & {
   abortTransaction(): Promise<void>
   anonymousBlock(): Promise<void>
+  arrayCaptureFailure(mode: 'awaited' | 'caught' | 'ignored'): Promise<void>
   authorizeExactReplay(storedResult: CanonicalValue): Promise<void>
   authorizeNewCommand(): Promise<void>
   caseExpression(): Promise<void>
@@ -125,9 +154,12 @@ type WriteGateways = ReadGateways & {
   largeObjectWrite(): Promise<void>
   pauseBeforeWrite(): Promise<void>
   prepareMutation(): Promise<void>
+  queryArrayConfigReflectively(): Promise<void>
+  queryArrayTransactionControl(): Promise<void>
+  queryArrayWithoutValues(): Promise<void>
   queryWithMutableValues(
     values: unknown[],
-    form?: 'config' | 'positional',
+    form?: 'array' | 'config' | 'positional',
   ): Promise<unknown>
   queryWithAccessorText(): Promise<void>
   queryWithCallbackConfig(): Promise<void>
@@ -138,7 +170,9 @@ type WriteGateways = ReadGateways & {
   setSessionState(): Promise<void>
   setRandomSeed(): Promise<void>
   startDetached(): Promise<void>
+  startDetachedArray(): Promise<void>
   unicodeEscapedUnlock(): Promise<void>
+  writeArrayWithoutGuard(): Promise<void>
 }
 
 type GatewayTestHooks = {
@@ -156,13 +190,30 @@ function gatewayContext(
     const result = await client.query<{ value: string }>('SELECT read-value')
     return result.rows[0]?.value ?? 'missing'
   }
+  const readArray = async (): Promise<string> => {
+    const result = await client.queryArray<[string]>('SELECT read-array')
+    return result.rows[0]?.[0] ?? 'missing'
+  }
   return {
     recheckIdentity: async () => {
       await client.query('SELECT identity')
     },
-    readGateways: { read },
+    readGateways: { read, readArray },
     writeGateways: {
       read,
+      readArray,
+      async arrayCaptureFailure(mode: 'awaited' | 'caught' | 'ignored') {
+        requireWriteAuthorized()
+        await client.query('INSERT conversion-prior-write')
+        const values = new Proxy<unknown[]>([], {
+          ownKeys() {
+            throw parameterConversionFailure
+          },
+        })
+        const rejected = client.queryArray('SELECT $1 AS array-capture-failure', values)
+        if (mode === 'awaited') await rejected
+        else if (mode === 'caught') void rejected.catch(() => undefined)
+      },
       async abortTransaction() {
         await client.query('ABORT WORK')
       },
@@ -233,10 +284,28 @@ function gatewayContext(
       async prepareMutation() {
         await client.query('PREPARE retained_mutation AS INSERT prepared-write')
       },
+      async queryArrayConfigReflectively() {
+        await Reflect.apply(client.queryArray, client, [
+          { text: 'SELECT reflected-array-config' },
+        ])
+      },
+      async queryArrayTransactionControl() {
+        await client.queryArray('BEGIN')
+      },
+      async queryArrayWithoutValues() {
+        await client.queryArray('SELECT array-no-values')
+      },
       async queryWithMutableValues(
         values: unknown[],
-        form: 'config' | 'positional' = 'positional',
+        form: 'array' | 'config' | 'positional' = 'positional',
       ) {
+        if (form === 'array') {
+          const result = await client.queryArray<[unknown]>(
+            'SELECT $1 AS mutable-value',
+            values,
+          )
+          return result.rows[0]?.[0]
+        }
         const result =
           form === 'config'
             ? await client.query<{ value: unknown }>({
@@ -292,8 +361,15 @@ function gatewayContext(
         requireWriteAuthorized()
         await client.query('SELECT detached')
       },
+      async startDetachedArray() {
+        requireWriteAuthorized()
+        await client.queryArray('SELECT detached-array')
+      },
       async unicodeEscapedUnlock() {
         await client.query(String.raw`SELECT U&"pg\005fadvisory\005funlock\005fall"()`)
+      },
+      async writeArrayWithoutGuard() {
+        await client.queryArray('INSERT unguarded-array-write RETURNING id')
       },
     },
   }
@@ -652,7 +728,7 @@ describe('PostgresUnitOfWork', () => {
       'BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE',
     )
     expect(database.transcript[beginIndex + 1]?.text).toBe('SELECT identity')
-    expect(database.transcript[beginIndex + 2]).toEqual({
+    expect(database.transcript[beginIndex + 2]).toMatchObject({
       text: "SELECT set_config('indigo.user_creation_mode', $1, true), set_config('indigo.deletion_mode', $2, true)",
       values: ['', ''],
     })
@@ -819,24 +895,32 @@ describe('PostgresUnitOfWork', () => {
     expect(database.release).toHaveBeenCalledWith()
   })
 
-  it('rolls back detached query work and destroys the session after it drains', async () => {
+  it.each([
+    ['object', 'SELECT detached', (gateways: WriteGateways) => gateways.startDetached()],
+    [
+      'array',
+      'SELECT detached-array',
+      (gateways: WriteGateways) => gateways.startDetachedArray(),
+    ],
+  ] as const)('rolls back detached %s query work and destroys the session after it drains', async (_mode, detachedSql, startDetached) => {
     let finishDetached: () => void = () => undefined
     let markDetachedStarted: () => void = () => undefined
     const detachedStarted = new Promise<void>((resolve) => {
       markDetachedStarted = resolve
     })
-    const detached = new Promise<QueryResult<QueryResultRow>>((resolve) => {
-      finishDetached = () => resolve(queryResult())
+    const detached = new Promise<unknown>((resolve) => {
+      finishDetached = () =>
+        resolve(detachedSql.endsWith('-array') ? queryArrayResult() : queryResult())
     })
     const database = fakeClient((text) => {
-      if (text !== 'SELECT detached') return undefined
+      if (text !== detachedSql) return undefined
       markDetachedStarted()
       return detached
     })
     const uow = unitOfWork(database)
 
     const result = withWriteRequest(uow, async (gateways) => {
-      void gateways.startDetached()
+      void startDetached(gateways)
       return 'must roll back'
     })
     const outcome = result.then(
@@ -1019,6 +1103,45 @@ describe('PostgresUnitOfWork', () => {
     expect(
       authorizedDatabase.transcript.some(({ text }) => text === 'INSERT unguarded-write'),
     ).toBe(true)
+
+    const unattestedArrayDatabase = fakeClient()
+    await expect(
+      withInitialPublication(
+        unitOfWork(unattestedArrayDatabase),
+        async ({ gateways }) => {
+          await gateways.writeArrayWithoutGuard()
+          return 'must not commit'
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'content-lock-plan.stale' })
+    expect(
+      unattestedArrayDatabase.transcript.some(
+        ({ text }) => text === 'INSERT unguarded-array-write RETURNING id',
+      ),
+    ).toBe(false)
+
+    const authorizedArrayDatabase = fakeClient()
+    await expect(
+      withInitialPublication(
+        unitOfWork(authorizedArrayDatabase),
+        async ({ gateways, content }) => {
+          if (content.kind !== 'verified') throw new Error('missing verified content')
+          content.attestor.assertCurrentLockedContentSet([
+            methodologyFactory.createTransactionProjection(
+              content.transactionScope,
+              releasePair,
+            ),
+          ])
+          await gateways.writeArrayWithoutGuard()
+          return 'committed'
+        },
+      ),
+    ).resolves.toBe('committed')
+    expect(
+      authorizedArrayDatabase.transcript.find(
+        ({ text }) => text === 'INSERT unguarded-array-write RETURNING id',
+      ),
+    ).toMatchObject({ argumentCount: 1, rowMode: 'array' })
   })
 
   it('keeps connection and advisory-lock control outside owner gateways', async () => {
@@ -1154,6 +1277,77 @@ describe('PostgresUnitOfWork', () => {
     )
   })
 
+  it('dispatches array rows through one frozen, null-prototype query config', async () => {
+    const database = fakeClient()
+
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.queryArrayWithoutValues()
+        await gateways.queryWithMutableValues(['admitted'], 'array')
+        await gateways.read()
+        return 'committed'
+      }),
+    ).resolves.toBe('committed')
+
+    const omitted = database.transcript.find(
+      ({ text }) => text === 'SELECT array-no-values',
+    )
+    const parameterized = database.transcript.find(
+      ({ text }) => text === 'SELECT $1 AS mutable-value',
+    )
+    if (
+      !omitted ||
+      typeof omitted.input === 'string' ||
+      !parameterized ||
+      typeof parameterized.input === 'string'
+    ) {
+      throw new Error('missing array-mode driver config')
+    }
+    for (const entry of [omitted, parameterized]) {
+      expect(entry.argumentCount).toBe(1)
+      expect(Object.getPrototypeOf(entry.input)).toBeNull()
+      expect(Object.isFrozen(entry.input)).toBe(true)
+      expect(entry.rowMode).toBe('array')
+      const descriptors = Object.getOwnPropertyDescriptors(entry.input)
+      for (const descriptor of Object.values(descriptors)) {
+        expect(descriptor).toMatchObject({
+          configurable: false,
+          enumerable: true,
+          writable: false,
+        })
+        expect(descriptor).toHaveProperty('value')
+      }
+      expect(descriptors).not.toHaveProperty('name')
+      expect(descriptors).not.toHaveProperty('types')
+      expect(descriptors).not.toHaveProperty('callback')
+    }
+    expect(Reflect.ownKeys(omitted.input)).toEqual(['text', 'rowMode'])
+    expect(Reflect.ownKeys(parameterized.input)).toEqual(['text', 'values', 'rowMode'])
+    expect(Object.isFrozen(parameterized.values)).toBe(true)
+    expect(parameterized.values).toEqual(['admitted'])
+    const ordinary = database.transcript.find(({ text }) => text === 'SELECT read-value')
+    expect(ordinary?.input).toBe('SELECT read-value')
+    expect(ordinary?.rowMode).toBeUndefined()
+
+    for (const invoke of [
+      (gateways: WriteGateways) => gateways.queryArrayConfigReflectively(),
+      (gateways: WriteGateways) => gateways.queryArrayTransactionControl(),
+    ]) {
+      const rejectedDatabase = fakeClient()
+      await expect(
+        withWriteRequest(unitOfWork(rejectedDatabase), async (gateways) => {
+          await invoke(gateways)
+          return 'must not commit'
+        }),
+      ).rejects.toThrow(/positional SQL text|Transaction control/)
+      expect(
+        rejectedDatabase.transcript.some(({ text }) =>
+          /reflected-array-config|^BEGIN$/.test(text),
+        ),
+      ).toBe(false)
+    }
+  })
+
   it('snapshots positional query values before node-postgres can dispatch queued work', async () => {
     let releaseQuery: () => void = () => undefined
     const queued = new Promise<void>((resolve) => {
@@ -1183,14 +1377,19 @@ describe('PostgresUnitOfWork', () => {
   it.each([
     'positional',
     'config',
+    'array',
   ] as const)('materializes nested mutable %s values before queued dispatch', async (form) => {
     let releaseQuery: () => void = () => undefined
     const queued = new Promise<void>((resolve) => {
       releaseQuery = resolve
     })
-    const database = fakeClient((text, values) => {
+    const database = fakeClient((text, values, rowMode) => {
       if (text !== 'SELECT $1 AS mutable-value') return undefined
-      return queued.then(() => queryResult([{ value: values }]))
+      return queued.then(() =>
+        rowMode === 'array'
+          ? queryArrayResult([[values]])
+          : queryResult([{ value: values }]),
+      )
     })
     const binary = Buffer.from([1, 2, 3])
     const date = new Date('2020-06-15T16:17:18.019Z')
@@ -1297,6 +1496,30 @@ describe('PostgresUnitOfWork', () => {
     expect(database.release).toHaveBeenCalledWith(expect.any(Error))
   })
 
+  it.each([
+    'ignored',
+    'caught',
+  ] as const)('tracks a %s array-capture failure and rolls back prior work', async (mode) => {
+    const database = fakeClient()
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.arrayCaptureFailure(mode)
+        return 'must not commit'
+      }),
+    ).rejects.toMatchObject({ code: 'uow.detached-work' })
+    expect(
+      database.transcript.some(({ text }) => text === 'INSERT conversion-prior-write'),
+    ).toBe(true)
+    expect(
+      database.transcript.some(
+        ({ text }) => text === 'SELECT $1 AS array-capture-failure',
+      ),
+    ).toBe(false)
+    expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
+    expect(database.transcript.some(({ text }) => text === 'COMMIT')).toBe(false)
+    expect(database.release).toHaveBeenCalledWith(expect.any(Error))
+  })
+
   it('preserves an awaited parameter-conversion error without dispatch', async () => {
     const database = fakeClient()
     await expect(
@@ -1307,6 +1530,23 @@ describe('PostgresUnitOfWork', () => {
     ).rejects.toBe(parameterConversionFailure)
     expect(
       database.transcript.some(({ text }) => text === 'SELECT $1 AS conversion-failure'),
+    ).toBe(false)
+    expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
+    expect(database.release).toHaveBeenCalledWith()
+  })
+
+  it('preserves an awaited array-capture error without dispatch', async () => {
+    const database = fakeClient()
+    await expect(
+      withWriteRequest(unitOfWork(database), async (gateways) => {
+        await gateways.arrayCaptureFailure('awaited')
+        return 'never'
+      }),
+    ).rejects.toBe(parameterConversionFailure)
+    expect(
+      database.transcript.some(
+        ({ text }) => text === 'SELECT $1 AS array-capture-failure',
+      ),
     ).toBe(false)
     expect(database.transcript.some(({ text }) => text === 'ROLLBACK')).toBe(true)
     expect(database.release).toHaveBeenCalledWith()
@@ -1534,7 +1774,7 @@ describe('PostgresUnitOfWork', () => {
     const uow = unitOfWork(database)
 
     await uow.run(exportRequest(), async ({ gateways }) => {
-      expect(Object.keys(gateways)).toEqual(['read'])
+      expect(Object.keys(gateways)).toEqual(['read', 'readArray'])
       expect(await gateways.read()).toBe('read')
       await expect(uow.run(exportRequest(), async () => 'nested')).rejects.toMatchObject({
         code: 'uow.nested',
@@ -1686,6 +1926,88 @@ describe('PostgresUnitOfWork', () => {
     await expect(result).rejects.toMatchObject({ code: 'uow.cancelled' })
     expect(database.transcript.some(({ text }) => text.startsWith('BEGIN'))).toBe(false)
     expect(database.release).toHaveBeenCalledWith(expect.any(Error))
+  })
+
+  it('cancels an in-flight array query without unsafe SQL cleanup', async () => {
+    let markStarted: () => void = () => undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const database = fakeClient((text, _values, rowMode) => {
+      if (text !== 'SELECT read-array' || rowMode !== 'array') return undefined
+      markStarted()
+      return new Promise(() => undefined)
+    })
+    const controller = new AbortController()
+    const request = { ...exportRequest(), signal: controller.signal }
+    const result = unitOfWork(database).run(request, async ({ gateways }) =>
+      gateways.readArray(),
+    )
+    const outcome = result.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    await started
+    controller.abort()
+
+    await expect(outcome).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'uow.cancelled' },
+    })
+    const failedQueryIndex = database.transcript.findIndex(
+      ({ text }) => text === 'SELECT read-array',
+    )
+    expect(
+      database.transcript
+        .slice(failedQueryIndex + 1)
+        .some(({ text }) =>
+          /ROLLBACK|pg_advisory_unlock|RESET (?:lock|statement)_timeout/.test(text),
+        ),
+    ).toBe(false)
+    expect(database.release).toHaveBeenCalledWith(expect.any(Error))
+  })
+
+  it('counts an array-mode Identity recheck and revokes the retained client', async () => {
+    const database = fakeClient()
+    let retained: ScopedTransactionClient | undefined
+    const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+      acquireOrdinary: async () => database.client,
+      resolvePrelockedSession: () => {
+        throw new Error('unexpected prelocked session')
+      },
+      createGatewayContext: ({
+        client,
+        exactReplayAuthorizer,
+        newCommandAuthorizer,
+        requireWriteAuthorized,
+      }) => {
+        retained = client
+        const context = gatewayContext(
+          client,
+          requireWriteAuthorized,
+          exactReplayAuthorizer,
+          newCommandAuthorizer,
+        )
+        return {
+          ...context,
+          recheckIdentity: async () => {
+            await client.queryArray('SELECT identity')
+          },
+        }
+      },
+    })
+
+    await expect(
+      uow.run(exportRequest(), async () => 'identity rechecked'),
+    ).resolves.toBe('identity rechecked')
+    expect(
+      database.transcript.find(({ text }) => text === 'SELECT identity'),
+    ).toMatchObject({ argumentCount: 1, rowMode: 'array' })
+    const closed = retained
+    if (!closed) throw new Error('scoped client was not retained')
+    expect(() => closed.queryArray('SELECT read-array')).toThrow(
+      expect.objectContaining({ code: 'uow.scope-revoked' }),
+    )
   })
 
   it('fails closed when Identity performs no first transactional query', async () => {
