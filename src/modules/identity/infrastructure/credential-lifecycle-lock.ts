@@ -1,5 +1,3 @@
-import { createHmac } from 'node:crypto'
-import { getServerConfig } from '@/platform/config/server'
 import {
   type CredentialConnection,
   CredentialConnectionCapacityError,
@@ -11,7 +9,10 @@ import {
   withTrustedCredentialCapture,
   withTrustedCredentialControl,
 } from '@/platform/db/credential-connections'
-import { normalizeRecoveryEmail } from '../recovery/recovery-policy'
+import {
+  credentialEmailLockDigest,
+  credentialEmailLockDigestForSecret,
+} from './credential-digests'
 
 const credentialLockNamespace = 'indigo:credential-lifecycle:'
 const instanceFenceKey = 'instance-fence'
@@ -40,18 +41,7 @@ function accountLockKey(userId: string): string {
   return `account:${userId}`
 }
 
-export function credentialEmailLockDigestForSecret(
-  authSecret: string,
-  email: string,
-): string {
-  return createHmac('sha256', authSecret)
-    .update(`credential-email-lock-v1\0${normalizeRecoveryEmail(email)}`, 'utf8')
-    .digest('hex')
-}
-
-export function credentialEmailLockDigest(email: string): string {
-  return credentialEmailLockDigestForSecret(getServerConfig().authSecret, email)
-}
+export { credentialEmailLockDigest, credentialEmailLockDigestForSecret }
 
 function emailLockKey(emailDigest: string): string {
   return `email:${emailDigest}`

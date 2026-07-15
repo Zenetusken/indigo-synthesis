@@ -27,35 +27,57 @@ type CallbackOutcome<Result> =
   | { readonly ok: true; readonly value: Result }
   | { readonly ok: false; readonly error: unknown }
 
+type MonitoredCredentialClient = {
+  readonly client: PoolClient
+  readonly error: () => Error | undefined
+  readonly dispose: () => void
+  readonly subscribe: (listener: (error: Error) => void) => () => void
+}
+
 async function withCredentialConnection<Result>(
-  acquire: () => Promise<PoolClient>,
+  acquire: () => Promise<MonitoredCredentialClient>,
   callback: (connection: CredentialConnection) => Promise<Result>,
 ): Promise<Result> {
-  let client: PoolClient
+  let acquired: MonitoredCredentialClient
   try {
-    client = await acquire()
+    acquired = await acquire()
   } catch (error) {
     if (error instanceof CoordinationError && error.code === 'uow.capacity') {
       throw new CredentialConnectionCapacityError({ cause: error })
     }
     throw error
   }
+  const { client } = acquired
   const connection: CredentialConnection = { query: client.query.bind(client) }
+  let connectionError: Error | undefined
+  const unsubscribe = acquired.subscribe((error) => {
+    if (connectionError) return
+    connectionError = error
+  })
   let outcome: CallbackOutcome<Result>
-  try {
-    outcome = { ok: true, value: await callback(connection) }
-  } catch (error) {
-    outcome = { ok: false, error }
+  if (connectionError) {
+    outcome = { ok: false, error: connectionError }
+  } else {
+    try {
+      outcome = { ok: true, value: await callback(connection) }
+    } catch (error) {
+      outcome = { ok: false, error }
+    }
   }
 
   try {
     client.release(
-      outcome.ok ? undefined : outcome.error instanceof Error ? outcome.error : true,
+      connectionError ??
+        (outcome.ok ? undefined : outcome.error instanceof Error ? outcome.error : true),
     )
   } catch (releaseError) {
-    if (outcome.ok) throw releaseError
+    if (outcome.ok && !connectionError) throw releaseError
+  } finally {
+    unsubscribe()
+    acquired.dispose()
   }
 
+  if (outcome.ok && connectionError) throw connectionError
   if (!outcome.ok) throw outcome.error
   return outcome.value
 }
@@ -65,7 +87,7 @@ export function withTrustedCredentialCapture<Result>(
   options: CredentialConnectionOptions = {},
 ): Promise<Result> {
   return withCredentialConnection(
-    () => getDatabaseRuntime().acquireTrustedCapture(options),
+    () => getDatabaseRuntime().acquireTrustedMonitoredCapture(options),
     callback,
   )
 }
@@ -75,7 +97,7 @@ export function withSubmittedEmailCredentialCapture<Result>(
   options: CredentialConnectionOptions = {},
 ): Promise<Result> {
   return withCredentialConnection(
-    () => getDatabaseRuntime().acquireSubmittedEmailCapture(options),
+    () => getDatabaseRuntime().acquireSubmittedEmailMonitoredCapture(options),
     callback,
   )
 }
@@ -85,7 +107,7 @@ export function withTrustedCredentialControl<Result>(
   options: CredentialConnectionOptions = {},
 ): Promise<Result> {
   return withCredentialConnection(
-    () => getDatabaseRuntime().acquireTrustedControl(options),
+    () => getDatabaseRuntime().acquireTrustedMonitoredControl(options),
     callback,
   )
 }
@@ -95,7 +117,7 @@ export function withSubmittedEmailCredentialControl<Result>(
   options: CredentialConnectionOptions = {},
 ): Promise<Result> {
   return withCredentialConnection(
-    () => getDatabaseRuntime().acquireSubmittedEmailControl(options),
+    () => getDatabaseRuntime().acquireSubmittedEmailMonitoredControl(options),
     callback,
   )
 }

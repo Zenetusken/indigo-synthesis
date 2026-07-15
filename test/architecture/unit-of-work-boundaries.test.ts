@@ -902,6 +902,23 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
     expect(violations).toEqual([])
   })
 
+  it('keeps production UoW runtime wiring schema-blind and limited to Platform factories', () => {
+    const runtimeFactory = 'src/platform/application-coordination/runtime-unit-of-work.ts'
+    const imports = importGraph.edges
+      .filter(({ from }) => projectPath(from) === runtimeFactory)
+      .map(({ specifier }) => specifier)
+      .sort()
+
+    expect(imports).toEqual([
+      './mutation-authority',
+      './postgres-unit-of-work',
+      './prelocked-session',
+      '@/application/coordination',
+      '@/application/coordination/prelocked-session',
+      '@/platform/db/runtime-registry',
+    ])
+  })
+
   it('keeps concrete UoW adapters schema-blind', () => {
     const violations = importGraph.edges
       .filter(({ from }) => {

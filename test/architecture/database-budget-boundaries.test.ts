@@ -121,6 +121,7 @@ describe('database connection budget boundaries', () => {
       [
         'src/platform/db/runtime-registry.ts',
         new Set([
+          'src/platform/application-coordination/runtime-unit-of-work.ts',
           'src/platform/db/client.ts',
           'src/platform/db/credential-connections.ts',
           'src/platform/db/prelocked-control-client.ts',

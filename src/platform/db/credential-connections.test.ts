@@ -13,6 +13,16 @@ import { getDatabaseRuntime } from './runtime-registry'
 
 vi.mock('./runtime-registry', () => ({ getDatabaseRuntime: vi.fn() }))
 
+function deferred<Value>() {
+  let resolve!: (value: Value) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<Value>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, reject, resolve }
+}
+
 function fakeClient(
   input: { readonly release?: (error?: Error | boolean) => void } = {},
 ): PoolClient {
@@ -25,11 +35,21 @@ function fakeClient(
 }
 
 function installRuntime(client: PoolClient) {
+  const monitored = () => ({
+    client,
+    error: (): Error | undefined => undefined,
+    subscribe: vi.fn(() => () => undefined),
+    dispose: vi.fn(),
+  })
   const runtime = {
-    acquireTrustedCapture: vi.fn().mockResolvedValue(client),
-    acquireSubmittedEmailCapture: vi.fn().mockResolvedValue(client),
-    acquireTrustedControl: vi.fn().mockResolvedValue(client),
-    acquireSubmittedEmailControl: vi.fn().mockResolvedValue(client),
+    acquireTrustedMonitoredCapture: vi.fn().mockImplementation(async () => monitored()),
+    acquireSubmittedEmailMonitoredCapture: vi
+      .fn()
+      .mockImplementation(async () => monitored()),
+    acquireTrustedMonitoredControl: vi.fn().mockImplementation(async () => monitored()),
+    acquireSubmittedEmailMonitoredControl: vi
+      .fn()
+      .mockImplementation(async () => monitored()),
   }
   vi.mocked(getDatabaseRuntime).mockReturnValue(runtime as unknown as DatabaseRuntime)
   return runtime
@@ -50,10 +70,14 @@ describe('credential database connections', () => {
     await withTrustedCredentialControl(async () => undefined, { signal })
     await withSubmittedEmailCredentialControl(async () => undefined, { signal })
 
-    expect(runtime.acquireTrustedCapture).toHaveBeenCalledWith({ signal })
-    expect(runtime.acquireSubmittedEmailCapture).toHaveBeenCalledWith({ signal })
-    expect(runtime.acquireTrustedControl).toHaveBeenCalledWith({ signal })
-    expect(runtime.acquireSubmittedEmailControl).toHaveBeenCalledWith({ signal })
+    expect(runtime.acquireTrustedMonitoredCapture).toHaveBeenCalledWith({ signal })
+    expect(runtime.acquireSubmittedEmailMonitoredCapture).toHaveBeenCalledWith({
+      signal,
+    })
+    expect(runtime.acquireTrustedMonitoredControl).toHaveBeenCalledWith({ signal })
+    expect(runtime.acquireSubmittedEmailMonitoredControl).toHaveBeenCalledWith({
+      signal,
+    })
   })
 
   it('physically exposes only a bound query and releases after callback completion', async () => {
@@ -108,7 +132,7 @@ describe('credential database connections', () => {
   it('classifies only acquisition capacity and preserves the same callback error', async () => {
     const acquisitionCapacity = new CoordinationError('uow.capacity')
     const runtime = installRuntime(fakeClient())
-    runtime.acquireTrustedControl.mockRejectedValueOnce(acquisitionCapacity)
+    runtime.acquireTrustedMonitoredControl.mockRejectedValueOnce(acquisitionCapacity)
 
     await expect(
       withTrustedCredentialControl(async () => undefined),
@@ -123,5 +147,102 @@ describe('credential database connections', () => {
         throw callbackCapacity
       }),
     ).rejects.toBe(callbackCapacity)
+  })
+
+  it('rejects a replayed checkout error before capture work and destroys the client', async () => {
+    const connectionFailure = new Error('capture connection failed during handoff')
+    const client = fakeClient()
+    const dispose = vi.fn()
+    const runtime = installRuntime(client)
+    runtime.acquireSubmittedEmailMonitoredCapture.mockResolvedValueOnce({
+      client,
+      error: () => connectionFailure,
+      subscribe(listener: (error: Error) => void) {
+        listener(connectionFailure)
+        return () => undefined
+      },
+      dispose,
+    })
+    const callback = vi.fn(async () => 'must not run')
+
+    await expect(withSubmittedEmailCredentialCapture(callback)).rejects.toBe(
+      connectionFailure,
+    )
+
+    expect(callback).not.toHaveBeenCalled()
+    expect(client.query).not.toHaveBeenCalled()
+    expect(client.release).toHaveBeenCalledWith(connectionFailure)
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('keeps ownership until callback settlement and preserves its error after connection loss', async () => {
+    const connectionFailure = new Error('control connection lost')
+    const callbackFailure = new Error('protected callback failed')
+    const callbackStarted = deferred<void>()
+    const callbackGate = deferred<never>()
+    const client = fakeClient()
+    const dispose = vi.fn()
+    const unsubscribe = vi.fn()
+    let emitConnectionError: (error: Error) => void = () => undefined
+    const runtime = installRuntime(client)
+    runtime.acquireTrustedMonitoredControl.mockResolvedValueOnce({
+      client,
+      error: () => undefined,
+      subscribe(listener: (error: Error) => void) {
+        emitConnectionError = listener
+        return unsubscribe
+      },
+      dispose,
+    })
+
+    const operation = withTrustedCredentialControl(async () => {
+      callbackStarted.resolve(undefined)
+      await callbackGate.promise
+    })
+    await callbackStarted.promise
+    emitConnectionError(connectionFailure)
+    await Promise.resolve()
+
+    expect(client.release).not.toHaveBeenCalled()
+    expect(dispose).not.toHaveBeenCalled()
+    callbackGate.reject(callbackFailure)
+    await expect(operation).rejects.toBe(callbackFailure)
+    expect(client.release).toHaveBeenCalledWith(connectionFailure)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('preserves an observed connection error when poisoned release also throws', async () => {
+    const connectionFailure = new Error('capture connection lost')
+    const releaseFailure = new Error('poisoned release observer failed')
+    const client = fakeClient({
+      release: () => {
+        throw releaseFailure
+      },
+    })
+    const dispose = vi.fn()
+    const unsubscribe = vi.fn()
+    let emitConnectionError: (error: Error) => void = () => undefined
+    const runtime = installRuntime(client)
+    runtime.acquireTrustedMonitoredCapture.mockResolvedValueOnce({
+      client,
+      error: () => undefined,
+      subscribe(listener: (error: Error) => void) {
+        emitConnectionError = listener
+        return unsubscribe
+      },
+      dispose,
+    })
+
+    await expect(
+      withTrustedCredentialCapture(async () => {
+        emitConnectionError(connectionFailure)
+        return 'callback completed'
+      }),
+    ).rejects.toBe(connectionFailure)
+
+    expect(client.release).toHaveBeenCalledWith(connectionFailure)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 })

@@ -168,21 +168,6 @@ export class DatabaseRuntime {
     return this.#ordinaryPool.acquireMonitored(options)
   }
 
-  acquireTrustedControl(
-    options: { readonly signal?: AbortSignal } = {},
-  ): Promise<PoolClient> {
-    return this.#credentialControlPool.acquire({ ...options, priority: 'trusted' })
-  }
-
-  acquireSubmittedEmailControl(
-    options: { readonly signal?: AbortSignal } = {},
-  ): Promise<PoolClient> {
-    return this.#credentialControlPool.acquire({
-      ...options,
-      priority: 'submitted-email',
-    })
-  }
-
   acquireTrustedMonitoredControl(
     options: { readonly signal?: AbortSignal } = {},
   ): Promise<MonitoredPoolClient> {
@@ -201,16 +186,19 @@ export class DatabaseRuntime {
     })
   }
 
-  acquireTrustedCapture(
+  acquireTrustedMonitoredCapture(
     options: { readonly signal?: AbortSignal } = {},
-  ): Promise<PoolClient> {
-    return this.#credentialCapturePool.acquire({ ...options, priority: 'trusted' })
+  ): Promise<MonitoredPoolClient> {
+    return this.#credentialCapturePool.acquireMonitored({
+      ...options,
+      priority: 'trusted',
+    })
   }
 
-  acquireSubmittedEmailCapture(
+  acquireSubmittedEmailMonitoredCapture(
     options: { readonly signal?: AbortSignal } = {},
-  ): Promise<PoolClient> {
-    return this.#credentialCapturePool.acquire({
+  ): Promise<MonitoredPoolClient> {
+    return this.#credentialCapturePool.acquireMonitored({
       ...options,
       priority: 'submitted-email',
     })
