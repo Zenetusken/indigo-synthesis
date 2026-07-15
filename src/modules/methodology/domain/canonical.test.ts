@@ -17,6 +17,12 @@ describe('canonical JSON and SHA-256', () => {
     expect(sha256('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq')).toBe(
       '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
     )
+    expect(sha256('🏋️ café')).toBe(
+      'a4a724bd18290cd824ae2d5f2afa52e48d659f31e5c18d1160af8879af07bc1d',
+    )
+    expect(sha256('a'.repeat(100_000))).toBe(
+      '6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee',
+    )
   })
 
   it('sorts object keys recursively while retaining array order', () => {
