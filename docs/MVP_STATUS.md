@@ -152,8 +152,14 @@ The target architecture describes module-owned gateways and a shared workflow
 - The exercise catalog is represented by development fixture identifiers and immutable
   prescription snapshots rather than a reviewed, licensed Exercises content module.
 - The architecture suite proves the current module graph is acyclic and enforces several
-  import/runtime dependency rules, but it does not yet prove schema/table ownership or
-  require all cross-module work to use public gateways.
+  import/runtime dependency rules, but it does not yet prove schema/table write-authority
+  fencing or require all cross-module work to use public gateways. Draft arc:
+  [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md) (Part A write fence +
+  O1–O6 DoD) and proposed [ADR 0007](architecture/adr/0007-schema-table-ownership.md)
+  (provisional debt template — not accepted). Adversarial review disposition:
+  [SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md](reviews/SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md).
+  Production-release blocker 4 stays open until Part A proofs and a Part B decision with
+  honest status/doc convergence land; ADR merge alone does not close it.
 
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.
@@ -244,8 +250,12 @@ LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 3. Complete independent WCAG 2.2 AA/manual screen-reader review and representative
    physical-device validation; the targeted automated browser checks are not a
    conformance claim.
-4. Extend architecture enforcement to schema/table ownership and either implement the
-   intended public module gateways or accept a narrower boundary in an ADR.
+4. Extend architecture enforcement to schema/table write-authority fencing (spec Part A,
+   O1–O6) and either implement public module gateways / a targeted intermediate (C1–C5)
+   or accept a provisional narrower boundary in an ADR with residual debt refiled and
+   AGENTS/ARCHITECTURE convergence — see
+   [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md). Do not tick this
+   blocker on ADR merge alone.
 5. Obtain independent product/security/privacy review; document and exercise the
    operator's HTTPS deployment; and have a second person cold-install and restore from an
    encrypted off-host backup. The repository now supplies and has exercised the guarded
