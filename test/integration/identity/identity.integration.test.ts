@@ -15,7 +15,7 @@ import {
   issueOwnerBootstrap,
   type OwnerBootstrapError,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import {
   CredentialLifecycleCapacityError,
   credentialLifecycleConnectionLimit,
@@ -408,6 +408,80 @@ describe('identity database boundary', () => {
       .where(eq(session.userId, owner.id))
 
     expect(sessionCount?.value).toBe(1)
+  })
+
+  it('keeps GET session reads fixed-expiry and leaves expired-row cleanup to Identity', async () => {
+    await getDb().delete(session).where(eq(session.userId, owner.id))
+    const signIn = await authRequest('/sign-in/email', {
+      email: owner.email,
+      password: owner.password,
+    })
+    const cookies = signIn.headers
+      .getSetCookie()
+      .map((value) => value.split(';', 1)[0])
+      .filter((value): value is string => value !== undefined)
+      .join('; ')
+    const [created] = await getDb()
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.userId, owner.id))
+    if (!created) throw new Error('Sign-in did not create a session row.')
+
+    const fixedUpdatedAt = new Date('2026-01-01T00:00:00.000Z')
+    const fixedExpiresAt = new Date(Date.now() + 60 * 60 * 1_000)
+    await getDb()
+      .update(session)
+      .set({ updatedAt: fixedUpdatedAt, expiresAt: fixedExpiresAt })
+      .where(eq(session.id, created.id))
+
+    const serverRead = await getAuth().api.getSession({
+      headers: new Headers({ cookie: cookies }),
+      query: { disableCookieCache: true, disableRefresh: true },
+    })
+    const activeRead = await handleAuthGet(
+      new Request(`${getServerConfig().appOrigin}/api/auth/get-session`, {
+        headers: { cookie: cookies },
+      }),
+    )
+    const [afterActiveRead] = await getDb()
+      .select({ updatedAt: session.updatedAt, expiresAt: session.expiresAt })
+      .from(session)
+      .where(eq(session.id, created.id))
+
+    expect(serverRead?.user.id).toBe(owner.id)
+    expect(activeRead.status).toBe(200)
+    expect(await activeRead.json()).not.toBeNull()
+    expect(afterActiveRead).toEqual({
+      updatedAt: fixedUpdatedAt,
+      expiresAt: fixedExpiresAt,
+    })
+
+    const expiredAt = new Date(Date.now() - 60_000)
+    await getDb()
+      .update(session)
+      .set({ expiresAt: expiredAt })
+      .where(eq(session.id, created.id))
+    const expiredServerRead = await getAuth().api.getSession({
+      headers: new Headers({ cookie: cookies }),
+      query: { disableCookieCache: true, disableRefresh: true },
+    })
+    const expiredRead = await handleAuthGet(
+      new Request(`${getServerConfig().appOrigin}/api/auth/get-session`, {
+        headers: { cookie: cookies },
+      }),
+    )
+    const [retainedExpired] = await getDb()
+      .select({ id: session.id, expiresAt: session.expiresAt })
+      .from(session)
+      .where(eq(session.id, created.id))
+
+    expect(expiredServerRead).toBeNull()
+    expect(expiredRead.status).toBe(200)
+    expect(await expiredRead.json()).toBeNull()
+    expect(retainedExpired).toEqual({ id: created.id, expiresAt: expiredAt })
+
+    const externalPost = await authRequest('/get-session', {})
+    expect(externalPost.status).toBe(404)
   })
 
   it('keeps generic signup closed after bootstrap', async () => {

@@ -11,7 +11,7 @@ export type { AuthenticatedActor } from '../application/actor'
 export async function getActor(): Promise<AuthenticatedActor | null> {
   const authSession = await getAuth().api.getSession({
     headers: await headers(),
-    query: { disableCookieCache: true },
+    query: { disableCookieCache: true, disableRefresh: true },
   })
 
   if (!authSession) {

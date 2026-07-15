@@ -26,6 +26,13 @@ function createAuth() {
       minPasswordLength: 12,
       maxPasswordLength: 128,
     },
+    session: {
+      // Session reads are observational. Identity owns bounded expiry cleanup and every
+      // credential mutation; Better Auth must never refresh or delete rows on a read path.
+      deferSessionRefresh: true,
+      disableSessionRefresh: true,
+      cookieCache: { enabled: false },
+    },
     // Indigo exposes only get-session, sign-in/email, and sign-out through its external
     // auth handler. Keep the provider-level denylist as defense in depth; the handler's
     // exact allowlist also fails closed if Better Auth adds another route later.

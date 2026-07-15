@@ -243,12 +243,16 @@ describe('architecture boundaries', () => {
       'utf8',
     )
     expect(actor).toContain('disableCookieCache: true')
+    expect(actor).toContain('disableRefresh: true')
 
     const auth = readFileSync(
       resolve(sourceRoot, 'modules/identity/infrastructure/auth.ts'),
       'utf8',
     )
     expect(auth).toContain('disableSignUp: true')
+    expect(auth).toContain('deferSessionRefresh: true')
+    expect(auth).toContain('disableSessionRefresh: true')
+    expect(auth).toMatch(/cookieCache:\s*\{\s*enabled:\s*false\s*\}/)
     expect(auth).toContain("enabled: config.nodeEnv === 'production'")
     expect(auth).toMatch(/customRules:\s*\{\s*'\/sign-in\/email':\s*false\s*\}/)
     expect(auth).not.toMatch(/\b(?:bearer|refreshToken|jwt)\b/i)
