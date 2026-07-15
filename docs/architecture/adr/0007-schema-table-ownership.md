@@ -10,9 +10,10 @@
   O6 doc convergence happens when Part B lands.
 - Date: 2026-07-14 (revised same day after adversarial review)
 - Relates to: [ADR 0001](0001-modular-monolith.md) (modular monolith deployment shape only)
-- Amends (only if this ADR is **accepted**): see [Consequences](#consequences) — either
-  explicit doc amends **or** residual tracker with AGENTS/ARCHITECTURE left as binding
-  target and this ADR limited to the write fence
+- Disposition: Part A remains the interim fence; the maintainer selected the proper Part B
+  boundary rather than provisional debt ratification. Historical option analysis below is retained
+  as decision provenance; the active implementation sequence is the
+  [development roadmap](../DEVELOPMENT_ROADMAP.md).
 - Spec: [Schema ownership / write-fence enforcement](../SCHEMA_OWNERSHIP_SPEC.md)
 - Review: [Adversarial swarm review](../../reviews/SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md)
 
@@ -51,27 +52,26 @@ residual forever is the best production architecture.
 Full gateways (Option A) bundle several independent interventions. Targeted intermediates
 (C1–C5 in the spec) exist and must be considered on their own costs.
 
-## Decision (proposed)
+## Decision
 
-**If accepted, this ADR decides the following — and only this:**
+This ADR's binding disposition is:
 
 1. **Ship and keep Part A** of the spec: a checked-in **write-authority fence**
-   (`tableWriteFence` + `crossCuttingOperator`) and a CI architecture test (O1–O5).
+   (`tableWriteFence` + `crossCuttingOperator`) and local/pre-merge architecture suite (O1–O5).
    Write sites are fenced; they are **not** redefined as domain ownership.
-2. **Treat residual co-writes and Data Portability operator breadth as declared debt**,
-   with `debt: true` grants and verb-scoped operator allow-lists matching live code
-   (including Data Portability `UPDATE` of `installation_state` on instance reset).
-3. **Do not treat this ADR as terminal modular-boundary architecture** unless the
-   maintainer also completes the [doc convergence](#doc-convergence-required-if-accepted-as-production-boundary)
-   path below. Preferred packaging: **provisional debt ratification** — AGENTS/ARCHITECTURE
-   remain the binding *target*; residual work is refiled under an explicit tracker item;
-   Part A prevents *silent* growth of undeclared writers.
+2. **Build Part B's proper public boundary.** Public module ports, workflow composition, and a
+   shared `UnitOfWork` retire the Programs/Training co-write, audit/safety grants, and Data
+   Portability operator; private-import and peer-table-read guards make the boundary executable.
+   ADRs [0008](0008-calibration-module-boundary.md) and
+   [0009](0009-calibration-live-contract.md) plus the
+   [development roadmap](../DEVELOPMENT_ROADMAP.md) are the implementation record.
+3. **Treat every residual co-write/operator allowance as temporary declared debt only.** Existing
+   `debt: true` grants and verb-scoped operator entries must match live code until their sequenced
+   removal. They are not a terminal exception model and may not silently expand.
 4. **Better Auth** adapter registration under `identity` counts as write authority for
    `user` / `session` / `account` / `verification` (O5). No second adapter elsewhere.
-5. **Blocker 4** is not closed by merging this ADR alone. Closure requires the spec's
-   [O1–O6](../SCHEMA_OWNERSHIP_SPEC.md#8-definition-of-done-o1o6) plus an explicit Part B
-   disposition (this ADR accepted as provisional **or** a gateway/intermediate option
-   chosen) and honest `MVP_STATUS` updates.
+5. **Blocker 4** closes only after Part B removes the current grants/operator, all O1–O6 proof is
+   green, and AGENTS/ARCHITECTURE/MVP status converge. The decision alone does not close it.
 
 **Primary owners for co-written tables** (migration checklist defaults; see spec seed):
 
@@ -83,26 +83,23 @@ Full gateways (Option A) bundle several independent interventions. Targeted inte
 
 ## Consequences
 
-### If accepted as provisional debt ratification (recommended packaging)
+### Active Part B consequence
 
-- Part A CI fence lands; undeclared writes fail.
+- The Part A fence remains; undeclared writes fail.
 - AGENTS.md and ARCHITECTURE.md **remain the target** for public APIs / UnitOfWork /
   "no cross-module tables."
-- A **residual tracker item** is filed (Phase 3 / maintainability), naming at least:
-  Programs↔Training completion write path, audit port, safety_hold API, DP ports,
-  UnitOfWork — or a subset the maintainer prioritizes.
-- `MVP_STATUS` blocker 4 may close **only** if product owners agree provisional fence +
-  residual item satisfies the production-release bar; the Maintainability row is rewritten
-  so "resolve gateway debt" is not falsely marked done.
+- The development roadmap implements the Programs completion port, audit port, safety-hold owner
+  API, Data Portability ports, and `UnitOfWork`; none remains an optional maintainer fork.
+- `MVP_STATUS` blocker 4 stays open until the current grants/operator are gone and O6 converges.
 - New `additionalWriters` debt grants require: non-empty reason, `debt: true`, and
   reviewer answers (why not owner API? new cluster? transaction? DP order? sunset?).
   Expanding an existing reason string to add a **third** module counts as a new cluster
   pressure (re-entry), not free growth.
 
-### Doc convergence required if accepted as production boundary
+### Historical provisional alternative (not selected)
 
-If the maintainer instead wants this ADR to **be** the production module-boundary rule
-(not merely a fence), the **same change** must amend:
+Before Part B was selected, provisional debt ratification was considered. Had that alternative
+become the production boundary, the same change would have needed to amend:
 
 - AGENTS.md architecture bullets (exported API only; UnitOfWork; never private tables) —
   suspend or rewrite for the declared debt set only;
@@ -111,8 +108,9 @@ If the maintainer instead wants this ADR to **be** the production module-boundar
 - MVP_STATUS known-architecture-debt and Maintainability row;
 - relevant `src/modules/*/README.md` target-boundary sentences.
 
-Without those amends, accepting a "narrower boundary" while leaving the higher-precedence
-contract unchanged creates dual source of truth — **rejected packaging**.
+Without those amends, accepting a narrower boundary while leaving the higher-precedence contract
+unchanged would create a dual source of truth. That packaging was rejected; it is not an active
+closure path.
 
 ### Re-entry / revisit triggers (objective enough to avoid permanence-by-default)
 
@@ -156,20 +154,19 @@ At re-entry, the Part A manifest is the migration checklist.
   amends.** Rejected: dual source of truth; confuses write fence with domain ownership;
   underweights product-spine co-writes; moral hazard (`additionalWriters` cheaper than
   ports forever).
-- **C1 — Programs completion write API only.** Training calls Programs to append future
+- **C1 — Programs completion write API.** Training calls Programs to append future
   revision + prescriptions; Programs remains sole aggregate writer. Bounded cost vs A;
-  addresses the highest-churn debt class. **Open maintainer choice** — this ADR does not
-  select C1 by default.
-- **C2 — audit append port.** Small; removes four-way `audit_event` inserts.
-- **C3 — safety_hold single-owner API.** Small–medium; matches DB's two-policy model.
-- **C4 — Data Portability per-module ports.** Medium; matches ARCHITECTURE target;
+  addresses the highest-churn debt class. Selected as part of Part B.
+- **C2 — audit append port.** Selected; removes four-way `audit_event` inserts.
+- **C3 — safety_hold single-owner API.** Selected; matches DB's two-policy model.
+- **C4 — Data Portability per-module ports.** Selected; matches ARCHITECTURE target;
   independent of Programs↔Training.
-- **C5 — UnitOfWork for multi-module writes only.** Medium; currently no implementation
-  under `src/application/workflows/`.
+- **C5 — UnitOfWork for multi-module writes only.** Selected; implemented first under
+  `src/application/workflows/`.
 - **Import-presence ownership as primary enforcement.** Rejected: punishes legitimate
   reads; blind to raw SQL and adapters; wrong invariant. Declared readers may be a
   follow-on (Part A2), not a substitute for the write fence.
-- **Do nothing (no Part A).** Rejected: silent co-write growth continues with no CI
+- **Do nothing (no Part A).** Rejected: silent co-write growth continues with no automated
   signal; blocker 4 measurement debt remains.
 
 ## Notes on measurement

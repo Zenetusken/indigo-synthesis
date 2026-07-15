@@ -108,6 +108,7 @@ The normal local gates are:
 
 ```sh
 pnpm check
+pnpm docs:check
 pnpm typecheck
 pnpm test
 pnpm test:integration
@@ -127,8 +128,9 @@ pnpm test:e2e:llm
 RUNS=3 pnpm llm:archive-product-path   # multi-run archive → tmp/llm-runs/
 ```
 
-`pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The
-database-backed suites are intentionally separate because they require PostgreSQL.
+`pnpm validate` runs static checks, documentation link/anchor validation, unit/domain tests, and a
+production-mode build. The database-backed suites are intentionally separate because they require
+PostgreSQL.
 
 Two opt-in operational proofs are also checked in:
 

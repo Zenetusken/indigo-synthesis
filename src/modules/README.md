@@ -2,17 +2,23 @@
 
 Modules are business boundaries inside one application. They are not services.
 
+Target Part B shape—sequenced by roadmap Stages 3/4 and not live at this checkpoint:
+
 ```text
-identity      athletes      exercises      methodology
-    \            |             |              /
-     \-----------+-------------+-------------/
-                              |
-                           programs
-                              |
-                           training
-                           /      \
-                     progress   data portability
+Application workflows / UnitOfWork
+  ├─ identity/account: identity
+  ├─ initial plan: identity lifecycle fence -> athletes + exercises + methodology + calibration -> programs
+  ├─ train/learn: identity lifecycle fence -> athletes + exercises + training + calibration + programs
+  ├─ history: training -> progress (target extraction)
+  └─ subject controls: module ports -> data portability
 ```
+
+Under that target, every subject workflow captures Identity epoch/generation before queueing and acquires its session-
+level locks before `BEGIN`. Identity's transactional epoch/actor/session/role check is always the
+first authoritative product check. Ordinary workflows next check subject generation before owner
+reads. Root setup alone may ask Athletes to classify the exact setup receipt first: replay must match
+its current stored result generation, and a new command still passes Identity's generation gate
+before any owner mutation.
 
 Rules:
 
@@ -38,3 +44,6 @@ Current executable areas include:
   slice described in `docs/MVP_STATUS.md`
 
 Exercises and Progress remain target modules rather than full live catalogs/read models.
+Calibration is also an accepted target module, sequenced by
+`docs/architecture/DEVELOPMENT_ROADMAP.md`; no executable Calibration module exists at this
+checkpoint.

@@ -1,6 +1,6 @@
 # Engineering MVP status and traceability
 
-Snapshot: 2026-07-13
+Snapshot: 2026-07-15
 Status: working engineering MVP; **not** a production coaching release and **not** the
 canonical Release 1 gate
 
@@ -51,7 +51,7 @@ record. No software test can substitute for that approval.
 | J2 — Set up a trainee | Units, IANA timezone, goal, experience, three training days, session duration, equipment, starting loads, age/technique attestations, and limitation context | Browser journey plus unit conversion tests | Initial setup is immutable in the current UI; a reviewed profile-change/revision workflow is still future work |
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
 | J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after live-source abandonment or completed-source durable invalidation plus abandonment of any already-active affected descendant session; exact PostgreSQL resume; and cause-neutral sign-in return reconstructed only from a UUIDv7 workout identifier and reauthorized after sign-in when the session is absent | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, J7 mid-workout session-revocation case, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session, and unsaved browser fields are not claimed as persisted |
-| J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set correction ledger/projection; feedback-correction entry from History; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression; trainee completed-set correction entry, richer progress aggregates, and comparison remain later Phase 3 work |
+| J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set correction ledger/projection; feedback-correction entry from History; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression. The accepted calibration roadmap plans a narrow exact-source one-set History recovery for Stage 8, but it is not live yet; broad/open-ended or bulk correction management, richer aggregates, and comparison remain later Phase 3 work |
 | J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones; and a guarded PostgreSQL backup/restore procedure with an exercised disposable-database drill | Main and cross-user browser journeys, portability integration tests, and the retained backup/restore drill record | Export is subject-scoped; operators still own encrypted off-host retention, deployment-specific restore practice, runtime-secret custody, and any future media boundary |
 
 The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
@@ -83,8 +83,11 @@ repository as follows:
   Signing in resumes the exact committed workout; the denied command is not replayed and
   unsaved browser fields are not represented as durable.
 - **Threat controls.** Email-first and account-scoped lifecycle locks serialize sign-in,
-  creation, and recovery; their dedicated connections and both waiter queues
-  are bounded, with trusted host/account work prioritized; web admission uses HMAC-keyed
+  creation, and recovery. The live J7–J9 checkpoint still uses four bounded raw lifecycle clients
+  beside the normal pool, with trusted host/account work prioritized. Accepted Part B Stage 3—not
+  yet live—replaces that allocation with one installation-wide ordinary/control/capture plus
+  external-host budget and bounded priority queues, configured by `INDIGO_DATABASE_POOL_MAX`
+  (default 10, range 6–64); there is no unused runtime-health reservation; web admission uses HMAC-keyed
   fixed-window buckets and bounded cleanup; member-code backoff does not consume the
   code; session cookie caching is disabled; unsupported Better Auth identity-mutation
   routes are blocked; and audit addresses are minimized.
@@ -108,7 +111,7 @@ Account security follow-on, not unfinished J7–J9 work.
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
 | Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with live-source abandonment or completed-source durable-invalidation prerequisite, no medical-clearance implication, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
 | Accessibility/mobile | Semantic server-rendered UI plus targeted Playwright proof at 390×844 for reflow, 200% text sizing, 48px controls, skip-link/focus visibility, keyboard form order and focus continuation, changing polite save status, distinct titles, reduced motion, and no horizontal overflow | Independent WCAG 2.2 AA review, manual screen-reader certification, and representative physical-device testing |
-| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, and executable guards for domain purity, dependency direction, platform independence, runtime outbound clients/remote assets, and an acyclic module graph | Extend enforcement to schema/table ownership and resolve the cross-module gateway debt below |
+| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, executable dependency/runtime guards, and the shipped O1–O5 schema write-authority fence | Implement accepted Part B: UnitOfWork/public ports, remove current debt/operator breadth, enforce public/private read boundaries, and complete O6 |
 
 ## Validation commands
 
@@ -141,7 +144,9 @@ training content or, by itself, satisfy the Product Spec's final release gate.
 ## Known architecture debt
 
 The target architecture describes module-owned gateways and a shared workflow
-`UnitOfWork`. The vertical slice has not completed that refactor:
+`UnitOfWork`. Part A of the schema-ownership arc shipped in #9: all live schema tables are
+manifested bijectively and every observed DML write is checked against owner/debt/operator grants.
+The maintainer selected the proper Part B boundary in #12. Runtime implementation remains open:
 
 - Programs and Training currently coordinate through direct Drizzle queries over the
   shared schema for some cross-module workflows.
@@ -152,14 +157,14 @@ The target architecture describes module-owned gateways and a shared workflow
 - The exercise catalog is represented by development fixture identifiers and immutable
   prescription snapshots rather than a reviewed, licensed Exercises content module.
 - The architecture suite proves the current module graph is acyclic and enforces several
-  import/runtime dependency rules, but it does not yet prove schema/table write-authority
-  fencing or require all cross-module work to use public gateways. Draft arc:
-  [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md) (Part A write fence +
-  O1–O6 DoD) and proposed [ADR 0007](architecture/adr/0007-schema-table-ownership.md)
-  (provisional debt template — not accepted). Adversarial review disposition:
-  [SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md](reviews/SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md).
-  Production-release blocker 4 stays open until Part A proofs and a Part B decision with
-  honest status/doc convergence land; ADR merge alone does not close it.
+  import/runtime dependency rules, and the write fence proves current DML authority. It does not
+  yet require public peer-module entrypoints, reject peer-table reads, or route all cross-module
+  work through transaction-scoped gateways. The accepted implementation sequence is
+  [DEVELOPMENT_ROADMAP.md](architecture/DEVELOPMENT_ROADMAP.md), grounded in the retained
+  [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md) census and accepted
+  [ADR 0007](architecture/adr/0007-schema-table-ownership.md).
+  Production-release blocker 4 remains open until Part B implementation removes the current debt
+  and Data Portability operator breadth and O6 status/documentation converges.
 
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.
@@ -250,12 +255,10 @@ LLM/ML **coaching** remains deferred. CI does not require GGUF weights.
 3. Complete independent WCAG 2.2 AA/manual screen-reader review and representative
    physical-device validation; the targeted automated browser checks are not a
    conformance claim.
-4. Extend architecture enforcement to schema/table write-authority fencing (spec Part A,
-   O1–O6) and either implement public module gateways / a targeted intermediate (C1–C5)
-   or accept a provisional narrower boundary in an ADR with residual debt refiled and
-   AGENTS/ARCHITECTURE convergence — see
-   [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md). Do not tick this
-   blocker on ADR merge alone.
+4. Complete accepted schema-ownership Part B: implement the shared UnitOfWork and public module
+   ports, retire every current co-write grant and Data Portability operator breadth, enforce
+   public/private read boundaries, and finish O6 AGENTS/ARCHITECTURE/status convergence. Part A
+   O1–O5 shipped in #9 and the boundary decision landed in #12; neither alone closes this blocker.
 5. Obtain independent product/security/privacy review; document and exercise the
    operator's HTTPS deployment; and have a second person cold-install and restore from an
    encrypted off-host backup. The repository now supplies and has exercised the guarded

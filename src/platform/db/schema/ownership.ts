@@ -10,7 +10,7 @@
  *
  * Source of truth: docs/architecture/SCHEMA_OWNERSHIP_SPEC.md §4 (the seed).
  * Decision record: docs/architecture/adr/0007-schema-table-ownership.md
- * (status: proposed).
+ * (Part A accepted/shipped; Part B accepted for implementation).
  *
  * Enforcement split:
  * - Compile time (O1, at `tsc`): `SqlTableName` is derived from the parsed

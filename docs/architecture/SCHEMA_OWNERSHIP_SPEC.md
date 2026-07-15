@@ -1,31 +1,33 @@
 # Schema/table write-fence enforcement (arc spec)
 
-Status: **draft for implementation** — engineering arc spec, measure-first; revised after
-adversarial review (`docs/reviews/SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md`)
+Status: **Part A implemented and shipped (#9); Part B decided (#12)** — retained as the
+write-fence contract, measured census, and historical decision pack. Active Part B implementation
+is sequenced by [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md).
 Scope owner: architecture / platform
 
 This specifies production-release blocker 4 in
 [MVP_STATUS.md](../MVP_STATUS.md#production-release-blockers) ("Extend architecture
 enforcement to schema/table ownership and either implement the intended public module
-gateways or accept a narrower boundary in an ADR"). The blocker is deliberately two
-things, and this spec keeps them separate:
+gateways or accept a narrower boundary in an ADR"). The quoted wording records the original fork;
+the proper-gateway branch is now selected. The blocker remains two things, and this spec keeps them
+separate:
 
-- **Part A (mandatory, fork-independent):** a checked-in **write-authority fence** —
+- **Part A (mandatory and shipped):** a checked-in **write-authority fence** —
   who may currently issue DML against each table — plus an architecture test that enforces
-  it. Wanted no matter which Part B fork wins. This is a **debt fence and migration
-  checklist**, not a claim that write sites equal domain ownership.
-- **Part B (the decision):** structural boundary work (gateways / ports / UnitOfWork) **or**
-  provisional debt ratification in an ADR **or** a targeted intermediate. This is a
-  genuine fork and is **not** resolved here — see [§6](#6-part-b--the-decision-pack--not-resolved-here)
-  and proposed [ADR 0007](adr/0007-schema-table-ownership.md) (status *proposed*).
+  it. This is a **debt fence and migration checklist**, not a claim that write sites equal domain
+  ownership.
+- **Part B (decided):** the maintainer chose the proper structural boundary—public module ports,
+  a shared UnitOfWork, and removal of current debt/operator breadth—rather than provisional debt
+  ratification. See [§6](#6-part-b--decision-provenance-and-disposition) and accepted
+  [ADR 0007](adr/0007-schema-table-ownership.md).
 
 Every quantitative claim below is grounded in a measured census of the live tree (and
 independently re-verified during adversarial review), not intent.
 
 **What this arc does not claim**
 
-- It does **not** change product journeys (J1–J6), implement UnitOfWork, or extract Progress.
-- It does **not** close blocker 4 on ADR merge alone — see [§8](#8-definition-of-done-o1o6).
+- Part A did **not** change product journeys (J1–J6), implement UnitOfWork, or extract Progress.
+- Part A did **not** close blocker 4 on merge — see [§8](#8-definition-of-done-o1o6).
 - Part A does **not** enforce read boundaries, public application APIs, or domain aggregate
   ownership. Those remain the AGENTS.md / ARCHITECTURE.md target until Part B changes them.
 
@@ -34,8 +36,8 @@ independently re-verified during adversarial review), not intent.
 ## 1. What the architecture docs already claim
 
 `MVP_STATUS.md` records the gap: the architecture suite proves the module graph is acyclic
-and enforces several import/runtime dependency rules, but does not yet prove schema/table
-ownership or require all cross-module work to use public gateways. Under **Known
+and enforces several import/runtime dependency rules plus current write authority, but does not yet
+require all cross-module work to use public gateways or reject peer-table reads. Under **Known
 architecture debt** it lists (among other items) that Programs and Training currently
 coordinate through direct Drizzle over the shared schema, and that Data Portability
 intentionally uses a direct, repeatable-read projection and ordered deletion transaction
@@ -47,7 +49,7 @@ The **target** boundary rules live in [AGENTS.md](../../AGENTS.md) and
 shared `UnitOfWork` port; modules do not reach across to another module's tables).
 [ADR 0001](adr/0001-modular-monolith.md) decides the modular-monolith deployment shape; it
 does **not** itself define gateways or UnitOfWork. The vertical slice has not built those
-gateways. Part A turns the *measured write sites* into a CI fence; it does not silently
+gateways. Part A turns the *measured write sites* into a local/pre-merge architecture fence; it does not silently
 rewrite the target rules.
 
 ---
@@ -129,7 +131,7 @@ product-module writer**; **6 are co-written**. Partition of all 36:
 | `safety_hold` | `athletes` | Eligibility policy home; session-pain raise is debt until an athletes API |
 
 Single-writer product modules (28 tables): **identity** 8, **training** 14, **athletes** 4,
-**programs** 2. **data-portability** owns 2. Full rows: [§4 seed](#41-exhaustive-seed-36-tables).
+**programs** 2. **data-portability** owns 2. Full rows: [§4 seed](#42-exhaustive-seed-36-tables).
 
 `exercises`, `methodology`, and `progress` currently write **zero** tables:
 
@@ -303,13 +305,12 @@ The operator arrays list **only non-owned** tables. DP-owned tables (`deletion_p
 here would be a redundant second authority that could mask a removed owner grant — they are
 intentionally excluded. No other module may hold whole-schema read/delete breadth.
 
-### 4.3 What the seed means under either Part B fork
+### 4.3 What the seed means under selected Part B
 
-The seed encodes **current measured reality**. Under Option A / C1–C5 it becomes the
-migration checklist (debt grants shrink). Under provisional ADR ratification it remains
-the CI fence while residual debt stays tracked. Encoding today's writers is not the same
-as permanently blessing them as domain co-owners — debt flags and Part B exist for that
-distinction.
+The seed encodes **current measured reality**. Under selected Option A / C1–C5 it is the
+migration checklist: debt grants shrink to zero and the operator is removed. Provisional ADR
+ratification remains historical option analysis only. Encoding today's writers is not the same as
+permanently blessing them as domain co-owners — debt flags and Part B exist for that distinction.
 
 ---
 
@@ -438,10 +439,12 @@ does not grant rewrite rights.
 
 ---
 
-## 6. Part B — the decision pack — NOT resolved here
+## 6. Part B — decision provenance and disposition
 
-Part B chooses how far the **structural** boundary moves beyond the write fence. This
-spec does **not** self-accept an ADR or convert a recommendation into shipped gateways.
+This section preserves the alternatives that were presented before the maintainer decision.
+Part B is now resolved: build the proper boundary through the accepted calibration/UnitOfWork arc,
+then remove the current grants/operator and complete O6. The options below remain historical
+decision provenance, not open implementation forks.
 
 ### 6.1 Options (including intermediates)
 
@@ -459,33 +462,27 @@ spec does **not** self-accept an ADR or convert a recommendation into shipped ga
 C1 is a bounded extract around an existing completion transaction; audit and safety are
 separate small ports; DP and UnitOfWork are independent decisions.
 
-### 6.2 Recommendation posture (non-binding)
+### 6.2 Historical recommendation posture
 
 - **Ship Part A** regardless of Part B (mandatory floor).
 - **Do not accept ADR 0007 as drafted in the pre-review form** (terminal "narrower
-  ownership boundary" without doc convergence). The proposed ADR is revised as
-  *provisional debt ratification* template — maintainer still chooses.
+  ownership boundary" without doc convergence). The ADR was revised as a provisional-debt
+  template before the maintainer later selected the proper boundary.
 - **Present C1–C5 as first-class alternatives.** Preferring census "only 6 tables" as an
   argument for pure B is weak: those tables include the product spine. Preferring pure A
   as the only alternative overstates cost.
-- **Building C1 (or any C*) is the maintainer's Part B call** and stays open. This revision
-  **must not** silently convert the recommendation into "implement C1 now."
+- **Building C1 (or any C*) was the maintainer's Part B call.** #12 selected the full proper
+  boundary; the active roadmap sequences C1–C5 rather than treating them as optional debt.
 
-Until ADR status is `accepted` or a gateway option is chosen, **AGENTS.md and
-ARCHITECTURE.md remain the binding target**; Part A is a fence on current writers only.
-
-Proposed decision record: [ADR 0007](adr/0007-schema-table-ownership.md) (status
-*proposed*).
+**AGENTS.md and ARCHITECTURE.md remain the binding target**; Part A is still only a fence on
+current writers. Accepted decision record: [ADR 0007](adr/0007-schema-table-ownership.md).
 
 ### 6.3 Blocker 4 closure rule
 
-Accepting an ADR **or** implementing gateways can close the *letter* of blocker 4 only
-when [§8](#8-definition-of-done-o1o6) is satisfied. ADR merge alone does **not** tick the
-blocker. If provisional B is chosen, residual gateway/port debt must be **refiled** under
-an explicit tracked item (Phase 3 / maintainability) so "resolved" is not a laundering of
-incompleteness. The MVP Maintainability row ("resolve the cross-module gateway debt")
-must be rewritten in the same change if B is accepted as "declared+fenced," or left open
-if residual debt remains.
+The selected proper boundary closes blocker 4 only when
+[§8](#8-definition-of-done-o1o6) is satisfied, every current grant/operator is removed, and the
+binding architecture/status docs converge. ADR merge alone does **not** tick the blocker.
+Provisional debt ratification is historical alternative analysis, not an open closure path.
 
 ---
 
@@ -493,20 +490,20 @@ if residual debt remains.
 
 | Item | Deferred? | Condition |
 | --- | --- | --- |
-| Full UnitOfWork + workflow adapters | Yes as product scope | Only honest if Part B **explicitly** leaves AGENTS UoW language aspirational and multi-module co-writes keep initiator transactions |
+| Full UnitOfWork + workflow adapters | No; active Part B work | Development roadmap Stages 3/6 |
 | Progress read-model / History split | Yes | Part A will **not** catch Progress SELECTs of Training tables |
 | Exercises content schema | Yes | Do not invent catalog tables in this arc |
-| Data Portability export **shape** | Yes | Operator verb matrix in §4 is in scope; payload shape is not |
+| Data Portability export **shape** | No for newly persisted personal data | New tables enter export/deletion immediately; Stage 9 later replaces operator breadth with ports |
 | DB role separation / RLS | Yes | Residual static-only limit |
-| Implementing C1–C5 | Yes unless Part B chooses them | Spec may describe; code is maintainer call |
+| Implementing C1–C5 | No; selected | Active Part B endpoint; sequenced by the development roadmap |
 
 ---
 
 ## 8. Definition of done (O1–O6)
 
-A green architecture test alone does **not** complete this arc. All of the following are
-required to claim Part A done; blocker 4 additionally requires a Part B decision with
-doc/status convergence (§6.3).
+A green architecture test alone did **not** complete this arc. O1–O5 shipped in #9; O6 remains
+open until the selected Part B boundary is implemented and status/docs converge. Blocker 4 closes
+only then.
 
 | ID | Claim | Proof |
 | --- | --- | --- |
@@ -515,12 +512,30 @@ doc/status convergence (§6.3).
 | **O3** | Stale debt grants fail | Synthetic unused `additionalWriters` fixture + live stale check |
 | **O4** | Only `data-portability` holds cross-cutting operator breadth; ops match matrix | Scan + fixture; includes `installation_state` UPDATE authorization |
 | **O5** | Auth tables identity-owned; adapter registration = write authority; no second adapter | Adapter path assertion + owner seed; no local `.insert(session)` required for identity satisfaction |
-| **O6** | Docs/status honest | Same change: this spec status; ADR status decision path; `MVP_STATUS.md` known-debt / blocker 4 text; if Part B accepts provisional boundary, AGENTS/ARCHITECTURE amends **or** residual tracker ID left open |
+| **O6** | Docs/status honest | Same change: this spec and ADRs reflect the selected proper boundary; AGENTS/ARCHITECTURE match executable public-port/read rules; `MVP_STATUS.md` closes known debt/blocker 4 only after every current grant/operator is removed |
+
+Part A's `externalWriters` vocabulary attributes declared database triggers, but its TypeScript DML
+scanner cannot discover trigger-function bodies. Before Stage 4 adds a second product trigger, the
+Part B roadmap therefore requires a bidirectional migration-trigger **edge** census of the effective
+post-ledger live graph. The test replays checked-in migrations in order into disposable PostgreSQL,
+reads live `pg_trigger` plus `pg_get_functiondef`, and maps each object to its last effective source
+migration; an equivalent ordered create/replace/drop resolver is acceptable only if catalog parity is
+proved. Historical superseded function bodies and dropped triggers/functions remain migration history
+but are not live edges. Every effective DML edge records trigger/function, last source migration,
+firing source table/event and source owner, plus target table/op and target owner; every target has a
+physical `db-trigger` attribution and every attribution resolves to a live edge. Fixtures replace a
+function body and drop a trigger/function so stale historical DML can neither false-fail nor survive
+the census. `db-trigger` is not neutral module authority. Cross-owner edges require explicit bounded
+debt and a removal stage. The live Training `program_revision_invalidation` effect trigger's
+Programs targets are therefore visible debt, and Stage 6 must replace them with Training/Programs
+owner gateway calls and drop the effect trigger/function. Final Part B architecture proof rejects all
+trigger-mediated cross-owner DML. This extension strengthens future O2/O5 coverage; it does not
+retroactively overstate #9's recorded proof.
 
 **Non-claims:** Part A does not advance J1–J6 product truth, does not implement UnitOfWork,
 and does not close independent security/operator blocker 5.
 
-### 8.1 First implementation PR checklist
+### 8.1 Historical Part A implementation checklist
 
 1. Land `ownership.ts` with the §4.2 seed (no invented primary owners).  
 2. Land scanner + `schema-ownership.test.ts` meeting O1–O5 fixtures.  
@@ -534,6 +549,7 @@ and does not close independent security/operator blocker 5.
 
 Maintainer-verified findings from
 [SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md](../reviews/SCHEMA_OWNERSHIP_ADVERSARIAL_REVIEW.md)
-drive this revision: Part A hardened as write fence; ADR 0007 revised as provisional debt
-template (not accepted as pre-review terminal Option B); decision pack re-opened with
-C1–C5; O1–O6 is the arc DoD; blocker 4 not ticked on ADR merge alone.
+drive the Part A revision: Part A hardened as a write fence; ADR 0007 rejected terminal
+provisional debt as the endpoint; C1–C5 were exposed separately; O1–O6 remained the arc DoD.
+Subsequently #9 shipped O1–O5 and #12 selected the proper Part B boundary. Blocker 4 remains open
+until implementation plus O6, not merely the decision.

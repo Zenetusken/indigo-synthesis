@@ -12,8 +12,9 @@ That fixture is visibly unreviewed and configuration rejects it in production.
 
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
 reviewed content and golden examples, independent WCAG/screen-reader and physical-device
-review, schema/table-ownership enforcement, and independent product/security/privacy
-review. The committed 19-test tree has retained outbound-network-denied proof; that proof
+review, completion of accepted schema-ownership Part B (the Part A write fence shipped in #9),
+and independent product/security/privacy review. The committed 19-test tree has retained
+outbound-network-denied proof; that proof
 must be rerun after relevant code or default-suite changes. Targeted automated
 accessibility/mobile checks already pass; they are not a conformance claim. Current
 traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
@@ -50,6 +51,12 @@ access/recovery cases, passed from committed product tree
 named Account security follow-on—session management plus a security-events view and
 sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
 for independent security/privacy review.
+
+Accepted calibration Part B Stage 3 amends only the connection allocation: it will replace the live
+normal-pool-plus-four-lifecycle-client topology with one bounded ordinary/control/capture/external-
+host budget configured by `INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64). No unused runtime-
+health lane is reserved; startup preflight uses the serialized external slot. That allocation is
+planned, not part of the retained J7–J9 evidence above.
 
 ## Gate 0 — Product truth
 
@@ -92,10 +99,10 @@ Gate:
 - all checks green.
 
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
-configuration validation, local assets, and executable module-boundary guards are
-implemented. A no-default-route namespace runner has passed the complete 19-test tree
-from a clean product commit; schema/table-ownership enforcement remains open release
-work.
+configuration validation, local assets, executable module-boundary guards, and the Part A
+schema write-authority fence are implemented. A no-default-route namespace runner has passed the
+complete 19-test tree from a clean product commit; the accepted Part B public ports/UnitOfWork/read
+boundaries and O6 convergence remain open release work.
 
 ## Phase 2 — First vertical slice
 
@@ -141,7 +148,9 @@ Only after Phase 2:
 - PR definitions and source sets;
 - mathematically defined volume;
 - schedule-aware weekly adherence;
-- trainee entry and review of audited completed-set corrections;
+- broad/open-ended trainee review, bulk editing, and management of audited completed-set
+  corrections (the calibration arc's exact-source one-set recovery is the narrower prerequisite,
+  not this Phase 3 experience);
 - program revision history and comparison; and
 - clearer explanation/source inspection (optional host-local grounded prose per
   [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md), only after the
@@ -156,9 +165,11 @@ Gate:
 
 Checkpoint: the append-only completed-set correction ledger/projection, completion-feedback
 entry, recursive decision/revision invalidation, factual History correction provenance,
-and optional host-local History explanations are implemented. Trainee completed-set
-correction entry, exercise-specific aggregates, e1RM/PR/volume/adherence definitions, and
-program comparison remain open, so Phase 3 is not closed.
+and optional host-local History explanations are implemented. The accepted calibration engineering
+roadmap plans—but has not yet shipped—the narrow source-linked one-set History editor required to
+recover an exact invalid/incorrect calibration fact in Stage 8. Broad/open-ended or bulk correction
+management, exercise-specific aggregates, e1RM/PR/volume/adherence definitions, and program
+comparison remain Phase 3 work, so Phase 3 is not closed.
 
 ## Phase 4 — Small private beta
 

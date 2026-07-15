@@ -22,16 +22,11 @@ RSC pages + focused client interaction + server actions
   ▼
 Application use cases and transaction boundaries
   │
-  ├──────────┬───────────┬────────────┬───────────┐
-  ▼          ▼           ▼            ▼           ▼
-Identity   Athletes   Exercises   Methodology   Programs
-                                      │           │
-                                      └─────┬─────┘
-                                            ▼
-                                         Training
-                                            │
-                                            ▼
-                                         Progress
+  ├─ identity/account: Identity
+  ├─ initial plan: Identity lifecycle fence → Athletes + Exercises + Methodology + Calibration → Programs
+  ├─ train/learn: Identity lifecycle fence → Athletes + Exercises + Training + Calibration + Programs
+  ├─ history/read models: Training → Progress (target extraction)
+  └─ subject controls: module ports → Data Portability
   │
   ▼
 Infrastructure ports
@@ -74,6 +69,17 @@ substitutions, safety tier, and content provenance.
 A pure TypeScript engine plus immutable reviewed rule/template references. It has no
 framework, database, clock, randomness, environment, or network dependency.
 
+### Calibration
+
+Accepted Part B target, not yet implemented: a pure deterministic load-adaptation engine plus
+Calibration-owned append-only estimate, compute-basis, and invalidation lineage. Application workflows pass facts
+through public ports: initial provenance stays in Programs, while Training retains post-session
+decision/invalidation/explanation ownership. Calibration reads no peer tables. Conservative
+starting loads remain working-load facts rather than e1RM evidence; exact loadability comes from
+Athletes-owned immutable bar/plate versions. See
+[the calibration contract](CALIBRATION_SPEC.md) and
+[ADR 0009](adr/0009-calibration-live-contract.md).
+
 ### Programs
 
 Owns instantiated plans, immutable revisions, phase/week/workout ordering, prescription
@@ -98,14 +104,17 @@ arbitrary tables or become a second owner of personal data.
 
 The module descriptions above are the target boundaries. The current engineering slice
 still performs some cross-module Programs/Training coordination through direct Drizzle
-queries. Data Portability uses one direct repeatable-read projection and ordered
-deletion transaction while module-owned export/deletion gateways remain unimplemented.
+queries. Data Portability uses one direct repeatable-read export projection, one serializable
+planning/count/digest transaction, and—after user confirmation/reauthentication—a separate
+serializable revalidation/delete/tombstone transaction while module-owned export/deletion gateways
+remain unimplemented.
 History queries also remain in Training until a real Phase 3 Progress contract exists.
 
 These are explicit convergence tasks, not hidden exceptions. The architecture suite now
 guards domain purity, dependency direction, platform independence, runtime outbound
-clients/remote assets, and an acyclic module graph. Executable schema/table-ownership and
-public-gateway enforcement are still required. See
+clients/remote assets, and an acyclic module graph. The shipped Part A write-authority fence
+additionally enforces a schema/manifest bijection and authorizes every observed DML write. Public
+gateway/private-import enforcement and peer-table read boundaries remain Part B work. See
 [the debt register](../MVP_STATUS.md#known-architecture-debt).
 
 ## Dependency rules
@@ -161,13 +170,71 @@ as success.
 
 ## Request and mutation flow
 
-1. A server component or route resolves the authenticated session.
-2. Boundary input is parsed once with Zod.
-3. The application use case authorizes the actor and opens a transaction when needed.
-4. Domain values and policies enforce invariants.
-5. Repositories persist through the module's schema ownership.
-6. The use case returns a typed result suitable for the UI.
-7. The UI shows success, unavailable, conflict, validation, or unauthorized explicitly.
+This is the accepted Part B target flow; the current vertical-slice debt is described above and the
+[development roadmap](DEVELOPMENT_ROADMAP.md) sequences its cutover.
+
+1. A server component or route parses boundary input once with Zod. For a sealed content plan it first
+   performs only encoded-size, base64url, canonical-schema/order/cardinality, and constant-time MAC
+   checks. Invalid or tampered tokens stop without a database connection or queue permit.
+2. The issued form/command carries the captured installation epoch and, for subject work, lifecycle
+   generation plus a server-signed canonical `content-lock-plan-v1` envelope. Raw submitted IDs/keys
+   never select locks. The envelope binds immutable server-issued shape/purpose, account/subject,
+   preallocated form/command ID, ordered source entity IDs, owner-slot manifest, lifecycle
+   expectations, bytewise-sorted distinct keys, closed 0/1/exactly-2/2–4/2–64 cardinalities (the
+   methodology/template pair is mandatory for publication), and a 16 KiB encoded limit. It is
+   canonical base64url JSON plus an
+   HMAC-SHA-256 derived from `BETTER_AUTH_SECRET` under a versioned domain. Values entered at submit
+   time are parsed/intent-hashed separately and never cause action-entry resigning or lock selection.
+   HMAC authenticates but does not encrypt: the decodable payload contains only non-secret,
+   already-authorized identifiers/content coordinates, is never logged or echoed, and is never
+   trusted without scoped verification plus fresh owner re-derivation.
+3. Signed cookie material is then verified. When the account key requires a database lookup, one
+   bounded trusted capture lease resolves it without authorizing mutation. Actor/account/subject/
+   purpose/form/source/lifecycle binding failures stop after at most that capture lease and before
+   ordinary/control UoW admission. Submitted IDs are never authority.
+4. Application coordination invokes a neutral
+   `withVerifiedContentLockPlan(envelope, bindings, callback)` port. Platform alone owns HMAC/key and
+   raw canonical keys inside opaque owner projections. It creates a one-use, callback-scoped nominal
+   capability, immediately enters bounded admission, and revokes it in `finally` on every outcome.
+   There is no global capability registry; domain/workflow/application code cannot import Platform
+   crypto or inspect/forge projections.
+5. The application checks out one dedicated database connection and acquires every known session-
+   level key in global order: credential authority, product fence, subject, then lexical content
+   release keys.
+6. Only after all waits finish does the adapter `BEGIN` at the use case's required isolation and bind
+   transaction-scoped module gateways plus a scoped opaque locked-content attestor.
+7. Identity performs the first authoritative transactional recheck of installation epoch and actor/
+   session/role authority. A stale queued request fails before any product-owner read or write.
+8. Ordinary subject workflows then recheck generation before owner reads. Root setup is the sole
+   replay exception: Athletes may read/classify the exact setup receipt first; exact replay must match
+   its stored/current result generation, while only a new command proceeds to Identity's expected-
+   generation gate. No owner mutation precedes that gate.
+9. For every ordinary receipt-bearing command, its owning gateway now classifies the stored command
+   identity plus stable-intent hash. Exact replay returns the original persisted result without later
+   content/source/planning gates; mismatched reuse conflicts; only a new command proceeds. Plan
+   structure/MAC/binding, current Identity authority, and current generation have already passed, so
+   replay cannot cross actor, installation, or subject lifecycle authority. Root setup remains the
+   sole classifier that runs before generation.
+10. Every shape-required owner re-reads only its owned authoritative state—rows where applicable and
+   Methodology's code-installed release registry—and returns a fresh, transaction-bound opaque
+   projection fragment. The neutral attestor requires the exact closed owner-slot union and compares
+   its hidden key bytes, purpose, source IDs, and transaction scope with the prelocked plan. A missing,
+   duplicate, extra, wrong-scope, or changed fragment fails `content-lock-plan.stale` before mutation;
+   Platform reads no product state and workflow code sees no keys or DML.
+11. Owner gateways revalidate their domain invariants. For corrections the locked set is the full
+    source-derived potential-impact union across every legal submitted shape; only now do parsed
+    values select an actual causal invalidation subset contained by that union.
+12. Repositories persist only their module's schema through the same transaction/connection.
+13. Commit succeeds as one unit; all capabilities/fragments are revoked and locks released in
+    unconditional cleanup, then server state is revalidated or redirected as required.
+14. The UI shows success, unavailable, conflict, validation, or unauthorized explicitly.
+
+`content-lock-plan.stale` discards the old token and refreshes/reissues the authorized form; safe
+normalized values may be retained only for the same still-authorized source and require user review
+and resubmission. It is never an automatic mutation retry. `content-lock-plan.invalid` is a generic,
+non-echoing validation/security rejection followed by a fresh authorized reload. Transactional
+epoch/generation/authority results retain their existing routes and precede plan currency;
+`uow.capacity` and `uow.lock-timeout` remain distinct retryable service states.
 
 A validator never consumes a request body and then asks a handler to parse it again.
 
@@ -257,7 +324,8 @@ authoring/activation, and its operator workflow still require the future catalog
 
 - program
 - program revision
-- append-only revision lineage and correction-led invalidation
+- append-only revision lineage (currently Training-owned; Part B transfers it to Programs in Stage 6)
+- Training-owned correction invalidation provenance
 - planned workout
 - exercise/set prescription snapshot
 - append-only exact-version methodology/template release revocation
