@@ -18,10 +18,12 @@
  *   `satisfies Record<SqlTableName, …>` plus the bijection guard below fail the
  *   build if a table is added, renamed, or dropped without a matching manifest
  *   edit. This realizes spec §4.1's mapped-type contract.
- * - Runtime (O2–O5): the write census and authorization checks live in a
- *   separate, not-yet-landed test (test/architecture/schema-ownership.test.ts).
- *   Until it lands, *authorization* is declared, not enforced; *coverage* (O1)
- *   is already enforced here by the type system.
+ * - Runtime (O2–O5): the write census and authorization checks live in
+ *   test/architecture/schema-ownership.test.ts (landed in #9), run by
+ *   `pnpm test` / `pnpm validate` — so *authorization* is checked by the suite,
+ *   not merely declared. (There is no in-repo CI pipeline; the check is the
+ *   local / pre-merge suite.) *coverage* (O1) is additionally enforced here by
+ *   the type system.
  *
  * Keys are SQL table names (the `pgTable` first argument), not Drizzle export
  * bindings.
