@@ -5,6 +5,7 @@ const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
 const serverConfigSchema = z
   .object({
     DATABASE_URL: z.string().url().startsWith('postgresql://'),
+    INDIGO_DATABASE_POOL_MAX: z.coerce.number().int().min(6).max(64).default(10),
     BETTER_AUTH_SECRET: z.string().min(32).max(512),
     BETTER_AUTH_URL: z.string().url(),
     INDIGO_CONTENT_MODE: z.enum(['development', 'reviewed']).default('reviewed'),
@@ -33,6 +34,7 @@ const serverConfigSchema = z
 
 export type ServerConfig = {
   readonly databaseUrl: string
+  readonly databasePoolMax: number
   readonly authSecret: string
   readonly appOrigin: string
   readonly contentMode: 'development' | 'reviewed'
@@ -65,6 +67,7 @@ export function parseServerConfig(
 
   return {
     databaseUrl: parsed.data.DATABASE_URL,
+    databasePoolMax: parsed.data.INDIGO_DATABASE_POOL_MAX,
     authSecret: parsed.data.BETTER_AUTH_SECRET,
     appOrigin: origin.origin,
     contentMode: parsed.data.INDIGO_CONTENT_MODE,

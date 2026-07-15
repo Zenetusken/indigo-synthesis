@@ -15,7 +15,32 @@ describe('server configuration', () => {
       appOrigin: 'http://localhost:3000',
       secureCookies: false,
       contentMode: 'development',
+      databasePoolMax: 10,
     })
+  })
+
+  it.each([6, 10, 64])('accepts database pool budget %i', (databasePoolMax) => {
+    expect(
+      parseServerConfig({
+        ...validInput,
+        INDIGO_DATABASE_POOL_MAX: String(databasePoolMax),
+      }).databasePoolMax,
+    ).toBe(databasePoolMax)
+  })
+
+  it.each([
+    '',
+    '5',
+    '65',
+    '10.5',
+    'not-a-number',
+  ])('rejects invalid database pool budget %j', (databasePoolMax) => {
+    expect(() =>
+      parseServerConfig({
+        ...validInput,
+        INDIGO_DATABASE_POOL_MAX: databasePoolMax,
+      }),
+    ).toThrow(InvalidServerConfigurationError)
   })
 
   it('infers a development tooling mode when development content is explicit', () => {
