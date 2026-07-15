@@ -8,21 +8,21 @@ export type DestructivePurpose =
 
 /** Opaque pre-queue installation lifecycle value captured by Identity. */
 export abstract class InstallationMutationEpoch {
-  protected readonly installationMutationEpochNominal!: never
+  protected declare readonly installationMutationEpochNominal: never
 
   protected constructor() {}
 }
 
 /** Future Stage 4 subject lifecycle value, kept nominally distinct from installation epoch. */
 export abstract class SubjectDataGeneration {
-  protected readonly subjectDataGenerationNominal!: never
+  protected declare readonly subjectDataGenerationNominal: never
 
   protected constructor() {}
 }
 
 /** Signed-cookie-derived server-only session identity; it is never accepted from form data. */
 export abstract class AuthenticatedSessionReference {
-  protected readonly authenticatedSessionReferenceNominal!: never
+  protected declare readonly authenticatedSessionReferenceNominal: never
 
   protected constructor() {}
 }
@@ -31,7 +31,7 @@ export abstract class AuthenticatedSessionReference {
 export abstract class DestructiveReauthenticationAttempt<
   Purpose extends DestructivePurpose,
 > {
-  protected readonly destructiveReauthenticationAttemptNominal!: Purpose
+  protected declare readonly destructiveReauthenticationAttemptNominal: Purpose
 
   protected constructor() {}
 }
@@ -40,7 +40,7 @@ export abstract class DestructiveReauthenticationAttempt<
 export abstract class DestructiveReauthenticationLease<
   Purpose extends DestructivePurpose,
 > {
-  protected readonly destructiveReauthenticationLeaseNominal!: Purpose
+  protected declare readonly destructiveReauthenticationLeaseNominal: Purpose
 
   protected constructor() {}
 }
@@ -56,7 +56,7 @@ export type CredentialLifecycleMutationKind =
 export abstract class CredentialLifecycleAuthority<
   Mutation extends CredentialLifecycleMutationKind,
 > {
-  protected readonly credentialLifecycleAuthorityNominal!: Mutation
+  protected declare readonly credentialLifecycleAuthorityNominal: Mutation
 
   protected constructor() {}
 }
@@ -65,7 +65,7 @@ export type HostBootstrapMutationKind = 'issuance' | 'redemption'
 
 /** Host-only bootstrap proof; issuance cannot be converted into redemption or vice versa. */
 export abstract class HostBootstrapAuthority<Mutation extends HostBootstrapMutationKind> {
-  protected readonly hostBootstrapAuthorityNominal!: Mutation
+  protected declare readonly hostBootstrapAuthorityNominal: Mutation
 
   protected constructor() {}
 }
@@ -74,7 +74,7 @@ export type HostInvocationKind = 'owner-recovery-issue' | 'expired-session-maint
 
 /** Host process identity sealed to one accepted operator command. */
 export abstract class HostInvocationAuthority<Kind extends HostInvocationKind> {
-  protected readonly hostInvocationAuthorityNominal!: Kind
+  protected declare readonly hostInvocationAuthorityNominal: Kind
 
   protected constructor() {}
 }

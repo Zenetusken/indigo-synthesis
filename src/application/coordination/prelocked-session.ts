@@ -27,7 +27,7 @@ export type PrelockedSessionOperation =
 export abstract class PrelockedSessionIntent<
   Operation extends PrelockedSessionOperation,
 > {
-  protected readonly prelockedSessionIntentNominal!: Operation
+  protected declare readonly prelockedSessionIntentNominal: Operation
 
   protected constructor() {}
 }
@@ -37,7 +37,7 @@ export abstract class PrelockedSessionIntent<
  * one credential path from satisfying another path's UoW request.
  */
 export abstract class PrelockedSessionLease<Operation extends PrelockedSessionOperation> {
-  protected readonly prelockedSessionLeaseNominal!: Operation
+  protected declare readonly prelockedSessionLeaseNominal: Operation
 
   protected constructor() {}
 }

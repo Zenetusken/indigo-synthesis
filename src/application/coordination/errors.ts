@@ -2,6 +2,8 @@ export type CoordinationErrorCode =
   | 'content-lock-plan.invalid'
   | 'content-lock-plan.stale'
   | 'content-lock-plan.too-large'
+  | 'identity.authority-stale'
+  | 'product-mutation.epoch-changed'
   | 'uow.begin-failed'
   | 'uow.cancelled'
   | 'uow.capacity'
@@ -13,11 +15,15 @@ export type CoordinationErrorCode =
   | 'uow.nested'
   | 'uow.prelocked-session-invalid'
   | 'uow.scope-revoked'
+  | 'uow.transaction-aborted'
 
 const coordinationErrorMessages: Readonly<Record<CoordinationErrorCode, string>> = {
   'content-lock-plan.invalid': 'The content lock plan is invalid.',
   'content-lock-plan.stale': 'The content used by this request is no longer current.',
   'content-lock-plan.too-large': 'This change is too broad for self-service.',
+  'identity.authority-stale': 'The signed-in authority is no longer current.',
+  'product-mutation.epoch-changed':
+    'The installation changed after this operation was issued.',
   'uow.begin-failed': 'The operation could not start its transaction.',
   'uow.cancelled': 'The operation was cancelled.',
   'uow.capacity': 'The operation is temporarily unavailable at current capacity.',
@@ -29,6 +35,7 @@ const coordinationErrorMessages: Readonly<Record<CoordinationErrorCode, string>>
   'uow.nested': 'A coordinated operation cannot start inside another operation.',
   'uow.prelocked-session-invalid': 'The credential-locked session is no longer valid.',
   'uow.scope-revoked': 'The coordinated operation scope is no longer active.',
+  'uow.transaction-aborted': 'The database rejected the coordinated transaction.',
 }
 
 /**

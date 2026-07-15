@@ -1,4 +1,6 @@
 import type {
+  ContentLockedUnitOfWorkExecution,
+  ContentLockPlanBindings,
   ContentLockPlanShape,
   ContentLockTransactionScope,
   LockedContentPlanAttestor,
@@ -46,6 +48,8 @@ type NoContentLockPlan = { readonly kind: 'none' }
 type VerifiedContentLockPlanInput<Shape extends ContentLockPlanShape> = {
   readonly kind: 'verified'
   readonly plan: VerifiedContentLockPlan<Shape>
+  /** Exact server-issued values re-bound privately by Platform before UoW admission. */
+  readonly bindings: ContentLockPlanBindings & { readonly shape: Shape }
 }
 
 export type UnitOfWorkContent =
@@ -68,13 +72,19 @@ type PrelockedSession<Operation extends PrelockedSessionOperation> = {
 type OrdinaryProductMutationBase = RequestLifecycle & {
   readonly authority: AuthenticatedSessionAuthority
   readonly session: OrdinarySession
+  /** Server-selected workflow identity, independently rebound to the sealed plan purpose. */
+  readonly workflowPurpose: string
   readonly productFence: 'shared'
   readonly mode: ReadCommittedReadWrite
 }
 
 /** Global operations are content-free only through a verified `none` plan. */
-export type GlobalProductMutationRequest = OrdinaryProductMutationBase &
-  (
+export type GlobalProductMutationRequest = Omit<
+  OrdinaryProductMutationBase,
+  'authority'
+> & {
+  readonly authority: AuthenticatedSessionAuthority & { readonly expectedRole: 'owner' }
+} & (
     | {
         readonly operation: 'global-product-mutation'
         readonly subjectLock: null
@@ -281,9 +291,12 @@ export type HostMaintenanceRequest = RequestLifecycle &
 
 export type ReadOnlyUnitOfWorkRequest = SubjectExportRequest
 
-export type ReadWriteUnitOfWorkRequest =
+export type ContentLockedUnitOfWorkRequest =
   | GlobalProductMutationRequest
   | SubjectProductMutationRequest
+
+export type ReadWriteUnitOfWorkRequest =
+  | ContentLockedUnitOfWorkRequest
   | SubjectDeletionRequest
   | InstanceResetRequest
   | DestructiveReauthenticationAttemptRequest
@@ -314,12 +327,17 @@ export type UnitOfWorkScope<Gateways> = {
  */
 export interface UnitOfWork<ReadGateways, WriteGateways extends ReadGateways> {
   run<Result>(
+    request: ContentLockedUnitOfWorkRequest,
+    callback: (scope: UnitOfWorkScope<WriteGateways>) => Promise<Result>,
+  ): ContentLockedUnitOfWorkExecution<Result>
+
+  run<Result>(
     request: ReadOnlyUnitOfWorkRequest,
     callback: (scope: UnitOfWorkScope<ReadGateways>) => Promise<Result>,
   ): Promise<Result>
 
   run<Result>(
-    request: ReadWriteUnitOfWorkRequest,
+    request: Exclude<ReadWriteUnitOfWorkRequest, ContentLockedUnitOfWorkRequest>,
     callback: (scope: UnitOfWorkScope<WriteGateways>) => Promise<Result>,
   ): Promise<Result>
 }

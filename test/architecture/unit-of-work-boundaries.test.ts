@@ -12,16 +12,19 @@ type WorkflowBoundaryViolation = {
 
 const nominalCoordinationCapabilities = new Set([
   'AuthenticatedSessionReference',
+  'ContentLockedUnitOfWorkExecution',
   'ContentLockIssuanceScope',
   'ContentLockSourceProjection',
   'ContentLockTransactionScope',
   'CredentialLifecycleAuthority',
   'DestructiveReauthenticationAttempt',
   'DestructiveReauthenticationLease',
+  'ExactReplayAuthorizer',
   'HostBootstrapAuthority',
   'HostInvocationAuthority',
   'InstallationMutationEpoch',
   'LockedContentPlanAttestor',
+  'NewCommandAuthorizer',
   'PrelockedSessionIntent',
   'PrelockedSessionLease',
   'PreparedContentLockPlan',
@@ -62,12 +65,22 @@ function isConcreteCoordinationInfrastructure(path: string): boolean {
   )
 }
 
-function isWorkflowOrProductPolicy(path: string): boolean {
+function isNonPlatformApplicationSurface(path: string): boolean {
   if (!isProductionSource(path)) return false
   if (path.startsWith('src/application/coordination/')) return false
   return (
-    path.startsWith('src/application/workflows/') ||
+    path.startsWith('src/app/') ||
+    path.startsWith('src/components/') ||
+    path.startsWith('src/application/') ||
     /^src\/modules\/[^/]+\/(?:application|domain)\//.test(path)
+  )
+}
+
+function isCoordinationInfrastructureSource(path: string): boolean {
+  return (
+    isProductionSource(path) &&
+    (path.startsWith('src/application/coordination/') ||
+      isConcreteCoordinationInfrastructure(path))
   )
 }
 
@@ -105,7 +118,9 @@ function isRawLockKeyName(name: string): boolean {
   return /^(?:(?:raw|content|canonical|advisory)(?:Lock)?Keys?|lockKeys?)$/i.test(name)
 }
 
-function isStringLike(node: ts.Expression): boolean {
+function isStringLike(
+  node: ts.Expression,
+): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
 }
 
@@ -186,11 +201,13 @@ function workflowBoundaryViolations(
       addViolation(node, `content-plan crypto:${node.expression.text}`)
     } else if (
       ts.isPropertyAccessExpression(node) &&
-      ((ts.isIdentifier(node.expression) && node.expression.text === 'crypto') ||
-        (ts.isPropertyAccessExpression(node.expression) &&
+      node.name.text === 'subtle' &&
+      (ts.isIdentifier(node.expression)
+        ? node.expression.text === 'crypto'
+        : ts.isPropertyAccessExpression(node.expression) &&
           ts.isIdentifier(node.expression.expression) &&
           node.expression.expression.text === 'globalThis' &&
-          node.expression.name.text === 'crypto'))
+          node.expression.name.text === 'crypto')
     ) {
       addViolation(node, 'content-plan crypto:web-crypto')
     } else if (ts.isTemplateExpression(node) && templateContainsContentCoordinate(node)) {
@@ -213,6 +230,249 @@ function workflowBoundaryViolations(
   }
 
   visit(sourceFile)
+  return violations
+}
+
+function staticSqlText(node: ts.Node): string | null {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text
+  }
+  if (ts.isTemplateExpression(node)) {
+    return [
+      node.head.text,
+      ...node.templateSpans.map(({ literal }) => literal.text),
+    ].join('<dynamic>')
+  }
+  return null
+}
+
+function hardCodedRelations(sql: string): readonly string[] {
+  const normalizedSql = sql.replace(/--[^\r\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  if (
+    !/(?:^|;)\s*(?:explain(?:\s+\([^)]*\))?\s+)?(?:with\b[\s\S]*?\b(?:select|insert|update|delete|merge)\b|select\b|insert\b|update\b|delete\b|merge\b|truncate\b|copy\b)/i.test(
+      normalizedSql,
+    )
+  ) {
+    return []
+  }
+  const relation = '(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)'
+  const qualifiedRelation = `${relation}(?:\\s*\\.\\s*${relation})?`
+  const relationClause = new RegExp(
+    String.raw`\b(?:from|join|insert\s+into|update|delete\s+from|merge\s+into|truncate(?:\s+table)?|copy)\s+(?:only\s+)?(${qualifiedRelation})`,
+    'gi',
+  )
+  return [...normalizedSql.matchAll(relationClause)].flatMap((match) => {
+    const matchedRelation = match[1]
+    if (matchedRelation === undefined) return []
+    const segments = matchedRelation.match(/"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*/gi)
+    const terminal = segments?.at(-1)
+    return terminal === undefined
+      ? []
+      : [terminal.replace(/^"|"$/g, '').replaceAll('""', '"').toLowerCase()]
+  })
+}
+
+function declaredDatabaseRelations(
+  source: string,
+  filename = 'schema-relation-audit.ts',
+): readonly string[] {
+  const sourceFile = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  )
+  const relations: string[] = []
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'pgTable' &&
+      node.arguments[0] !== undefined &&
+      isStringLike(node.arguments[0])
+    ) {
+      relations.push(node.arguments[0].text.toLowerCase())
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return relations
+}
+
+function hardCodedRelationSqlViolations(
+  source: string,
+  databaseRelations: ReadonlySet<string>,
+  filename = 'coordination-sql-audit.ts',
+): readonly WorkflowBoundaryViolation[] {
+  const sourceFile = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    filename.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  )
+  const violations: WorkflowBoundaryViolation[] = []
+
+  const visit = (node: ts.Node): void => {
+    const sql = staticSqlText(node)
+    const relations =
+      sql === null
+        ? []
+        : hardCodedRelations(sql).filter((relation) => databaseRelations.has(relation))
+    for (const relation of relations) {
+      const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+      violations.push({ line: line + 1, reason: `hard-coded relation SQL:${relation}` })
+    }
+    if (relations.length > 0 && ts.isTemplateExpression(node)) return
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return violations
+}
+
+function unwrapExpression(node: ts.Expression): ts.Expression {
+  if (
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isParenthesizedExpression(node)
+  ) {
+    return unwrapExpression(node.expression)
+  }
+  return node
+}
+
+function isEnumerableRegistryInitializer(node: ts.Expression): boolean {
+  const initializer = unwrapExpression(node)
+  if (ts.isNewExpression(initializer) && ts.isIdentifier(initializer.expression)) {
+    return ['Array', 'Map', 'Set'].includes(initializer.expression.text)
+  }
+  if (
+    ts.isCallExpression(initializer) &&
+    ts.isPropertyAccessExpression(initializer.expression) &&
+    ts.isIdentifier(initializer.expression.expression) &&
+    initializer.expression.expression.text === 'Object' &&
+    initializer.expression.name.text === 'create'
+  ) {
+    return true
+  }
+  return (
+    ts.isArrayLiteralExpression(initializer) || ts.isObjectLiteralExpression(initializer)
+  )
+}
+
+function isIntrinsicEnumerableRegistry(node: ts.Expression): boolean {
+  const initializer = unwrapExpression(node)
+  if (ts.isNewExpression(initializer) && ts.isIdentifier(initializer.expression)) {
+    return ['Map', 'Set'].includes(initializer.expression.text)
+  }
+  return (
+    ts.isCallExpression(initializer) &&
+    ts.isPropertyAccessExpression(initializer.expression) &&
+    ts.isIdentifier(initializer.expression.expression) &&
+    initializer.expression.expression.text === 'Object' &&
+    initializer.expression.name.text === 'create'
+  )
+}
+
+function isCapabilityRegistryName(name: string): boolean {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^a-z0-9]+/i)
+    .map((word) => word.toLowerCase())
+  const capabilityWords = new Set([
+    'authority',
+    'authorities',
+    'authorizer',
+    'authorizers',
+    'attestor',
+    'attestors',
+    'capability',
+    'capabilities',
+    'client',
+    'clients',
+    'connection',
+    'connections',
+    'execution',
+    'executions',
+    'gateway',
+    'gateways',
+    'intent',
+    'intents',
+    'lease',
+    'leases',
+    'plan',
+    'plans',
+    'prelocked',
+    'projection',
+    'projections',
+    'scope',
+    'scopes',
+    'session',
+    'sessions',
+    'transaction',
+    'transactions',
+  ])
+  const registryWords = new Set([
+    'active',
+    'by',
+    'cache',
+    'director',
+    'live',
+    'pool',
+    'registry',
+    'registries',
+    'state',
+    'states',
+    'store',
+  ])
+  const capabilitySubject = words.some((word) => capabilityWords.has(word))
+  const registrySemantics = words.some(
+    (word) =>
+      registryWords.has(word) || (capabilityWords.has(word) && word.endsWith('s')),
+  )
+  return capabilitySubject && registrySemantics
+}
+
+function moduleGlobalRegistryViolations(
+  source: string,
+  filename = 'coordination-registry-audit.ts',
+): readonly WorkflowBoundaryViolation[] {
+  const sourceFile = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    filename.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  )
+  const violations: WorkflowBoundaryViolation[] = []
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !ts.isIdentifier(declaration.name) ||
+        declaration.initializer === undefined ||
+        !isEnumerableRegistryInitializer(declaration.initializer) ||
+        (!isCapabilityRegistryName(declaration.name.text) &&
+          !isIntrinsicEnumerableRegistry(declaration.initializer))
+      ) {
+        continue
+      }
+      const { line } = sourceFile.getLineAndCharacterOfPosition(
+        declaration.getStart(sourceFile),
+      )
+      violations.push({
+        line: line + 1,
+        reason: `module-global enumerable registry:${declaration.name.text}`,
+      })
+    }
+  }
+
   return violations
 }
 
@@ -400,6 +660,11 @@ function capabilityConstructionViolations(
 describe('UnitOfWork and coordination architecture boundaries', () => {
   const sourceFiles = readCodeSources(sourceRoot)
   const importGraph = analyzeImportGraph(sourceFiles, { sourceRoot })
+  const databaseRelations = new Set(
+    [...sourceFiles]
+      .filter(([path]) => projectPath(path).startsWith('src/platform/db/schema/'))
+      .flatMap(([path, source]) => declaredDatabaseRelations(source, path)),
+  )
 
   it('keeps neutral application coordination infrastructure-free', () => {
     const violations = importGraph.edges
@@ -435,7 +700,10 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
         const source = projectPath(from)
         return (
           isProductionSource(source) &&
-          (source.startsWith('src/modules/') || source.startsWith('src/application/'))
+          (source.startsWith('src/modules/') ||
+            source.startsWith('src/application/') ||
+            source.startsWith('src/app/') ||
+            source.startsWith('src/components/'))
         )
       })
       .filter(({ specifier, to }) => {
@@ -459,6 +727,133 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
       .sort()
 
     expect(violations).toEqual([])
+  })
+
+  it('keeps concrete UoW adapters schema-blind', () => {
+    const violations = importGraph.edges
+      .filter(({ from }) => {
+        const source = projectPath(from)
+        return isProductionSource(source) && isConcreteCoordinationInfrastructure(source)
+      })
+      .filter(({ specifier, to }) => {
+        if (to && projectPath(to).startsWith('src/platform/db/schema')) return true
+        return /^@\/platform\/db\/schema(?:\/|$)/.test(specifier)
+      })
+      .map(importDescription)
+      .sort()
+
+    expect(violations).toEqual([])
+  })
+
+  it('keeps neutral and concrete coordination code free of hard-coded relation SQL', () => {
+    const violations = [...sourceFiles]
+      .filter(([path]) => isCoordinationInfrastructureSource(projectPath(path)))
+      .flatMap(([path, source]) =>
+        hardCodedRelationSqlViolations(source, databaseRelations, path).map(
+          ({ line, reason }) => `${projectPath(path)}:${line} ${reason}`,
+        ),
+      )
+      .sort()
+
+    expect([...databaseRelations]).toEqual(
+      expect.arrayContaining(['athlete_profile', 'training_command_receipt', 'session']),
+    )
+    expect(violations).toEqual([])
+  })
+
+  it('detects relation-bearing SQL without rejecting schema-blind transaction SQL', () => {
+    const sampleRelations = new Set([
+      'athlete_profile',
+      'training_command_receipt',
+      'program_revision',
+      'session',
+      'deletion_tombstone',
+    ])
+    expect(
+      hardCodedRelationSqlViolations(
+        `
+        await client.query('SELECT value FROM /* owner projection */ athlete_profile WHERE user_id = $1')
+        await client.query(\`INSERT INTO "training_command_receipt" (id) VALUES (\${id})\`)
+        await client.query('WITH changed AS (UPDATE public.program_revision SET active = false RETURNING *) SELECT * FROM changed')
+        await client.query('DELETE FROM ONLY "public"."session" WHERE id = $1')
+        await client.query('TRUNCATE TABLE deletion_tombstone')
+      `,
+        sampleRelations,
+      ).map(({ reason }) => reason),
+    ).toEqual([
+      'hard-coded relation SQL:athlete_profile',
+      'hard-coded relation SQL:training_command_receipt',
+      'hard-coded relation SQL:program_revision',
+      'hard-coded relation SQL:session',
+      'hard-coded relation SQL:deletion_tombstone',
+    ])
+
+    expect(
+      hardCodedRelationSqlViolations(
+        `
+        await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+        await client.query('COMMIT')
+        await client.query('ROLLBACK')
+        await client.query('SELECT pg_advisory_lock($1)')
+        await client.query('SELECT pid FROM pg_catalog.pg_locks')
+        await client.query("SELECT set_config('statement_timeout', $1, true)")
+        await client.query(ownerSuppliedSql, values)
+        const message = 'Failed to update session state'
+      `,
+        sampleRelations,
+      ),
+    ).toEqual([])
+  })
+
+  it('forbids enumerable module-global coordination capability registries', () => {
+    const violations = [...sourceFiles]
+      .filter(([path]) => isCoordinationInfrastructureSource(projectPath(path)))
+      .flatMap(([path, source]) =>
+        moduleGlobalRegistryViolations(source, path).map(
+          ({ line, reason }) => `${projectPath(path)}:${line} ${reason}`,
+        ),
+      )
+      .sort()
+
+    expect(violations).toEqual([])
+  })
+
+  it('detects enumerable global registries while allowing opaque and local state', () => {
+    expect(
+      moduleGlobalRegistryViolations(`
+        const capabilityRegistry = new Map<string, object>()
+        const activeConnections = new Set<object>()
+        const attestors = new Set<object>()
+        const sessionByToken = Object.create(null) as Record<string, object>
+        const liveLeaseStore: object[] = []
+        const r = new Map<string, object>()
+        const values = new Set<object>()
+      `).map(({ reason }) => reason),
+    ).toEqual([
+      'module-global enumerable registry:capabilityRegistry',
+      'module-global enumerable registry:activeConnections',
+      'module-global enumerable registry:attestors',
+      'module-global enumerable registry:sessionByToken',
+      'module-global enumerable registry:liveLeaseStore',
+      'module-global enumerable registry:r',
+      'module-global enumerable registry:values',
+    ])
+
+    expect(
+      moduleGlobalRegistryViolations(`
+        const capabilityStates = new WeakMap<object, object>()
+        const sessionStates = new WeakSet<object>()
+        const contentLockPlanShapes = ['none', 'programs'] as const
+        function useRequestLocalRegistry() {
+          const connectionRegistry = new Map<string, object>()
+          return connectionRegistry
+        }
+        void capabilityStates
+        void sessionStates
+        void contentLockPlanShapes
+        void useRequestLocalRegistry
+      `),
+    ).toEqual([])
   })
 
   it('keeps the owner projection factory infrastructure-only', () => {
@@ -534,16 +929,16 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
     ])
   })
 
-  it('keeps workflow code away from raw content keys and content-plan crypto', () => {
+  it('keeps the non-Platform application surface away from raw content keys and content-plan crypto', () => {
     const workflowFiles = [...sourceFiles].filter(([path]) => {
       const source = projectPath(path)
-      return isWorkflowOrProductPolicy(source)
+      return isNonPlatformApplicationSurface(source)
     })
 
     const importViolations = importGraph.edges
       .filter(({ from }) => {
         const source = projectPath(from)
-        return isWorkflowOrProductPolicy(source)
+        return isNonPlatformApplicationSurface(source)
       })
       .filter(
         ({ specifier }) =>
@@ -564,21 +959,37 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
 
   it('detects raw-key and crypto mutations without rejecting opaque projections', () => {
     expect(
+      [
+        'src/app/today/actions.ts',
+        'src/components/action-button.tsx',
+        'src/application/workflows/example.ts',
+        'src/modules/training/application/workouts.ts',
+        'src/modules/programs/domain/program.ts',
+        'src/application/coordination/content-lock-plan.ts',
+        'src/modules/identity/infrastructure/credential-lifecycle-lock.ts',
+        'src/platform/application-coordination/content-lock-plan.ts',
+      ].map(isNonPlatformApplicationSurface),
+    ).toEqual([true, true, true, true, true, false, false, false])
+
+    expect(
       workflowBoundaryViolations(`
         const lockKeys = ['methodology:release-id:1']
         const direct = seal('template:release-id:1')
         const templated = \`methodology:\${releaseId}:\${version}\`
         const signature = createHmac('sha256', secret).update(payload).digest()
+        const browserSignature = globalThis.crypto.subtle.sign(algorithm, key, payload)
         void lockKeys
         void direct
         void templated
         void signature
+        void browserSignature
       `).map(({ reason }) => reason),
     ).toEqual([
       'raw lock-key declaration:lockKeys',
       'raw content-coordinate call argument',
       'raw content-coordinate template',
       'content-plan crypto:createHmac',
+      'content-plan crypto:web-crypto',
     ])
 
     expect(
@@ -586,7 +997,9 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
         declare const methodologyProjection: ContentLockSourceProjection
         declare const programsProjection: ContentLockSourceProjection
         const projections = [methodologyProjection, programsProjection]
+        const commandId = globalThis.crypto.randomUUID()
         void projections
+        void commandId
       `),
     ).toEqual([])
   })

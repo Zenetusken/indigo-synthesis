@@ -8,10 +8,13 @@ export type {
   TransactionContentLockSourceProjection,
 } from './content-lock-plan'
 export {
+  ContentLockedUnitOfWorkExecution,
   ContentLockIssuanceScope,
   ContentLockSourceProjection,
   ContentLockTransactionScope,
+  ExactReplayAuthorizer,
   LockedContentPlanAttestor,
+  NewCommandAuthorizer,
   PreparedContentLockPlan,
   VerifiedContentLockPlan,
 } from './content-lock-plan'
@@ -52,6 +55,7 @@ export type {
 } from './prelocked-session'
 export { PrelockedSessionLease } from './prelocked-session'
 export type {
+  ContentLockedUnitOfWorkRequest,
   CredentialLifecycleMutationRequest,
   DestructiveIdentityMutationRequest,
   DestructiveReauthenticationAttemptRequest,
