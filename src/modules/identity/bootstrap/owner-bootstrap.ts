@@ -81,11 +81,6 @@ function codeMatchesStoredValue(code: string, storedValue: string): boolean {
 }
 
 async function ensureOpenInstallation(database: DatabaseTransaction) {
-  await database
-    .insert(installationState)
-    .values({ singleton: 1 })
-    .onConflictDoNothing({ target: installationState.singleton })
-
   const [installation] = await database
     .select()
     .from(installationState)
@@ -93,7 +88,14 @@ async function ensureOpenInstallation(database: DatabaseTransaction) {
     .for('update')
     .limit(1)
 
-  if (!installation || installation.ownerUserId || installation.bootstrapClosedAt) {
+  if (!installation) {
+    throw new OwnerBootstrapError(
+      'owner-bootstrap.installation-missing',
+      'The installation state is unavailable. Run the current database migrations.',
+    )
+  }
+
+  if (installation.ownerUserId || installation.bootstrapClosedAt) {
     throw new OwnerBootstrapError(
       'owner-bootstrap.instance-closed',
       'This installation already has an owner.',

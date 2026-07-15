@@ -9,16 +9,18 @@ catalog, and the bundled development fixture does not close Methodology Gate 0.
 The live contract has:
 
 - one schema authority;
-- one ordered committed SQL migration ledger with 17 current entries;
+- one ordered committed SQL migration ledger with 18 current entries;
 - Better Auth's Drizzle schema checked into that same schema authority;
 - only a project-owned migration command applying committed SQL before startup;
 - no Better Auth runtime migration, production CLI generation, or schema push;
 - no runtime schema push;
-- no seed data inside migrations;
+- no product/demo seed data inside migrations; migration 0017 creates only the required
+  singleton installation coordination row;
 - fresh-database and additive-upgrade migration tests; and
 - startup preflight for PostgreSQL 18 or newer, every current committed migration hash,
   canonical 0004 ledger provenance, required columns/indexes, the access/recovery state
-  and keyed rate-limit contract, the explanation-cache contract, all 28 exact enabled
+  and keyed rate-limit contract, installation mutation-epoch/default/singleton integrity,
+  the explanation-cache contract, all 28 exact enabled
   trigger/table/function bindings, and reviewed-mode content eligibility. Extra
   historical ledger rows from a development branch do not false-fail when every current
   hash and concrete invariant still holds.

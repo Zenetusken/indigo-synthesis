@@ -120,6 +120,13 @@
       "when": 1783963567578,
       "tag": "0016_bent_switch",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784120382550,
+      "tag": "0017_red_blob",
+      "breakpoints": true
     }
   ]
 }

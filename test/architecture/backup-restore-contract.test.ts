@@ -72,6 +72,26 @@ describe('backup/restore operator contract', () => {
     expect(invalidationSection.indexOf('CUTOVER_IDENTITY=')).toBeLessThan(
       invalidationSection.indexOf('DELETE FROM public.session;'),
     )
+    const authorityTransactionStart = invalidationSection.indexOf('BEGIN;')
+    const firstAuthorityInvalidation = invalidationSection.indexOf(
+      'DELETE FROM public.destructive_reauthentication_state;',
+    )
+    const epochRotation = invalidationSection.indexOf(
+      'SET product_mutation_epoch = gen_random_uuid()',
+    )
+    const authorityTransactionCommit = invalidationSection.indexOf('COMMIT;')
+    const postCommitAssertion = invalidationSection.indexOf('DO $secure_restore$')
+    expect(authorityTransactionStart).toBeGreaterThanOrEqual(0)
+    expect(authorityTransactionStart).toBeLessThan(firstAuthorityInvalidation)
+    expect(firstAuthorityInvalidation).toBeLessThan(epochRotation)
+    expect(epochRotation).toBeLessThan(authorityTransactionCommit)
+    expect(authorityTransactionCommit).toBeLessThan(postCommitAssertion)
+    expect(invalidationSection).toContain(
+      'SET product_mutation_epoch = gen_random_uuid()',
+    )
+    expect(invalidationSection).toContain(
+      'secure restore installation epoch did not rotate exactly once',
+    )
     expect(runbook).toContain('test "$RESTORE_RELATIONS" = 0')
     expect(runbook.indexOf('createdb')).toBeLessThan(runbook.indexOf('pg_restore \\\n'))
     expect(runbook).toContain('psql --no-psqlrc')
@@ -89,6 +109,34 @@ describe('backup/restore operator contract', () => {
       /If there is no trustworthy incident,\s+privacy, and safety change record/,
     )
     expect(runbook).toMatch(/Secret rotation is mandatory for the secure-default cutover/)
+    expect(runbook).toMatch(
+      /simple rollback.*permitted only \*\*before the restored\s+deployment is exposed.*before it accepts any non-prescribed post-restore\s+mutation/s,
+    )
+    expect(runbook).toMatch(
+      /cut over explicitly: stop the\s+application, select the restored `DATABASE_URL` and the restored deployment's newly generated\s+`BETTER_AUTH_SECRET` together, and start the application on loopback/,
+    )
+    expect(runbook).toMatch(
+      /returning to the original database is a new\s+recovery cutover/i,
+    )
+    expect(runbook).toMatch(
+      /Reusing the original secret or its\s+pre-cutover epoch after exposure/,
+    )
     expect(runbook).toContain('openssl rand -base64 48')
+  })
+
+  it('proves the exact opaque installation epoch survives the guarded drill', () => {
+    expect(drill).toContain('expectedEpoch = await seedProof')
+    expect(drill).toContain('product_mutation_epoch AS "productMutationEpoch"')
+    expect(drill).toContain(
+      'Restored installation mutation epoch does not match the backup.',
+    )
+    const outputStart = drill.indexOf('process.stdout.write(')
+    const cleanupStart = drill.indexOf('\n} finally {', outputStart)
+    expect(outputStart).toBeGreaterThanOrEqual(0)
+    expect(cleanupStart).toBeGreaterThan(outputStart)
+    expect(drill.match(/process\.stdout\.write\(/g)).toHaveLength(1)
+    expect(drill).not.toContain('process.stderr.write(')
+    expect(drill).not.toMatch(/console\.(?:debug|error|info|log|warn)\s*\(/)
+    expect(drill.slice(outputStart, cleanupStart)).not.toContain('expectedEpoch')
   })
 })

@@ -804,10 +804,22 @@ export async function executeInstanceReset(input: {
             counts: currentCounts,
           } as unknown as CanonicalValue)
 
-          await transaction
+          const rotatedInstallation = await transaction
             .update(installationState)
-            .set({ ownerUserId: null, bootstrapClosedAt: null, updatedAt: completedAt })
+            .set({
+              ownerUserId: null,
+              bootstrapClosedAt: null,
+              productMutationEpoch: sql`gen_random_uuid()`,
+              updatedAt: completedAt,
+            })
             .where(eq(installationState.singleton, 1))
+            .returning({ singleton: installationState.singleton })
+          if (rotatedInstallation.length !== 1) {
+            throw new DeletionError(
+              'deletion.installation-state-invalid',
+              'The installation state could not be rotated exactly once.',
+            )
+          }
 
           // Product modules first, in referential order. Identity is deliberately last.
           await transaction.delete(adjustmentDecisionInvalidations)

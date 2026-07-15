@@ -248,6 +248,33 @@ SET password = NULL,
     access_token_expires_at = NULL,
     refresh_token_expires_at = NULL,
     updated_at = CURRENT_TIMESTAMP;
+
+DO $rotate_installation_epoch$
+DECLARE
+  previous_epoch uuid;
+  rotated_epoch uuid;
+BEGIN
+  SELECT product_mutation_epoch
+  INTO previous_epoch
+  FROM public.installation_state
+  WHERE singleton = 1
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'secure restore installation singleton is missing';
+  END IF;
+
+  UPDATE public.installation_state
+  SET product_mutation_epoch = gen_random_uuid(),
+      updated_at = CURRENT_TIMESTAMP
+  WHERE singleton = 1
+  RETURNING product_mutation_epoch INTO rotated_epoch;
+
+  IF rotated_epoch IS NULL OR rotated_epoch = previous_epoch THEN
+    RAISE EXCEPTION 'secure restore installation epoch did not rotate exactly once';
+  END IF;
+END
+$rotate_installation_epoch$;
 COMMIT;
 
 DO $secure_restore$
@@ -305,14 +332,28 @@ the service remains loopback-only. The recovered owner can then issue fresh one-
 reset codes. Members without a fresh reset remain unable to sign in; no snapshot-era
 credential or capability is accepted.
 
-Keep the original database and its original protected secret configuration unchanged
-and network-isolated until the restored instance has passed the post-cutover check. Cut
-over by stopping the application, selecting the restored `DATABASE_URL` plus the newly
-generated secret, and starting it. A rollback selects the original database **and its
-original secret together**; never mix either database with the other environment's secret,
-and never run both installations concurrently. When the rollback window closes, securely
-drop the losing database, destroy its no-longer-needed secret material, and retire temporary
-archives according to the documented retention policy.
+After owner recovery and every isolated check passes, cut over explicitly: stop the
+application, select the restored `DATABASE_URL` and the restored deployment's newly generated
+`BETTER_AUTH_SECRET` together, and start the application on loopback. Run the post-cutover
+check against that exact process before allowing any external or user access.
+
+Keep the original database and its original protected secret configuration unchanged and
+network-isolated until the restored instance has passed its isolated checks. A simple rollback to
+that original database and its matching original secret is permitted only **before the restored
+deployment is exposed to any user and before it accepts any non-prescribed post-restore
+mutation**. Recovery-point reconciliation, authority invalidation, and owner recovery are the only
+prescribed mutations during that window. Never mix either database with the other environment's
+secret, and never run both installations concurrently.
+
+After the restored deployment has been exposed, returning to the original database is a new
+recovery cutover, not a rollback shortcut. Stop both installations, reconcile every accepted change
+since cutover into the selected database, rerun the complete authority-invalidation transaction
+above (including installation-epoch rotation), provision another fresh auth secret, recover the
+owner, and repeat all isolated verification before exposure. Reusing the original secret or its
+pre-cutover epoch after exposure can resurrect stale credentials and browser commands and is
+forbidden. When the pre-exposure rollback window closes, securely drop the losing database, destroy
+its no-longer-needed secret material, and retire temporary archives according to the documented
+retention policy.
 
 ## Guarded repository drill
 
@@ -322,14 +363,15 @@ named `indigo_backup_restore_<24 lowercase hex>_integration`, and rechecks that 
 shape immediately before its only wipe. It then:
 
 1. applies every committed migration;
-2. inserts a known append-only audit marker;
-3. creates a custom-format archive with no ownership or privilege statements;
-4. wipes the disposable database's application and migration schemas;
-5. restores the archive in one transaction;
-6. verifies the exact marker and proves the restored append-only trigger rejects an
+2. creates the open installation singleton and captures its opaque mutation epoch;
+3. inserts a known append-only audit marker;
+4. creates a custom-format archive with no ownership or privilege statements;
+5. wipes the disposable database's application and migration schemas;
+6. restores the archive in one transaction;
+7. verifies the exact installation epoch and audit marker, then proves the restored append-only trigger rejects an
    update with SQLSTATE `55000`;
-7. runs the full database preflight; and
-8. removes the archive and drops the disposable database in `finally`.
+8. runs the full database preflight; and
+9. removes the archive and drops the disposable database in `finally`.
 
 With PostgreSQL 18+ client tools installed on the host:
 
@@ -357,4 +399,4 @@ operator's encryption, off-host storage, retention, media copying, recovery-time
 or cold-install procedure; those remain deployment evidence and, where appropriate,
 human-operated checks.
 
-See the [retained checkpoint evidence](evidence/2026-07-13-backup-restore-drill.md).
+See the [latest retained checkpoint evidence](evidence/2026-07-15-backup-restore-drill.md).

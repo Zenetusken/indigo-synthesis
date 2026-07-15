@@ -689,7 +689,7 @@ export async function createDataExport(actor: {
         {
           category: 'administrative-workflow-state',
           reason:
-            'Installation bootstrap state, deletion previews, and non-personal deletion tombstones are operational records rather than subject data.',
+            'Installation bootstrap and mutation-epoch state, deletion previews, and non-personal deletion tombstones are operational records rather than subject data.',
         },
       ],
     },

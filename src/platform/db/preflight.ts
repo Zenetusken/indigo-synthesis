@@ -13,6 +13,7 @@ export type DatabasePreflight = {
   readonly appliedCommittedMigrationCount: number
   readonly latestCommittedMigrationApplied: boolean
   readonly bootstrapTriggerPresent: boolean
+  readonly installationMutationEpochPresent: boolean
   readonly workoutSnapshotColumnsPresent: boolean
   readonly safetyHoldIntegrityPresent: boolean
   readonly trainingCorrectionIntegrityPresent: boolean
@@ -23,7 +24,7 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-export const expectedMigrationCount = 17
+export const expectedMigrationCount = 18
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -179,6 +180,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     versionResult,
     migrationResult,
     triggerResult,
+    installationEpochResult,
     columnsResult,
     safetyHoldResult,
     trainingCorrectionResult,
@@ -210,6 +212,47 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND NOT trigger.tgisinternal
           AND trigger.tgenabled = 'O'
       ) AS present
+    `),
+    db.execute<{ present: boolean }>(sql`
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'installation_state'
+            AND column_name = 'product_mutation_epoch'
+            AND data_type = 'uuid'
+            AND is_nullable = 'NO'
+            AND column_default LIKE '%gen_random_uuid()%'
+        )
+        AND (SELECT count(*) = 1 FROM installation_state)
+        AND (SELECT count(*) = 1 FROM installation_state WHERE singleton = 1)
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.installation_state')
+            AND conname = 'installation_state_singleton_check'
+            AND contype = 'c' AND convalidated
+            AND pg_get_constraintdef(oid) ~ 'singleton[^=]*= 1'
+        )
+        AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('public.installation_state')
+            AND conname = 'installation_state_owner_closed_check'
+            AND contype = 'c' AND convalidated
+            AND pg_get_constraintdef(oid) LIKE '%owner_user_id IS NULL%'
+            AND pg_get_constraintdef(oid) LIKE '%bootstrap_closed_at IS NULL%'
+            AND pg_get_constraintdef(oid) LIKE '%owner_user_id IS NOT NULL%'
+            AND pg_get_constraintdef(oid) LIKE '%bootstrap_closed_at IS NOT NULL%'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM installation_state
+          WHERE COALESCE(
+            to_jsonb(installation_state)->>'product_mutation_epoch',
+            ''
+          ) !~
+            '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+        ) AS present
     `),
     db.execute<{ present: boolean }>(sql`
         SELECT
@@ -763,6 +806,7 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     appliedCommittedMigrationCount,
     latestCommittedMigrationApplied,
     bootstrapTriggerPresent: triggerResult.rows[0]?.present ?? false,
+    installationMutationEpochPresent: installationEpochResult.rows[0]?.present ?? false,
     workoutSnapshotColumnsPresent: columnsResult.rows[0]?.present ?? false,
     safetyHoldIntegrityPresent: safetyHoldResult.rows[0]?.present ?? false,
     trainingCorrectionIntegrityPresent:
@@ -793,6 +837,9 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   }
   if (!result.bootstrapTriggerPresent) {
     failures.push('explicit-mode owner bootstrap trigger is absent')
+  }
+  if (!result.installationMutationEpochPresent) {
+    failures.push('installation mutation epoch column/default/backfill is absent')
   }
   if (!result.workoutSnapshotColumnsPresent) {
     failures.push('latest workout snapshot and revision-lineage columns are absent')

@@ -649,6 +649,10 @@ afterAll(async () => {
 
 describe('subject export and exact instance reset', () => {
   it('exports every owned revision and session state with interpretable provenance', async () => {
+    const [installation] = await getDb()
+      .select({ productMutationEpoch: installationState.productMutationEpoch })
+      .from(installationState)
+    if (!installation) throw new Error('Export fixture has no installation state.')
     const archive = await createDataExport(actor)
     const revisions = archive.programs.flatMap((program) => program.revisions)
     const statuses = archive.sessions.map((session) => session.status).sort()
@@ -770,6 +774,7 @@ describe('subject export and exact instance reset', () => {
     expect(serialized).not.toContain(recoveryDigest)
     expect(serialized).not.toContain(otherUser.id)
     expect(serialized).not.toContain(otherUser.email)
+    expect(serialized).not.toContain(installation.productMutationEpoch)
 
     await getDb()
       .update(workoutSessions)
@@ -1527,6 +1532,47 @@ describe('subject export and exact instance reset', () => {
 
     const retryPlan = await createInstanceResetPlan(actor)
     expect(retryPlan.counts.auditEvents).toBe(plan.counts.auditEvents + 1)
+    const [installationBeforeReset] = await getDb()
+      .select({ productMutationEpoch: installationState.productMutationEpoch })
+      .from(installationState)
+    if (!installationBeforeReset) {
+      throw new Error('Reset fixture has no installation mutation epoch.')
+    }
+
+    await getDb().execute(sql`
+      CREATE FUNCTION indigo_test_fail_reset_after_epoch()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'injected post-epoch reset failure';
+      END;
+      $$;
+      CREATE TRIGGER indigo_test_fail_reset_after_epoch
+      BEFORE DELETE ON program
+      FOR EACH STATEMENT EXECUTE FUNCTION indigo_test_fail_reset_after_epoch();
+    `)
+    await expect(
+      executeInstanceReset({
+        actor,
+        planId: retryPlan.id,
+        planDigest: retryPlan.digest,
+        password: ownerPassword,
+        typedConfirmation: 'RESET',
+        acknowledged: true,
+      }),
+    ).rejects.toMatchObject({
+      cause: { message: 'injected post-epoch reset failure' },
+    })
+    const [installationAfterRollback] = await getDb()
+      .select({ productMutationEpoch: installationState.productMutationEpoch })
+      .from(installationState)
+    expect(installationAfterRollback?.productMutationEpoch).toBe(
+      installationBeforeReset.productMutationEpoch,
+    )
+    await getDb().execute(sql`
+      DROP TRIGGER indigo_test_fail_reset_after_epoch ON program;
+      DROP FUNCTION indigo_test_fail_reset_after_epoch();
+    `)
+
     await executeInstanceReset({
       actor,
       planId: retryPlan.id,
@@ -1582,6 +1628,12 @@ describe('subject export and exact instance reset', () => {
       .from(deletionTombstones)
       .where(eq(deletionTombstones.scope, 'instance-reset'))
     expect(installation).toMatchObject({ ownerUserId: null, bootstrapClosedAt: null })
+    expect(installation?.productMutationEpoch).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    expect(installation?.productMutationEpoch).not.toBe(
+      installationBeforeReset?.productMutationEpoch,
+    )
     expect(tombstone).toMatchObject({
       actorClass: 'owner',
       scope: 'instance-reset',
@@ -1601,6 +1653,12 @@ describe('subject export and exact instance reset', () => {
     expect(serializedTombstone).not.toContain(actor.email)
     expect(serializedTombstone).not.toContain(recoveryDigest)
     expect(serializedTombstone).not.toContain('Back squat')
+    expect(serializedTombstone).not.toContain(
+      installationBeforeReset.productMutationEpoch,
+    )
+    expect(JSON.stringify(retryPlan)).not.toContain(
+      installationBeforeReset.productMutationEpoch,
+    )
 
     const [userCount] = await getDb().select({ value: count() }).from(user)
     expect(userCount?.value).toBe(0)

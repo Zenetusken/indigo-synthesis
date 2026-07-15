@@ -197,19 +197,26 @@ function assertMatchingPgTools(client: BackupRestoreDrillPgClient): string {
   return `${dumpVersion}; ${restoreVersion}`
 }
 
-async function seedProof(databaseUrl: string): Promise<void> {
+async function seedProof(databaseUrl: string): Promise<string> {
   const client = new Client({
     connectionString: databaseUrl,
     application_name: 'indigo-backup-restore-drill',
   })
   await client.connect()
   try {
+    const epoch = await client.query<{ productMutationEpoch: string }>(
+      `SELECT product_mutation_epoch AS "productMutationEpoch"
+       FROM installation_state WHERE singleton = 1`,
+    )
+    const expectedEpoch = epoch.rows[0]?.productMutationEpoch
+    if (!expectedEpoch) throw new Error('Backup seed has no installation mutation epoch.')
     await client.query(
       `INSERT INTO audit_event (
          id, event_type, entity_type, entity_id, metadata
        ) VALUES ($1, 'backup-restore-drill', 'backup-restore-drill', $1, $2::jsonb)`,
       [markerId, JSON.stringify(markerMetadata)],
     )
+    return expectedEpoch
   } finally {
     await client.end()
   }
@@ -255,13 +262,23 @@ async function wipeDisposableSchema(
   }
 }
 
-async function verifyRestoredProof(databaseUrl: string): Promise<void> {
+async function verifyRestoredProof(
+  databaseUrl: string,
+  expectedEpoch: string,
+): Promise<void> {
   const client = new Client({
     connectionString: databaseUrl,
     application_name: 'indigo-backup-restore-drill',
   })
   await client.connect()
   try {
+    const epoch = await client.query<{ productMutationEpoch: string }>(
+      `SELECT product_mutation_epoch AS "productMutationEpoch"
+       FROM installation_state WHERE singleton = 1`,
+    )
+    if (epoch.rows[0]?.productMutationEpoch !== expectedEpoch) {
+      throw new Error('Restored installation mutation epoch does not match the backup.')
+    }
     const marker = await client.query<{
       eventType: string
       metadata: { readonly proof?: string }
@@ -320,7 +337,7 @@ try {
 
   await migrateDatabase()
   await closeDb()
-  await seedProof(database.databaseUrl)
+  const expectedEpoch = await seedProof(database.databaseUrl)
 
   const connection = pgConnection(database.databaseUrl)
   const archive = runPgTool(pgClient, connection, 'pg_dump', [
@@ -348,7 +365,7 @@ try {
     retainedArchive,
   )
 
-  await verifyRestoredProof(database.databaseUrl)
+  await verifyRestoredProof(database.databaseUrl, expectedEpoch)
   const preflight = await assertDatabaseReady()
   await closeDb()
 
@@ -360,7 +377,7 @@ try {
       `Disposable target: ${database.databaseName}`,
       `Archive: ${retainedArchive.byteLength} bytes, sha256 ${archiveDigest}`,
       `Restored preflight: ${preflight.databaseVersion}`,
-      'Proof: exact audit row restored; append-only trigger rejected mutation (SQLSTATE 55000).',
+      'Proof: installation epoch and exact audit row restored; append-only trigger rejected mutation (SQLSTATE 55000).',
     ].join('\n')}\n`,
   )
 } finally {
