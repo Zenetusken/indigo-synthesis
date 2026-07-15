@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { getInstallationStatus } from '@/modules/identity/application/installation'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireUiActor } from '@/modules/identity/server/actor'
+import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import styles from './setup.module.css'
 import { SetupForm } from './setup-form'
 
@@ -12,7 +13,7 @@ export const metadata: Metadata = { title: 'Training setup' }
 export default async function SetupPage() {
   const installation = await getInstallationStatus()
   if (installation.kind === 'open') redirect('/bootstrap')
-  const actor = await requireActor()
+  const actor = await requireUiActor()
   if (await getAthleteProfile(actor.userId)) redirect('/program')
 
   return (
@@ -24,6 +25,12 @@ export default async function SetupPage() {
           instead of producing a plausible substitute.
         </p>
       </header>
+      <aside className={styles.accountContext} aria-label="Current local account">
+        <p>
+          Signed in as <strong>{actor.email}</strong>
+        </p>
+        <SignOutButton actionBinding={actor.checkedSignOutActionBinding} />
+      </aside>
       <SetupForm />
     </main>
   )

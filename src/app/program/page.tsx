@@ -14,7 +14,7 @@ import {
   formatIsoDateInTimezone,
 } from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireUiActor } from '@/modules/identity/server/actor'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getProgramOverview } from '@/modules/programs/application/programs'
 import { getServerConfig } from '@/platform/config/server'
@@ -59,7 +59,7 @@ export default async function ProgramPage({
 }: {
   searchParams: Promise<{ error?: string }>
 }) {
-  const actor = await requireActor()
+  const actor = await requireUiActor()
   const profile = await getAthleteProfile(actor.userId)
   if (!profile) redirect('/setup')
 
@@ -74,7 +74,10 @@ export default async function ProgramPage({
   const isDevelopmentMode = getServerConfig().contentMode === 'development'
 
   return (
-    <ProductFrame current="program" accountActions={<SignOutButton />}>
+    <ProductFrame
+      current="program"
+      accountActions={<SignOutButton actionBinding={actor.checkedSignOutActionBinding} />}
+    >
       <div className={styles.content}>
         <PageHeading
           eyebrow="Program sheet"

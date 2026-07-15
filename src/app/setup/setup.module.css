@@ -24,6 +24,21 @@
   margin: 0;
 }
 
+.accountContext {
+  align-items: center;
+  background: var(--paper);
+  border-inline-start: var(--accent-edge) solid var(--indigo-enamel);
+  display: flex;
+  gap: var(--space-4);
+  justify-content: space-between;
+  margin-block-end: var(--space-8);
+  padding: var(--space-4);
+}
+
+.accountContext p {
+  margin: 0;
+}
+
 .form {
   display: grid;
   gap: var(--space-8);
@@ -196,6 +211,11 @@
 }
 
 @media (max-width: 38rem) {
+  .accountContext {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .fieldGrid,
   .loadGrid {
     grid-template-columns: 1fr;

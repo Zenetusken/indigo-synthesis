@@ -193,6 +193,13 @@ describe('clean-clone operator contract', () => {
       ...productionTables,
       'deletion_tombstone',
     ])
+    const e2eResetSource = readFileSync(
+      resolve(projectRoot, 'test/e2e/support/journey.ts'),
+      'utf8',
+    )
+    expect(e2eResetSource).toContain(
+      `INSERT INTO "installation_state" ("singleton") VALUES (1)`,
+    )
 
     const restartReplay = readFileSync(
       resolve(projectRoot, 'test/e2e/restart-replay.spec.ts'),

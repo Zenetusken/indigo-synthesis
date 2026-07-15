@@ -1,7 +1,9 @@
 'use client'
 
 import { useActionState, useEffect, useRef } from 'react'
-import { ErrorSummary, Field, SubmitButton } from '@/components'
+import { ErrorSummary } from '@/components/error-summary'
+import { Field } from '@/components/field'
+import { SubmitButton } from '@/components/submit-button'
 import styles from '../recovery-form.module.css'
 import { type RecoverOwnerActionState, recoverOwnerAction } from './actions'
 

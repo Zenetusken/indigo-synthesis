@@ -1147,6 +1147,10 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
   it('keeps transaction-only mutation-authority helpers on exact production consumers', () => {
     const allowedRuntimeImports = new Map<string, ReadonlySet<string>>([
       [
+        'src/composition/identity-auth-mutations.ts',
+        new Set(['createPlatformMutationAuthorityIssuer']),
+      ],
+      [
         'src/platform/application-coordination/postgres-unit-of-work.ts',
         new Set(['consumePreparedMutationAuthority']),
       ],

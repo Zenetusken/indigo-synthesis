@@ -1,7 +1,7 @@
 'use client'
 
 import { useActionState, useEffect, useRef } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton } from '@/components/action-button'
 import { createLocalUserAction, type LocalUserActionState } from './actions'
 import styles from './settings.module.css'
 

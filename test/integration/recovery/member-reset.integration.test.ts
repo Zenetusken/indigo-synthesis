@@ -2,16 +2,21 @@ import { createHmac } from 'node:crypto'
 import { and, count, eq, sql } from 'drizzle-orm'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import {
   createLocalUserAsOwner,
   createLocalUserWithOwnerReauthentication,
 } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   admitWebRecoveryAttempt,
   isWebRecoveryAttemptThrottled,
@@ -22,6 +27,10 @@ import {
   redeemMemberReset,
 } from '@/modules/identity/recovery/member-reset'
 import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from '@/modules/identity/server/auth-mutation-port'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
@@ -31,6 +40,7 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import {
   auditEvents,
+  installationState,
   memberResetStates,
   session,
   user,
@@ -87,7 +97,39 @@ function createSignInRequest(email: string, password: string): Request {
 }
 
 async function signIn(email: string, password: string): Promise<Response> {
-  return handleAuthPost(createSignInRequest(email, password))
+  const request = createSignInRequest(email, password)
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!installation) throw new Error('Sign-in installation fixture is missing.')
+  request.headers.set(
+    identityActionBindingHeader,
+    issueEmailSignInActionBinding({ expectedEpoch: installation.epoch }),
+  )
+  return handleAuthPost(request, getProductionIdentityAuthMutationPort())
+}
+
+function serializedProviderPort(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) => {
+      const { credentialEmail, providerRequest } = emailSignInMutationCommandView(command)
+      return withSubmittedEmailCredentialLifecycleLocks({
+        email: credentialEmail,
+        resolveAccountUserIds: async () => {
+          const records = await getDb()
+            .select({ id: user.id })
+            .from(user)
+            .where(sql`lower(${user.email}) = ${credentialEmail}`)
+          return records.map(({ id }) => id)
+        },
+        callback: () => handler(providerRequest),
+      })
+    },
+    checkedSignOut: ({ request }) => handler(request),
+  }
 }
 
 function normalizedQueryText(query: unknown): string {
@@ -240,11 +282,11 @@ describe.sequential('owner-mediated member credential reset', () => {
     const releaseSignIn = deferred<void>()
     const signInProbe = handleAuthRequest(
       createSignInRequest(createdEmail, 'reauthenticated-user-password'),
-      async () => {
+      serializedProviderPort(async () => {
         signInEntered.resolve(undefined)
         await releaseSignIn.promise
         return Response.json({ rejected: true }, { status: 401 })
-      },
+      }),
     )
     await signInEntered.promise
 
@@ -595,9 +637,11 @@ describe.sequential('owner-mediated member credential reset', () => {
     const releaseSignIn = deferred<void>()
     const signInPromise = handleAuthRequest(
       createSignInRequest(member.email, originalMemberPassword),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignIn.promise
           return response
@@ -605,7 +649,7 @@ describe.sequential('owner-mediated member credential reset', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
     const secondSession = await signInHandled.promise
     expect(firstSession.status).toBe(200)

@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireUiActor } from '@/modules/identity/server/actor'
 import { listLocalUsersAsOwner } from '@/modules/identity/server/local-users'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { pluralize } from '@/platform/format/plural'
@@ -14,14 +14,17 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Settings' }
 
 export default async function SettingsPage() {
-  const actor = await requireActor()
+  const actor = await requireUiActor()
   const [profile, localUsers] = await Promise.all([
     getAthleteProfile(actor.userId),
     actor.role === 'owner' ? listLocalUsersAsOwner(actor) : Promise.resolve([]),
   ])
 
   return (
-    <ProductFrame current="settings" accountActions={<SignOutButton />}>
+    <ProductFrame
+      current="settings"
+      accountActions={<SignOutButton actionBinding={actor.checkedSignOutActionBinding} />}
+    >
       <div className={styles.content}>
         <PageHeading
           eyebrow="Settings"

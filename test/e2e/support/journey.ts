@@ -77,6 +77,10 @@ export async function clearApplicationData(): Promise<void> {
       // identifier so reserved names such as "user" stay unambiguous.
       await client.query(`DELETE FROM "${tableName}"`)
     }
+    // The installation lifecycle is a mandatory singleton after migration 0017. E2E still
+    // deletes the old row so each journey gets a genuinely new anti-ABA generation, then
+    // recreates the open installation using the schema-owned epoch/timestamp defaults.
+    await client.query('INSERT INTO "installation_state" ("singleton") VALUES (1)')
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)

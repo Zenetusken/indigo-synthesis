@@ -5,11 +5,16 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { and, count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import { admitWebRecoveryAttempt } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
 import {
   issueOwnerRecovery,
@@ -17,6 +22,10 @@ import {
   redeemOwnerRecoveryWeb,
 } from '@/modules/identity/recovery/owner-recovery'
 import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from '@/modules/identity/server/auth-mutation-port'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
@@ -26,6 +35,7 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import {
   auditEvents,
+  installationState,
   session,
   user,
   verification,
@@ -76,7 +86,39 @@ async function authRequest(
   path: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
-  return handleAuthPost(createAuthRequest(path, body))
+  const request = createAuthRequest(path, body)
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!installation) throw new Error('Sign-in installation fixture is missing.')
+  request.headers.set(
+    identityActionBindingHeader,
+    issueEmailSignInActionBinding({ expectedEpoch: installation.epoch }),
+  )
+  return handleAuthPost(request, getProductionIdentityAuthMutationPort())
+}
+
+function serializedProviderPort(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) => {
+      const { credentialEmail, providerRequest } = emailSignInMutationCommandView(command)
+      return withSubmittedEmailCredentialLifecycleLocks({
+        email: credentialEmail,
+        resolveAccountUserIds: async () => {
+          const records = await getDb()
+            .select({ id: user.id })
+            .from(user)
+            .where(sql`lower(${user.email}) = ${credentialEmail}`)
+          return records.map(({ id }) => id)
+        },
+        callback: () => handler(providerRequest),
+      })
+    },
+    checkedSignOut: ({ request }) => handler(request),
+  }
 }
 
 function createAuthRequest(path: string, body: Record<string, unknown>): Request {
@@ -125,6 +167,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
+  resetAuthForTests()
   await getDb().delete(webRecoveryRateLimitBuckets)
 })
 
@@ -243,9 +286,11 @@ describe('host-local owner recovery', () => {
         email: owner.email,
         password: owner.originalPassword,
       }),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignInLock.promise
           return response
@@ -253,7 +298,7 @@ describe('host-local owner recovery', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
     const signInResponse = await signInHandled.promise
     expect(signInResponse.status).toBe(200)
@@ -345,9 +390,11 @@ describe('host-local owner recovery', () => {
         email: owner.email,
         password: owner.originalPassword,
       }),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignInLock.promise
           return response
@@ -355,7 +402,7 @@ describe('host-local owner recovery', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
 
     const signInResponse = await signInHandled.promise

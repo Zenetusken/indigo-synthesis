@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useTransition } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton } from '@/components/action-button'
 import type { FutureLoadExplanationResult } from '@/modules/training/application/future-load-explanation'
 import styles from '../history.module.css'
 import { explainFutureLoadDecisionAction } from './actions'

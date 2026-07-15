@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { count, eq, sql } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { Client } from 'pg'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
+import {
+  type CheckedSignOutActionBinding,
+  checkedSignOutActionBindingHeader,
+  identityActionBindingHeader,
+} from '@/modules/identity/application/action-binding'
 import {
   type AuthenticatedActor,
   deriveIdentityRole,
@@ -15,7 +22,14 @@ import {
   issueOwnerBootstrap,
   type OwnerBootstrapError,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import {
+  issueCheckedSignOutActionBinding,
+  issueEmailSignInActionBinding,
+} from '@/modules/identity/infrastructure/action-binding'
+import {
+  readIdentitySession,
+  resetAuthForTests,
+} from '@/modules/identity/infrastructure/auth'
 import {
   CredentialLifecycleCapacityError,
   credentialLifecycleConnectionLimit,
@@ -26,11 +40,16 @@ import {
 } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import { getInstallationOwnerUserId } from '@/modules/identity/infrastructure/installation'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedWebRecoveryRateLimitGateway } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
 import {
   handleAuthGet,
   handleAuthPost,
   handleAuthRequest,
 } from '@/modules/identity/server/auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from '@/modules/identity/server/auth-mutation-port'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
@@ -67,6 +86,13 @@ type AuthResponseBody = {
   }
 }
 
+type CheckedSignOutFixture = {
+  readonly actionBinding: CheckedSignOutActionBinding
+  readonly cookie: string
+  readonly sessionId: string
+  readonly userId: string
+}
+
 const bootstrapCandidates = [
   {
     name: 'First Owner',
@@ -94,22 +120,135 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+function responseCookieHeader(response: Response): string {
+  return response.headers
+    .getSetCookie()
+    .map((value) => value.split(';', 1)[0])
+    .filter((value): value is string => value !== undefined)
+    .join('; ')
+}
+
 async function authRequest(
   path: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!installation) throw new Error('Sign-in installation fixture is missing.')
+  const actionBinding = issueEmailSignInActionBinding({
+    expectedEpoch: installation.epoch,
+  })
+
+  return authRequestWithBinding(path, body, actionBinding)
+}
+
+function authRequestWithBinding(
+  path: string,
+  body: Record<string, unknown>,
+  actionBinding: string | null,
+): Promise<Response> {
   const origin = getServerConfig().appOrigin
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    origin,
+  }
+  if (actionBinding !== null) headers[identityActionBindingHeader] = actionBinding
 
   return handleAuthPost(
     new Request(`${origin}/api/auth${path}`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        origin,
-      },
+      headers,
       body: JSON.stringify(body),
     }),
+    getProductionIdentityAuthMutationPort(),
   )
+}
+
+function checkedSignOutRequest(fixture: CheckedSignOutFixture): Request {
+  const origin = getServerConfig().appOrigin
+  return new Request(`${origin}/api/auth/sign-out`, {
+    method: 'POST',
+    headers: {
+      cookie: fixture.cookie,
+      origin,
+      [checkedSignOutActionBindingHeader]: fixture.actionBinding,
+    },
+  })
+}
+
+async function checkedSignOutFixture(
+  identity: BootstrapIdentity,
+  options?: { readonly sessionExpiresAt?: Date },
+): Promise<CheckedSignOutFixture> {
+  await getDb().delete(webRecoveryRateLimitBuckets)
+  const response = await authRequest('/sign-in/email', {
+    email: identity.email,
+    password: identity.password,
+  })
+  expect(response.status).toBe(200)
+  const [createdSession] = await getDb()
+    .select({
+      expiresAt: session.expiresAt,
+      id: session.id,
+      userId: session.userId,
+    })
+    .from(session)
+    .where(eq(session.userId, identity.id))
+    .orderBy(sql`${session.createdAt} DESC`)
+    .limit(1)
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!createdSession || !installation) {
+    throw new Error('Checked sign-out fixture was not persisted.')
+  }
+  const sessionExpiresAt = options?.sessionExpiresAt ?? createdSession.expiresAt
+  if (options?.sessionExpiresAt) {
+    await getDb()
+      .update(session)
+      .set({ expiresAt: sessionExpiresAt })
+      .where(eq(session.id, createdSession.id))
+  }
+  return {
+    actionBinding: issueCheckedSignOutActionBinding({
+      expectedEpoch: installation.epoch,
+      sessionId: createdSession.id,
+      actorUserId: createdSession.userId,
+      sessionExpiresAt,
+    }),
+    cookie: responseCookieHeader(response),
+    sessionId: createdSession.id,
+    userId: createdSession.userId,
+  }
+}
+
+async function waitForControlAdvisoryWait(expected = 1): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    const result = await getDb().execute<{ waiting: number }>(sql`
+      SELECT count(*)::integer AS waiting
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = 'indigo-synthesis:control'
+        AND wait_event = 'advisory'
+    `)
+    if (Number(result.rows[0]?.waiting ?? 0) >= expected) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('Checked sign-out did not reach the deferred commit barrier.')
+}
+
+function providerMutationPort(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) =>
+      handler(emailSignInMutationCommandView(command).providerRequest),
+    checkedSignOut: ({ request }) => handler(request),
+  }
 }
 
 async function runBootstrapCli(arguments_: readonly string[]) {
@@ -137,6 +276,10 @@ beforeAll(async () => {
   await migrateDatabase()
   bootstrapSecretsDirectory = await mkdtemp(join(tmpdir(), 'indigo-owner-bootstrap-'))
   await chmod(bootstrapSecretsDirectory, 0o700)
+})
+
+beforeEach(() => {
+  resetAuthForTests()
 })
 
 afterAll(async () => {
@@ -388,12 +531,13 @@ describe('identity database boundary', () => {
       }),
     )
     const sessionBody = (await sessionResponse.json()) as {
-      readonly session?: { readonly token?: string }
+      readonly session?: { readonly id?: string; readonly token?: string }
       readonly user?: { readonly id?: string }
     }
     expect(sessionResponse.status).toBe(200)
     expect(sessionBody.user?.id).toBe(owner.id)
     expect(sessionBody.session?.token).toBeUndefined()
+    expect(sessionBody.session?.id).toBeUndefined()
 
     const listSessions = await handleAuthGet(
       new Request(`${getServerConfig().appOrigin}/api/auth/list-sessions`, {
@@ -408,6 +552,148 @@ describe('identity database boundary', () => {
       .where(eq(session.userId, owner.id))
 
     expect(sessionCount?.value).toBe(1)
+  })
+
+  it('rejects every invalid sign-in binding uniformly before provider mutation', async () => {
+    await getDb().delete(session).where(eq(session.userId, owner.id))
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const [installation] = await getDb()
+      .select({ epoch: installationState.productMutationEpoch })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!installation) throw new Error('Installation epoch is missing.')
+    const fresh = issueEmailSignInActionBinding({
+      expectedEpoch: installation.epoch,
+    })
+    const expired = issueEmailSignInActionBinding(
+      { expectedEpoch: installation.epoch },
+      new Date(Date.now() - 20 * 60 * 1_000),
+    )
+    const wrongPurpose = issueCheckedSignOutActionBinding({
+      expectedEpoch: installation.epoch,
+      sessionId: 'wrong-purpose-session',
+      actorUserId: owner.id,
+      sessionExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+    })
+    const tampered = `${fresh.slice(0, -1)}${fresh.endsWith('A') ? 'B' : 'A'}`
+    let canonicalBody: string | undefined
+
+    for (const binding of [null, tampered, expired, wrongPurpose]) {
+      const response = await authRequestWithBinding(
+        '/sign-in/email',
+        { email: owner.email, password: owner.password },
+        binding,
+      )
+      const body = await response.text()
+      canonicalBody ??= body
+      expect(response.status).toBe(401)
+      expect(response.headers.get('content-type')).toContain('application/json')
+      expect(response.headers.getSetCookie()).toEqual([])
+      expect(body).toBe(canonicalBody)
+    }
+
+    const [sessionCount] = await getDb()
+      .select({ value: count() })
+      .from(session)
+      .where(eq(session.userId, owner.id))
+    const [rateCount] = await getDb()
+      .select({ value: count() })
+      .from(webRecoveryRateLimitBuckets)
+    expect(sessionCount?.value).toBe(0)
+    expect(rateCount?.value).toBe(0)
+
+    const accepted = await authRequestWithBinding(
+      '/sign-in/email',
+      { email: owner.email, password: owner.password },
+      fresh,
+    )
+    expect(accepted.status).toBe(200)
+  })
+
+  it('does not let a stale sign-in page adopt an open or replacement installation', async () => {
+    await getDb().delete(session).where(eq(session.userId, owner.id))
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const [before] = await getDb()
+      .select({
+        closedAt: installationState.bootstrapClosedAt,
+        epoch: installationState.productMutationEpoch,
+        ownerUserId: installationState.ownerUserId,
+      })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!before?.ownerUserId || !before.closedAt) {
+      throw new Error('Claimed installation fixture is missing.')
+    }
+    const staleBinding = issueEmailSignInActionBinding({
+      expectedEpoch: before.epoch,
+    })
+    const credentials = { email: owner.email, password: owner.password }
+
+    try {
+      const [opened] = await getDb()
+        .update(installationState)
+        .set({
+          bootstrapClosedAt: null,
+          ownerUserId: null,
+          productMutationEpoch: sql`gen_random_uuid()`,
+        })
+        .where(eq(installationState.singleton, 1))
+        .returning({ epoch: installationState.productMutationEpoch })
+      if (!opened) throw new Error('Open installation transition failed.')
+
+      const whileOpen = await authRequestWithBinding(
+        '/sign-in/email',
+        credentials,
+        staleBinding,
+      )
+      expect(whileOpen.status).toBe(401)
+      const canonicalBody = await whileOpen.text()
+
+      await getDb()
+        .update(installationState)
+        .set({
+          bootstrapClosedAt: new Date(),
+          ownerUserId: before.ownerUserId,
+        })
+        .where(eq(installationState.singleton, 1))
+      const afterReclaim = await authRequestWithBinding(
+        '/sign-in/email',
+        credentials,
+        staleBinding,
+      )
+      expect(afterReclaim.status).toBe(401)
+      expect(await afterReclaim.text()).toBe(canonicalBody)
+
+      const [noSession] = await getDb()
+        .select({ value: count() })
+        .from(session)
+        .where(eq(session.userId, owner.id))
+      const [noRateMutation] = await getDb()
+        .select({ value: count() })
+        .from(webRecoveryRateLimitBuckets)
+      expect(noSession?.value).toBe(0)
+      expect(noRateMutation?.value).toBe(0)
+
+      const freshBinding = issueEmailSignInActionBinding({
+        expectedEpoch: opened.epoch,
+      })
+      const fresh = await authRequestWithBinding(
+        '/sign-in/email',
+        credentials,
+        freshBinding,
+      )
+      expect(fresh.status).toBe(200)
+    } finally {
+      await getDb().delete(session).where(eq(session.userId, owner.id))
+      await getDb()
+        .update(installationState)
+        .set({
+          bootstrapClosedAt: before.closedAt,
+          ownerUserId: before.ownerUserId,
+          productMutationEpoch: before.epoch,
+        })
+        .where(eq(installationState.singleton, 1))
+    }
   })
 
   it('keeps GET session reads fixed-expiry and leaves expired-row cleanup to Identity', async () => {
@@ -434,10 +720,7 @@ describe('identity database boundary', () => {
       .set({ updatedAt: fixedUpdatedAt, expiresAt: fixedExpiresAt })
       .where(eq(session.id, created.id))
 
-    const serverRead = await getAuth().api.getSession({
-      headers: new Headers({ cookie: cookies }),
-      query: { disableCookieCache: true, disableRefresh: true },
-    })
+    const serverRead = await readIdentitySession(new Headers({ cookie: cookies }))
     const activeRead = await handleAuthGet(
       new Request(`${getServerConfig().appOrigin}/api/auth/get-session`, {
         headers: { cookie: cookies },
@@ -461,10 +744,7 @@ describe('identity database boundary', () => {
       .update(session)
       .set({ expiresAt: expiredAt })
       .where(eq(session.id, created.id))
-    const expiredServerRead = await getAuth().api.getSession({
-      headers: new Headers({ cookie: cookies }),
-      query: { disableCookieCache: true, disableRefresh: true },
-    })
+    const expiredServerRead = await readIdentitySession(new Headers({ cookie: cookies }))
     const expiredRead = await handleAuthGet(
       new Request(`${getServerConfig().appOrigin}/api/auth/get-session`, {
         headers: { cookie: cookies },
@@ -482,6 +762,336 @@ describe('identity database boundary', () => {
 
     const externalPost = await authRequest('/get-session', {})
     expect(externalPost.status).toBe(404)
+  })
+
+  it('deletes only one bounded expired-session page during sign-in', async () => {
+    await getDb().delete(session).where(eq(session.userId, owner.id))
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const expiredAt = new Date(Date.now() - 60_000)
+    await getDb()
+      .insert(session)
+      .values(
+        Array.from({ length: 20 }, (_, index) => ({
+          id: newUuidV7(),
+          token: `expired-sign-in-cleanup-${index}-${newUuidV7()}`,
+          expiresAt: expiredAt,
+          userId: owner.id,
+        })),
+      )
+
+    const response = await authRequest('/sign-in/email', {
+      email: owner.email,
+      password: owner.password,
+    })
+    expect(response.status).toBe(200)
+    const [remaining] = await getDb()
+      .select({ value: count() })
+      .from(session)
+      .where(sql`${session.userId} = ${owner.id} AND ${session.expiresAt} <= now()`)
+    expect(remaining?.value).toBe(4)
+    await getDb().delete(session).where(eq(session.userId, owner.id))
+  })
+
+  it('checks sign-out deletion and publishes cookie expiry only after commit', async () => {
+    const fixture = await checkedSignOutFixture(owner)
+    const lockKey = 'identity-sign-out-commit-barrier'
+    const blocker = new Client({ connectionString: process.env.DATABASE_URL })
+    await blocker.connect()
+    await blocker.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey])
+    await getDb().execute(
+      sql.raw(`
+      CREATE OR REPLACE FUNCTION indigo_test_block_sign_out_commit()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended('${lockKey}', 0));
+        RETURN OLD;
+      END
+      $function$
+    `),
+    )
+    await getDb().execute(
+      sql.raw(`
+      CREATE CONSTRAINT TRIGGER indigo_test_sign_out_commit_barrier
+      AFTER DELETE ON "session"
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW
+      EXECUTE FUNCTION indigo_test_block_sign_out_commit()
+    `),
+    )
+
+    let settled = false
+    const signOut = handleAuthPost(
+      checkedSignOutRequest(fixture),
+      getProductionIdentityAuthMutationPort(),
+    ).finally(() => {
+      settled = true
+    })
+    try {
+      await waitForControlAdvisoryWait()
+      expect(settled).toBe(false)
+      const [visibleBeforeCommit] = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.id, fixture.sessionId))
+      expect(visibleBeforeCommit?.id).toBe(fixture.sessionId)
+
+      await blocker.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey])
+      const response = await signOut
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ success: true })
+      expect(
+        response.headers.getSetCookie().some((cookie) => /Max-Age=0/i.test(cookie)),
+      ).toBe(true)
+      const [deleted] = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.id, fixture.sessionId))
+      expect(deleted).toBeUndefined()
+    } finally {
+      await blocker
+        .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey])
+        .catch(() => undefined)
+      await blocker.end()
+      await signOut.catch(() => undefined)
+      await getDb().execute(
+        sql.raw(
+          'DROP TRIGGER IF EXISTS indigo_test_sign_out_commit_barrier ON "session"',
+        ),
+      )
+      await getDb().execute(
+        sql.raw('DROP FUNCTION IF EXISTS indigo_test_block_sign_out_commit()'),
+      )
+    }
+  })
+
+  it('does not clear the cookie or report success when checked deletion fails', async () => {
+    const fixture = await checkedSignOutFixture(owner)
+    await getDb().execute(
+      sql.raw(`
+      CREATE OR REPLACE FUNCTION indigo_test_reject_sign_out_delete()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        RAISE EXCEPTION 'injected checked sign-out delete failure';
+      END
+      $function$
+    `),
+    )
+    await getDb().execute(
+      sql.raw(`
+      CREATE TRIGGER indigo_test_reject_sign_out_delete
+      BEFORE DELETE ON "session"
+      FOR EACH ROW
+      EXECUTE FUNCTION indigo_test_reject_sign_out_delete()
+    `),
+    )
+
+    try {
+      await expect(
+        handleAuthPost(
+          checkedSignOutRequest(fixture),
+          getProductionIdentityAuthMutationPort(),
+        ),
+      ).rejects.toBeDefined()
+      const [retained] = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.id, fixture.sessionId))
+      expect(retained?.id).toBe(fixture.sessionId)
+    } finally {
+      await getDb().execute(
+        sql.raw('DROP TRIGGER IF EXISTS indigo_test_reject_sign_out_delete ON "session"'),
+      )
+      await getDb().execute(
+        sql.raw('DROP FUNCTION IF EXISTS indigo_test_reject_sign_out_delete()'),
+      )
+      await getDb().delete(session).where(eq(session.id, fixture.sessionId))
+    }
+  })
+
+  it('rejects a stale action binding and makes concurrent checked sign-out idempotent', async () => {
+    const stale = await checkedSignOutFixture(owner)
+    const staleRequest = checkedSignOutRequest(stale)
+    staleRequest.headers.set(
+      checkedSignOutActionBindingHeader,
+      `${stale.actionBinding.slice(0, -1)}${stale.actionBinding.endsWith('a') ? 'b' : 'a'}`,
+    )
+    const rejected = await handleAuthPost(
+      staleRequest,
+      getProductionIdentityAuthMutationPort(),
+    )
+    expect(rejected.status).toBe(409)
+    expect(rejected.headers.getSetCookie()).toEqual([])
+    const [retained] = await getDb()
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.id, stale.sessionId))
+    expect(retained?.id).toBe(stale.sessionId)
+    await getDb().delete(session).where(eq(session.id, stale.sessionId))
+
+    const concurrent = await checkedSignOutFixture(owner)
+    const accountLockKey = `indigo:credential-lifecycle:account:${owner.id}`
+    const blocker = new Client({ connectionString: process.env.DATABASE_URL })
+    await blocker.connect()
+    await blocker.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [
+      accountLockKey,
+    ])
+    const signOuts = [
+      handleAuthPost(
+        checkedSignOutRequest(concurrent),
+        getProductionIdentityAuthMutationPort(),
+      ),
+      handleAuthPost(
+        checkedSignOutRequest(concurrent),
+        getProductionIdentityAuthMutationPort(),
+      ),
+    ] as const
+    try {
+      // Both requests captured the present row before queuing on the account lock. The
+      // second request must therefore accept the winner's delete only during its UoW recheck.
+      await waitForControlAdvisoryWait(2)
+      await blocker.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [
+        accountLockKey,
+      ])
+      const [first, second] = await Promise.all(signOuts)
+      expect([first.status, second.status]).toEqual([200, 200])
+      expect(await first.json()).toEqual({ success: true })
+      expect(await second.json()).toEqual({ success: true })
+      const [deleted] = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.id, concurrent.sessionId))
+      expect(deleted).toBeUndefined()
+    } finally {
+      await blocker
+        .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [accountLockKey])
+        .catch(() => undefined)
+      await blocker.end()
+      await Promise.all(signOuts.map((pending) => pending.catch(() => undefined)))
+    }
+  })
+
+  it('clears verified cookies for transactionally expired or already-absent sessions', async () => {
+    const naturalExpiry = new Date(Date.now() + 500)
+    const expired = await checkedSignOutFixture(owner, {
+      sessionExpiresAt: naturalExpiry,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 550))
+    const expiredResponse = await handleAuthPost(
+      checkedSignOutRequest(expired),
+      getProductionIdentityAuthMutationPort(),
+    )
+    expect(expiredResponse.status).toBe(200)
+    expect(await expiredResponse.json()).toEqual({ success: true })
+    expect(expiredResponse.headers.getSetCookie().length).toBeGreaterThan(0)
+
+    const absent = await checkedSignOutFixture(owner)
+    await getDb().delete(session).where(eq(session.id, absent.sessionId))
+    const absentResponse = await handleAuthPost(
+      checkedSignOutRequest(absent),
+      getProductionIdentityAuthMutationPort(),
+    )
+    expect(absentResponse.status).toBe(200)
+    expect(await absentResponse.json()).toEqual({ success: true })
+    expect(absentResponse.headers.getSetCookie().length).toBeGreaterThan(0)
+  })
+
+  it('does not let a stale-tab sign-out binding adopt a replacement installation epoch', async () => {
+    const fixture = await checkedSignOutFixture(owner)
+    const [before] = await getDb()
+      .select({ epoch: installationState.productMutationEpoch })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!before) throw new Error('Installation epoch is missing.')
+    await getDb()
+      .update(installationState)
+      .set({ productMutationEpoch: sql`gen_random_uuid()` })
+      .where(eq(installationState.singleton, 1))
+
+    try {
+      const response = await handleAuthPost(
+        checkedSignOutRequest(fixture),
+        getProductionIdentityAuthMutationPort(),
+      )
+      expect(response.status).toBe(409)
+      expect(response.headers.getSetCookie()).toEqual([])
+      const [retained] = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.id, fixture.sessionId))
+      expect(retained?.id).toBe(fixture.sessionId)
+    } finally {
+      await getDb()
+        .update(installationState)
+        .set({ productMutationEpoch: before.epoch })
+        .where(eq(installationState.singleton, 1))
+      await getDb().delete(session).where(eq(session.id, fixture.sessionId))
+    }
+  })
+
+  it('preserves origin rejection before checked sign-out capture or mutation', async () => {
+    const fixture = await checkedSignOutFixture(owner)
+    const request = checkedSignOutRequest(fixture)
+    request.headers.set('origin', 'https://attacker.example')
+
+    const response = await handleAuthPost(
+      request,
+      getProductionIdentityAuthMutationPort(),
+    )
+    expect(response.status).toBe(403)
+    expect(response.headers.getSetCookie()).toEqual([])
+    const [retained] = await getDb()
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.id, fixture.sessionId))
+    expect(retained?.id).toBe(fixture.sessionId)
+    await getDb().delete(session).where(eq(session.id, fixture.sessionId))
+  })
+
+  it('clears an old signed cookie after reset has opened the installation', async () => {
+    const fixture = await checkedSignOutFixture(owner)
+    const [before] = await getDb()
+      .select({
+        closedAt: installationState.bootstrapClosedAt,
+        epoch: installationState.productMutationEpoch,
+        ownerUserId: installationState.ownerUserId,
+      })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!before?.ownerUserId || !before.closedAt) {
+      throw new Error('Claimed installation fixture is missing.')
+    }
+    await getDb().delete(session).where(eq(session.id, fixture.sessionId))
+    await getDb()
+      .update(installationState)
+      .set({
+        bootstrapClosedAt: null,
+        ownerUserId: null,
+        productMutationEpoch: sql`gen_random_uuid()`,
+      })
+      .where(eq(installationState.singleton, 1))
+
+    try {
+      const response = await handleAuthPost(
+        checkedSignOutRequest(fixture),
+        getProductionIdentityAuthMutationPort(),
+      )
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ success: true })
+      expect(response.headers.getSetCookie().length).toBeGreaterThan(0)
+    } finally {
+      await getDb()
+        .update(installationState)
+        .set({
+          bootstrapClosedAt: before.closedAt,
+          ownerUserId: before.ownerUserId,
+          productMutationEpoch: before.epoch,
+        })
+        .where(eq(installationState.singleton, 1))
+    }
   })
 
   it('keeps generic signup closed after bootstrap', async () => {
@@ -571,6 +1181,37 @@ describe('identity database boundary', () => {
           credential.idToken === null,
       ),
     ).toBe(true)
+  })
+
+  it('snapshots the checked sign-out cookie before asynchronous capture', async () => {
+    const first = await checkedSignOutFixture(owner)
+    const second = await checkedSignOutFixture(owner)
+    const blocker = new Client({ connectionString: process.env.DATABASE_URL })
+    await blocker.connect()
+    await blocker.query('BEGIN')
+    await blocker.query('LOCK TABLE "session" IN ACCESS EXCLUSIVE MODE')
+
+    try {
+      const mutableRequest = checkedSignOutRequest(first)
+      const signOut = handleAuthPost(
+        mutableRequest,
+        getProductionIdentityAuthMutationPort(),
+      )
+      mutableRequest.headers.set('cookie', second.cookie)
+      await blocker.query('COMMIT')
+
+      const response = await signOut
+      expect(response.status).toBe(200)
+      const remaining = await getDb()
+        .select({ id: session.id })
+        .from(session)
+        .where(sql`${session.id} IN (${first.sessionId}, ${second.sessionId})`)
+      expect(remaining).toEqual([{ id: second.sessionId }])
+    } finally {
+      await blocker.query('ROLLBACK').catch(() => undefined)
+      await blocker.end()
+      await getDb().delete(session).where(eq(session.id, second.sessionId))
+    }
   })
 
   it('keeps provider credential mutation routes absent and leaves the password unchanged', async () => {
@@ -679,6 +1320,133 @@ describe('identity database boundary', () => {
     expect(afterThrottle).toEqual(beforeThrottle)
   })
 
+  it('serializes concurrent first rate-bucket inserts by rows without lost attempts', async () => {
+    async function admit(input: {
+      readonly clientAddress: string
+      readonly email: string
+    }) {
+      return getDb().transaction((transaction) =>
+        createScopedWebRecoveryRateLimitGateway(transaction).admit({
+          purpose: 'sign-in',
+          ...input,
+        }),
+      )
+    }
+
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    await expect(
+      Promise.all([
+        admit({ clientAddress: '198.51.100.8', email: 'first-a@example.test' }),
+        admit({ clientAddress: '198.51.100.8', email: 'first-b@example.test' }),
+      ]),
+    ).resolves.toEqual([{ admitted: true }, { admitted: true }])
+    const sameAddress = await getDb()
+      .select({
+        attemptCount: webRecoveryRateLimitBuckets.attemptCount,
+        scope: webRecoveryRateLimitBuckets.scope,
+      })
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+    expect(sameAddress.filter(({ scope }) => scope === 'sign-in:address')).toEqual([
+      { attemptCount: 2, scope: 'sign-in:address' },
+    ])
+    expect(sameAddress.filter(({ scope }) => scope === 'sign-in:email')).toEqual([
+      { attemptCount: 1, scope: 'sign-in:email' },
+      { attemptCount: 1, scope: 'sign-in:email' },
+    ])
+
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    await expect(
+      Promise.all([
+        admit({ clientAddress: '198.51.100.8', email: 'shared@example.test' }),
+        admit({ clientAddress: '203.0.113.8', email: 'shared@example.test' }),
+      ]),
+    ).resolves.toEqual([{ admitted: true }, { admitted: true }])
+    const sameEmail = await getDb()
+      .select({
+        attemptCount: webRecoveryRateLimitBuckets.attemptCount,
+        scope: webRecoveryRateLimitBuckets.scope,
+      })
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+    expect(sameEmail.filter(({ scope }) => scope === 'sign-in:address')).toEqual([
+      { attemptCount: 1, scope: 'sign-in:address' },
+      { attemptCount: 1, scope: 'sign-in:address' },
+    ])
+    expect(sameEmail.filter(({ scope }) => scope === 'sign-in:email')).toEqual([
+      { attemptCount: 2, scope: 'sign-in:email' },
+    ])
+  })
+
+  it('does zero rate-bucket DML when a queued dimension is already throttled', async () => {
+    async function admit(clientAddress: string) {
+      return getDb().transaction((transaction) =>
+        createScopedWebRecoveryRateLimitGateway(transaction).admit({
+          purpose: 'sign-in',
+          email: 'stale-precheck@example.test',
+          clientAddress,
+          now: new Date('2026-07-15T12:00:00.000Z'),
+        }),
+      )
+    }
+
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(admit('198.51.100.1')).resolves.toEqual({ admitted: true })
+    }
+    const before = await getDb()
+      .select()
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+    await getDb().execute(
+      sql.raw(`
+        CREATE TABLE indigo_test_rate_dml_log (id bigserial PRIMARY KEY);
+        CREATE OR REPLACE FUNCTION indigo_test_log_rate_dml()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          INSERT INTO indigo_test_rate_dml_log DEFAULT VALUES;
+          RETURN NULL;
+        END
+        $function$;
+        CREATE TRIGGER indigo_test_log_rate_dml
+        AFTER INSERT OR UPDATE OR DELETE ON web_recovery_rate_limit_bucket
+        FOR EACH ROW EXECUTE FUNCTION indigo_test_log_rate_dml();
+      `),
+    )
+
+    try {
+      const rejected = await Promise.all(
+        Array.from({ length: 8 }, (_, index) => admit(`203.0.113.${index + 1}`)),
+      )
+      expect(rejected).toEqual(
+        Array.from({ length: 8 }, () => ({
+          admitted: false,
+          scope: 'sign-in:email',
+        })),
+      )
+      const after = await getDb()
+        .select()
+        .from(webRecoveryRateLimitBuckets)
+        .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+      const dml = await getDb().execute<{ count: number }>(
+        sql`SELECT count(*)::integer AS count FROM indigo_test_rate_dml_log`,
+      )
+      expect(after).toEqual(before)
+      expect(dml.rows[0]?.count).toBe(0)
+    } finally {
+      await getDb().execute(
+        sql.raw(`
+          DROP TRIGGER IF EXISTS indigo_test_log_rate_dml
+            ON web_recovery_rate_limit_bucket;
+          DROP FUNCTION IF EXISTS indigo_test_log_rate_dml();
+          DROP TABLE IF EXISTS indigo_test_rate_dml_log;
+        `),
+      )
+    }
+  })
+
   it('runs malformed sign-in input through one bounded dummy provider request', async () => {
     const origin = getServerConfig().appOrigin
     const cases = [
@@ -716,13 +1484,13 @@ describe('identity database boundary', () => {
           headers: { 'content-type': testCase.contentType, origin },
           body: testCase.body,
         }),
-        async (providerRequest) => {
+        providerMutationPort(async (providerRequest) => {
           providerBody = (await providerRequest.json()) as Record<string, unknown>
           return Response.json(
             { token: 'must-not-escape', user: { id: 'must-not-exist' } },
             { status: 200, headers: { 'set-cookie': 'must-not-escape=1' } },
           )
-        },
+        }),
       )
 
       expect(response.status, testCase.name).toBe(401)

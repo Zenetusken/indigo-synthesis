@@ -2,9 +2,9 @@ import type { Metadata, Route } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark, Disclosure } from '@/components'
-import { getInstallationStatus } from '@/modules/identity/application/installation'
 import { workoutSignInReturnTo } from '@/modules/identity/application/sign-in-return'
 import { getActor } from '@/modules/identity/server/actor'
+import { getSignInPageInstallation } from '@/modules/identity/server/sign-in-page'
 import { SignInForm } from '@/modules/identity/ui/sign-in-form'
 import { getServerConfig } from '@/platform/config/server'
 import styles from '../auth-layout.module.css'
@@ -29,7 +29,7 @@ export default async function SignInPage({
     signedOut?: string
   }>
 }) {
-  const installation = await getInstallationStatus()
+  const installation = await getSignInPageInstallation()
   if (installation.kind === 'open') redirect('/bootstrap')
   const query = await searchParams
   const returnTo = workoutSignInReturnTo(query.returnTo)
@@ -80,6 +80,12 @@ export default async function SignInPage({
           </p>
         ) : null}
 
+        {query.signedOut === '1' ? (
+          <p className={styles.notice} role="status">
+            Signed out from this local account.
+          </p>
+        ) : null}
+
         {query.expired === '1' && returnTo ? (
           <p className={styles.notice} role="status">
             Your session ended. Sign in again to resume your saved workout.
@@ -91,7 +97,10 @@ export default async function SignInPage({
           <p>Sign in with the local account stored on this instance.</p>
         </header>
 
-        <SignInForm returnTo={returnTo ?? undefined} />
+        <SignInForm
+          actionBinding={installation.actionBinding}
+          returnTo={returnTo ?? undefined}
+        />
 
         <Disclosure className={styles.recoveryDisclosure} summary="Can't sign in?">
           <div className={styles.recoveryOptions}>

@@ -9,7 +9,7 @@ import SignInPage from './page'
 const pageMocks = vi.hoisted(() => ({
   contentMode: 'development' as 'development' | 'reviewed',
   getActor: vi.fn(),
-  getInstallationStatus: vi.fn(),
+  getSignInPageInstallation: vi.fn(),
   redirect: vi.fn(),
 }))
 
@@ -25,15 +25,21 @@ vi.mock('next/link', () => ({
 vi.mock('next/navigation', () => ({
   redirect: pageMocks.redirect,
 }))
-vi.mock('@/modules/identity/application/installation', () => ({
-  getInstallationStatus: pageMocks.getInstallationStatus,
+vi.mock('@/modules/identity/server/sign-in-page', () => ({
+  getSignInPageInstallation: pageMocks.getSignInPageInstallation,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   getActor: pageMocks.getActor,
 }))
 vi.mock('@/modules/identity/ui/sign-in-form', () => ({
-  SignInForm: ({ returnTo }: { returnTo?: string }) => (
-    <form data-return-to={returnTo}>
+  SignInForm: ({
+    actionBinding,
+    returnTo,
+  }: {
+    actionBinding: string
+    returnTo?: string
+  }) => (
+    <form data-action-binding={actionBinding} data-return-to={returnTo}>
       <button type="submit">Sign in</button>
     </form>
   ),
@@ -50,10 +56,9 @@ describe('Sign-in orientation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pageMocks.contentMode = 'development'
-    pageMocks.getInstallationStatus.mockResolvedValue({
+    pageMocks.getSignInPageInstallation.mockResolvedValue({
       kind: 'closed',
-      ownerUserId: 'owner-id',
-      closedAt: new Date('2026-07-13T12:00:00.000Z'),
+      actionBinding: 'opaque-sign-in-binding',
     })
     pageMocks.getActor.mockResolvedValue(null)
   })
@@ -71,6 +76,9 @@ describe('Sign-in orientation', () => {
     expect(
       screen.getByRole('link', { name: `Indigo Synthesis ${label}` }),
     ).toHaveAttribute('href', '/')
+    expect(
+      screen.getByRole('button', { name: 'Sign in' }).closest('form'),
+    ).toHaveAttribute('data-action-binding', 'opaque-sign-in-binding')
   })
 
   it('keeps sign-in primary and expands explicit next actions on request', async () => {
@@ -112,6 +120,15 @@ describe('Sign-in orientation', () => {
     await renderSignIn({ [query]: '1' })
 
     expect(screen.getByRole('status')).toHaveTextContent(message)
+  })
+
+  it('confirms a checked sign-out without disclosing session detail', async () => {
+    await renderSignIn({ signedOut: '1' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Signed out from this local account.',
+    )
+    expect(screen.getByRole('status')).not.toHaveTextContent(/session|token|account id/i)
   })
 
   it('orients an expired athlete and preserves only the exact saved-workout return', async () => {

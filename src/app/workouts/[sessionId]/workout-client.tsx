@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { type FormEvent, useEffect, useRef, useState, useTransition } from 'react'
-import { ActionButton, Disclosure } from '@/components'
+import { ActionButton } from '@/components/action-button'
+import { Disclosure } from '@/components/disclosure'
 import { formatCalendarDate, formatTimeInTimezone } from '@/modules/athletes/domain/time'
 import {
   type DisplayUnits,

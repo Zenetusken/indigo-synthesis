@@ -1,45 +1,23 @@
-import { createHmac } from 'node:crypto'
-import { toNextJsHandler } from 'better-auth/next-js'
-import { eq, sql } from 'drizzle-orm'
-import { z } from 'zod'
 import { getServerConfig } from '@/platform/config/server'
-import { getDb } from '@/platform/db/client'
-import { user } from '@/platform/db/schema'
-import { getAuth } from '../infrastructure/auth'
+import { identityActionBindingHeader } from '../application/action-binding'
+import { handleIdentityGetSession } from '../infrastructure/auth'
 import { resolveWebClientAddress } from '../infrastructure/client-address'
+import { admitCredentialLoadShedder } from '../infrastructure/credential-load-shedder'
 import {
-  CredentialLifecycleCapacityError,
-  CredentialLifecycleUnavailableError,
-  withSubmittedEmailCredentialLifecycleLocks,
-} from '../infrastructure/credential-lifecycle-lock'
-import {
-  admitWebRecoveryAttempt,
-  isWebRecoveryAttemptThrottled,
-} from '../infrastructure/web-recovery-rate-limit'
-import { normalizeRecoveryEmail } from '../recovery/recovery-policy'
-
-type AuthHandler = (request: Request) => Promise<Response>
+  createEmailSignInMutationCommand,
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from './auth-mutation-port'
 
 const allowedExternalIdentityRequests = new Set([
-  'GET /get-session',
-  'POST /sign-in/email',
-  'POST /sign-out',
+  'GET /api/auth/get-session',
+  'POST /api/auth/sign-in/email',
+  'POST /api/auth/sign-out',
 ])
-const invalidProviderEmail = `${'i'.repeat(64)}@${'d'.repeat(63)}.${'u'.repeat(63)}.${'m'.repeat(63)}.com`
-
-function authHandlers() {
-  return toNextJsHandler(getAuth())
-}
-
-function authPath(request: Request): string {
-  const pathname = new URL(request.url).pathname.replace(/\/+$/, '')
-  const authRoot = '/api/auth'
-  const rootIndex = pathname.lastIndexOf(authRoot)
-  return rootIndex >= 0 ? pathname.slice(rootIndex + authRoot.length) || '/' : pathname
-}
 
 function unsupportedIdentityRequest(request: Request): boolean {
-  return !allowedExternalIdentityRequests.has(`${request.method} ${authPath(request)}`)
+  const pathname = new URL(request.url).pathname
+  return !allowedExternalIdentityRequests.has(`${request.method} ${pathname}`)
 }
 
 function unsupportedIdentityMutationResponse(): Response {
@@ -48,6 +26,32 @@ function unsupportedIdentityMutationResponse(): Response {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function browserSafeUser(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null
+  const safe: Record<string, unknown> = {}
+  for (const field of [
+    'id',
+    'name',
+    'email',
+    'emailVerified',
+    'image',
+    'createdAt',
+    'updatedAt',
+  ] as const) {
+    if (field in value) safe[field] = value[field]
+  }
+  return safe
+}
+
+function browserSafeSession(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null
+  const safe: Record<string, unknown> = {}
+  for (const field of ['expiresAt', 'createdAt', 'updatedAt'] as const) {
+    if (field in value) safe[field] = value[field]
+  }
+  return safe
 }
 
 function jsonResponseWithProviderHeaders(response: Response, body: unknown): Response {
@@ -67,105 +71,33 @@ async function redactBrowserSessionToken(
   response: Response,
 ): Promise<Response> {
   if (!response.ok) return response
-  const path = authPath(request)
-  if (path !== '/sign-in/email' && path !== '/get-session') return response
+  const path = new URL(request.url).pathname
+  if (path !== '/api/auth/sign-in/email' && path !== '/api/auth/get-session') {
+    return response
+  }
 
   const body: unknown = await response.json()
   if (!isRecord(body)) return jsonResponseWithProviderHeaders(response, body)
 
-  if (path === '/sign-in/email') {
-    const { token: _token, ...safeBody } = body
-    return jsonResponseWithProviderHeaders(response, safeBody)
+  if (path === '/api/auth/sign-in/email') {
+    return jsonResponseWithProviderHeaders(response, {
+      redirect: body.redirect === true,
+      url: typeof body.url === 'string' ? body.url : null,
+      user: browserSafeUser(body.user),
+    })
   }
 
-  const sessionValue = body.session
-  if (!isRecord(sessionValue)) return jsonResponseWithProviderHeaders(response, body)
-  const { token: _token, ...safeSession } = sessionValue
-  return jsonResponseWithProviderHeaders(response, { ...body, session: safeSession })
+  return jsonResponseWithProviderHeaders(response, {
+    session: browserSafeSession(body.session),
+    user: browserSafeUser(body.user),
+  })
 }
 
 function isEmailSignIn(request: Request): boolean {
   return (
     request.method === 'POST' &&
-    new URL(request.url).pathname.replace(/\/+$/, '').endsWith('/sign-in/email')
+    new URL(request.url).pathname === '/api/auth/sign-in/email'
   )
-}
-
-type SignInCredentialRequest = {
-  readonly email: string
-  readonly providerRequest: Request
-  readonly valid: boolean
-}
-
-function dummyProviderPassword(): string {
-  return createHmac('sha256', getServerConfig().authSecret)
-    .update('sign-in-dummy-password-v1\0', 'utf8')
-    .digest('base64url')
-}
-
-async function signInCredentialRequest(
-  request: Request,
-): Promise<SignInCredentialRequest> {
-  let rawEmail: unknown
-  let rawPassword: unknown
-  let rawRememberMe: unknown
-  try {
-    if (
-      request.headers.get('content-type')?.includes('application/x-www-form-urlencoded')
-    ) {
-      const body = await request.clone().formData()
-      rawEmail = body.get('email')
-      rawPassword = body.get('password')
-      rawRememberMe = body.get('rememberMe')
-    } else {
-      const body: unknown = await request.clone().json()
-      if (isRecord(body)) {
-        rawEmail = body.email
-        rawPassword = body.password
-        rawRememberMe = body.rememberMe
-      }
-    }
-  } catch {
-    // Continue through the bounded dummy provider path.
-  }
-
-  const email = normalizeRecoveryEmail(
-    typeof rawEmail === 'string' ? rawEmail : 'invalid-email',
-  )
-  const validEmail = z.email().safeParse(email).success
-  const validPassword =
-    typeof rawPassword === 'string' &&
-    rawPassword.length <= 128 &&
-    !rawPassword.includes('\0')
-  const valid = validEmail && validPassword
-  const headers = new Headers(request.headers)
-  headers.delete('content-length')
-  headers.set('content-type', 'application/json')
-  const rememberMe = rawRememberMe !== false && rawRememberMe !== 'false'
-
-  return {
-    email,
-    valid,
-    providerRequest: new Request(request.url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        email: valid ? email : invalidProviderEmail,
-        password: valid ? rawPassword : dummyProviderPassword(),
-        rememberMe,
-      }),
-      signal: request.signal,
-    }),
-  }
-}
-
-async function userIdForEmail(email: string): Promise<string | null> {
-  const [record] = await getDb()
-    .select({ id: user.id })
-    .from(user)
-    .where(eq(sql`lower(${user.email})`, email))
-    .limit(1)
-  return record?.id ?? null
 }
 
 function forwardingFailure(): Response {
@@ -190,9 +122,11 @@ function signInFailure(): Response {
 
 export async function handleAuthRequest(
   request: Request,
-  handler: AuthHandler,
+  mutations: IdentityAuthMutationPort,
 ): Promise<Response> {
-  if (unsupportedIdentityRequest(request)) {
+  // GET has a deliberately narrower read-only entry point. Never let a caller of the
+  // mutation dispatcher turn an allowed read route into checked sign-out.
+  if (request.method !== 'POST' || unsupportedIdentityRequest(request)) {
     return unsupportedIdentityMutationResponse()
   }
 
@@ -205,76 +139,67 @@ export async function handleAuthRequest(
   }
 
   if (!isEmailSignIn(request)) {
-    return redactBrowserSessionToken(request, await handler(request))
-  }
-
-  const signIn = await signInCredentialRequest(request)
-  const email = signIn.email
-  const rateInput = {
-    purpose: 'sign-in' as const,
-    email,
-    clientAddress,
-  }
-  if (await isWebRecoveryAttemptThrottled(rateInput)) return signInFailure()
-
-  try {
-    return await withSubmittedEmailCredentialLifecycleLocks({
-      email,
-      resolveAccountUserIds: async () => {
-        const userId = await userIdForEmail(email)
-        return userId ? [userId] : []
-      },
-      callback: async () => {
-        const admission = await admitWebRecoveryAttempt(rateInput)
-        if (!admission.admitted) return signInFailure()
-
-        const response = await handler(signIn.providerRequest)
-        return signIn.valid && response.ok
-          ? redactBrowserSessionToken(request, response)
-          : signInFailure()
-      },
+    return mutations.checkedSignOut({
+      actionBinding: request.headers.get(identityActionBindingHeader),
+      request,
+      signal: request.signal,
     })
-  } catch (error) {
-    if (
-      error instanceof CredentialLifecycleCapacityError ||
-      error instanceof CredentialLifecycleUnavailableError
-    ) {
-      return signInFailure()
-    }
-    throw error
   }
+
+  const command = await createEmailSignInMutationCommand({
+    actionBinding: request.headers.get(identityActionBindingHeader),
+    clientAddress,
+    request,
+  })
+  const commandView = emailSignInMutationCommandView(command)
+  if (
+    !admitCredentialLoadShedder({
+      purpose: 'sign-in',
+      email: commandView.rateLimitEmail,
+      clientAddress,
+    }).admitted
+  ) {
+    return signInFailure()
+  }
+  const response = await mutations.emailSignIn(command)
+  return commandView.syntacticallyValid && response.ok
+    ? redactBrowserSessionToken(request, response)
+    : signInFailure()
 }
 
 export function handleAuthGet(request: Request): Promise<Response> {
   if (unsupportedIdentityRequest(request)) {
     return Promise.resolve(unsupportedIdentityMutationResponse())
   }
-  return authHandlers()
-    .GET(request)
-    .then((response) => redactBrowserSessionToken(request, response))
+  return handleIdentityGetSession(request).then((response) =>
+    redactBrowserSessionToken(request, response),
+  )
 }
 
-export function handleAuthPost(request: Request): Promise<Response> {
-  return handleAuthRequest(request, authHandlers().POST)
+export function handleAuthPost(
+  request: Request,
+  mutations: IdentityAuthMutationPort,
+): Promise<Response> {
+  return handleAuthRequest(request, mutations)
 }
 
 export function handleAuthPatch(request: Request): Promise<Response> {
   if (unsupportedIdentityRequest(request)) {
     return Promise.resolve(unsupportedIdentityMutationResponse())
   }
-  return authHandlers().PATCH(request)
+  return Promise.resolve(unsupportedIdentityMutationResponse())
 }
 
 export function handleAuthPut(request: Request): Promise<Response> {
   if (unsupportedIdentityRequest(request)) {
     return Promise.resolve(unsupportedIdentityMutationResponse())
   }
-  return authHandlers().PUT(request)
+  return Promise.resolve(unsupportedIdentityMutationResponse())
 }
 
 export function handleAuthDelete(request: Request): Promise<Response> {
   if (unsupportedIdentityRequest(request)) {
     return Promise.resolve(unsupportedIdentityMutationResponse())
   }
-  return authHandlers().DELETE(request)
+  return Promise.resolve(unsupportedIdentityMutationResponse())
 }

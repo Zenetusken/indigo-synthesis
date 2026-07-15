@@ -14,8 +14,9 @@ import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
 import { revokeContentRelease } from '@/modules/programs/application/content-revocations'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
@@ -100,7 +101,7 @@ let bootstrapToken: string
 
 async function authRequest(path: string, body: Record<string, unknown>) {
   const origin = getServerConfig().appOrigin
-  return getAuth().handler(
+  return createScopedIdentityMutationGateway(getDb()).signInEmail(
     new Request(`${origin}/api/auth${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin },

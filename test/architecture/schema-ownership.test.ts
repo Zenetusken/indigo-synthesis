@@ -162,6 +162,7 @@ describe('schema/table write-authority fence', () => {
   it('O5: Better Auth adapter is configured only in identity', () => {
     expect(listAdapterConfigurers(sourceRoot)).toEqual([
       'src/modules/identity/infrastructure/auth.ts',
+      'src/modules/identity/infrastructure/scoped-mutation-auth.ts',
     ])
     for (const table of ['user', 'session', 'account', 'verification']) {
       expect(fence[table]?.owner).toBe('identity')

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useActionState, useEffect, useRef, useState } from 'react'
-import { SubmitButton } from '@/components'
+import { SubmitButton } from '@/components/submit-button'
 import styles from '../history.module.css'
 import {
   type PostCompletionSafetyReportState,

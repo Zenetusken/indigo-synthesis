@@ -1,7 +1,7 @@
 'use client'
 
 import { useActionState, useEffect, useId, useReducer, useRef, useState } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton } from '@/components/action-button'
 import { resolveSafetyHoldAction, type SafetyHoldResolutionActionState } from './actions'
 import styles from './today.module.css'
 

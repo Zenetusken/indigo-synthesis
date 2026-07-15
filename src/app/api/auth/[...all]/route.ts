@@ -1,3 +1,4 @@
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
 import {
   handleAuthDelete,
   handleAuthGet,
@@ -13,7 +14,7 @@ export function GET(request: Request): Promise<Response> {
 }
 
 export function POST(request: Request): Promise<Response> {
-  return handleAuthPost(request)
+  return handleAuthPost(request, getProductionIdentityAuthMutationPort())
 }
 
 export function PATCH(request: Request): Promise<Response> {

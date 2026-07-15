@@ -13,8 +13,9 @@ import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import { issueOwnerRecovery } from '@/modules/identity/recovery/owner-recovery'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
@@ -53,7 +54,7 @@ async function authRequest(
   body: Record<string, unknown>,
 ): Promise<Response> {
   const origin = getServerConfig().appOrigin
-  return getAuth().handler(
+  return createScopedIdentityMutationGateway(getDb()).signInEmail(
     new Request(`${origin}/api/auth${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin },

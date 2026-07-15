@@ -236,27 +236,44 @@ describe('architecture boundaries', () => {
       .filter((path) => !/\.test\.tsx?$/.test(path))
       .filter((path) => readFileSync(path, 'utf8').includes('.api.getSession('))
       .map(projectPath)
-    expect(sessionReaders).toEqual(['src/modules/identity/server/actor.ts'])
+    expect(sessionReaders).toEqual(['src/modules/identity/infrastructure/auth.ts'])
 
     const actor = readFileSync(
       resolve(sourceRoot, 'modules/identity/server/actor.ts'),
       'utf8',
     )
-    expect(actor).toContain('disableCookieCache: true')
-    expect(actor).toContain('disableRefresh: true')
+    expect(actor).toContain(
+      "import { readIdentitySession } from '../infrastructure/auth'",
+    )
+    expect(actor).toContain('readIdentitySession(await headers())')
+    expect(actor).not.toContain('.api.getSession(')
 
     const auth = readFileSync(
       resolve(sourceRoot, 'modules/identity/infrastructure/auth.ts'),
       'utf8',
     )
-    expect(auth).toContain('disableSignUp: true')
-    expect(auth).toContain('deferSessionRefresh: true')
-    expect(auth).toContain('disableSessionRefresh: true')
-    expect(auth).toMatch(/cookieCache:\s*\{\s*enabled:\s*false\s*\}/)
-    expect(auth).toContain("enabled: config.nodeEnv === 'production'")
-    expect(auth).toMatch(/customRules:\s*\{\s*'\/sign-in\/email':\s*false\s*\}/)
-    expect(auth).not.toMatch(/\b(?:bearer|refreshToken|jwt)\b/i)
-    expect(auth).toMatch(/plugins:\s*\[nextCookies\(\)\]/)
+    const authPolicy = readFileSync(
+      resolve(sourceRoot, 'modules/identity/infrastructure/identity-auth-config.ts'),
+      'utf8',
+    )
+    const scopedAuth = readFileSync(
+      resolve(sourceRoot, 'modules/identity/infrastructure/scoped-mutation-auth.ts'),
+      'utf8',
+    )
+    expect(authPolicy).toContain('disableSignUp: true')
+    expect(authPolicy).toContain('deferSessionRefresh: true')
+    expect(authPolicy).toContain('disableSessionRefresh: true')
+    expect(authPolicy).toMatch(/cookieCache:\s*\{\s*enabled:\s*false\s*\}/)
+    expect(authPolicy).toContain("enabled: config.nodeEnv === 'production'")
+    expect(authPolicy).toMatch(/customRules:\s*\{\s*'\/sign-in\/email':\s*false\s*\}/)
+    expect(`${auth}\n${authPolicy}\n${scopedAuth}`).not.toMatch(
+      /\b(?:bearer|refreshToken|jwt)\b/i,
+    )
+    expect(auth).toContain('nextCookies()')
+    expect(auth).toContain('disableCookieCache: true')
+    expect(auth).toContain('disableRefresh: true')
+    expect(scopedAuth).toContain('transaction: false')
+    expect(scopedAuth).not.toContain('nextCookies')
 
     const publicCredentialRoutes = filesMatching(resolve(sourceRoot, 'app'), /route\.ts$/)
       .map(projectPath)
@@ -272,10 +289,23 @@ describe('architecture boundaries', () => {
       'utf8',
     )
     expect(authHandler).toContain('allowDirectLoopback: !config.secureCookies')
-    for (const request of ['GET /get-session', 'POST /sign-in/email', 'POST /sign-out']) {
+    for (const request of [
+      'GET /api/auth/get-session',
+      'POST /api/auth/sign-in/email',
+      'POST /api/auth/sign-out',
+    ]) {
       expect(authHandler).toContain(`'${request}'`)
     }
     expect(authHandler).toContain('redactBrowserSessionToken')
+    expect(authHandler).toContain('function browserSafeUser')
+    expect(authHandler).toContain('function browserSafeSession')
+    expect(authHandler).toMatch(
+      /for \(const field of \[\s*'id',\s*'name',\s*'email',\s*'emailVerified',\s*'image',\s*'createdAt',\s*'updatedAt',?\s*\]/,
+    )
+    expect(authHandler).toMatch(
+      /for \(const field of \['expiresAt', 'createdAt', 'updatedAt'\]/,
+    )
+    expect(authHandler).not.toMatch(/\.\.\.(?:body|session|user)\b/)
     for (const path of [
       '/change-email',
       '/change-password',
@@ -291,7 +321,7 @@ describe('architecture boundaries', () => {
       '/sign-up/email',
       '/update-user',
     ]) {
-      expect(auth).toContain(`'${path}'`)
+      expect(authPolicy).toContain(`'${path}'`)
     }
     expect(serverConfig).toContain(
       'Plain HTTP is supported only for a loopback application origin.',
