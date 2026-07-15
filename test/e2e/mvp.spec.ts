@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test'
-import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
@@ -13,6 +12,7 @@ import {
   databaseClient,
   expectNoHorizontalOverflow,
   generateAndActivate,
+  issueE2eOwnerBootstrap,
   e2eOwner as owner,
   todayIso,
 } from './support/journey'
@@ -1043,7 +1043,7 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   await page.emulateMedia({ reducedMotion: 'reduce' })
 
   const titles = new Set<string>()
-  const mobileBootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const mobileBootstrap = await issueE2eOwnerBootstrap()
   await closeDb()
 
   await page.goto('/')

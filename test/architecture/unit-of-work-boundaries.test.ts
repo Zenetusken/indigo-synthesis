@@ -1151,6 +1151,10 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
         new Set(['createPlatformMutationAuthorityIssuer']),
       ],
       [
+        'src/composition/identity-bootstrap-mutations.ts',
+        new Set(['createPlatformMutationAuthorityIssuer']),
+      ],
+      [
         'src/platform/application-coordination/postgres-unit-of-work.ts',
         new Set(['consumePreparedMutationAuthority']),
       ],
@@ -1206,8 +1210,9 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
   })
 
   it('reserves raw external-host connection ownership for an audited host adapter', () => {
-    // Add a single adapter here only when it owns the external flock/slot from creation to close.
-    const allowedExternalHostAdapters = new Set<string>()
+    const allowedExternalHostAdapters = new Set([
+      'src/platform/db/external-host-command.ts',
+    ])
     expect(
       externalHostConnectionSeamViolations(productionFiles, allowedExternalHostAdapters),
     ).toEqual([])

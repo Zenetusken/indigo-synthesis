@@ -1,6 +1,10 @@
+import { execFile as execFileCallback } from 'node:child_process'
+import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { expect, type Page } from '@playwright/test'
 import { Client } from 'pg'
-import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
 import { validateLocalE2eResetTarget } from '@/platform/db/e2e-reset-guard'
@@ -12,6 +16,7 @@ import { e2eAdministrationUrlEnvironment } from './reset-target'
 // original admin/target pair immediately before connecting.
 const e2eAdministrationUrl =
   process.env[e2eAdministrationUrlEnvironment] ?? process.env.DATABASE_URL
+const execFile = promisify(execFileCallback)
 
 /**
  * Shared J1–J4 helpers for Playwright journeys.
@@ -61,6 +66,31 @@ export async function databaseClient(): Promise<Client> {
   return client
 }
 
+/** Exercises the guarded production host CLI without loading its Node-only graph in Playwright. */
+export async function issueE2eOwnerBootstrap() {
+  const directory = await mkdtemp(join(tmpdir(), 'indigo-e2e-bootstrap-'))
+  await chmod(directory, 0o700)
+  const codeFile = join(directory, 'owner-bootstrap-code')
+  try {
+    await execFile(
+      'bash',
+      [
+        'scripts/run-external-host-command.sh',
+        'scripts/identity/bootstrap-owner.ts',
+        'issue',
+        '--code-file',
+        codeFile,
+        '--ttl-minutes',
+        '15',
+      ],
+      { cwd: process.cwd(), env: process.env },
+    )
+    return Object.freeze({ code: (await readFile(codeFile, 'utf8')).trim() })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 export async function clearApplicationData(): Promise<void> {
   validateLocalE2eResetTarget(e2eAdministrationUrl, process.env.E2E_DATABASE_URL)
   const client = await databaseClient()
@@ -94,7 +124,7 @@ export async function bootstrapAndSignIn(
   page: Page,
   options: { readonly verifyClaimGuard?: boolean } = {},
 ): Promise<void> {
-  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const issued = await issueE2eOwnerBootstrap()
   await closeDb()
 
   await page.goto('/')

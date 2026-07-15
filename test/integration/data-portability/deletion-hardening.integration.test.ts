@@ -1,5 +1,9 @@
 import { and, count, eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/composition/identity-bootstrap-mutations'
 import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
   createSubjectDeletionPlan,
@@ -9,10 +13,6 @@ import {
 } from '@/modules/data-portability/application/deletion'
 import { destructiveReauthenticationPolicy } from '@/modules/data-portability/application/destructive-reauthentication'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
-import {
-  createOwnerWithBootstrapCode,
-  issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'

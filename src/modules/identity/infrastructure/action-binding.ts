@@ -5,6 +5,8 @@ import {
   checkedSignOutActionBindingPurpose,
   type EmailSignInActionBinding,
   emailSignInActionBindingPurpose,
+  type OwnerBootstrapActionBinding,
+  ownerBootstrapActionBindingPurpose,
 } from '../application/action-binding'
 
 const actionBindingVersion = 'iab1'
@@ -13,11 +15,13 @@ const base64urlSha256Pattern = /^[A-Za-z0-9_-]{43}$/
 const canonicalBase36Pattern = /^[1-9a-z][0-9a-z]*$/
 const maximumIdentityFieldBytes = 512
 const emailSignInBindingLifetimeMilliseconds = 15 * 60 * 1_000
+const ownerBootstrapBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const checkedSignOutCleanupGraceMilliseconds = 15 * 60 * 1_000
 
 type IdentityActionBindingPurpose =
   | typeof checkedSignOutActionBindingPurpose
   | typeof emailSignInActionBindingPurpose
+  | typeof ownerBootstrapActionBindingPurpose
 
 export type CheckedSignOutActionBindingContext = {
   readonly expectedEpoch: string
@@ -31,6 +35,10 @@ type CheckedSignOutActionBindingIssuance = CheckedSignOutActionBindingContext & 
 }
 
 export type EmailSignInActionBindingContext = {
+  readonly expectedEpoch: string
+}
+
+export type OwnerBootstrapActionBindingContext = {
   readonly expectedEpoch: string
 }
 
@@ -201,6 +209,51 @@ export function verifyEmailSignInActionBinding(
   try {
     expectedSignature = signature(
       emailSignInActionBindingPurpose,
+      [context.expectedEpoch],
+      parsed.encodedExpiry,
+    )
+  } catch {
+    return false
+  }
+  return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
+/** Issues a purpose-separated, short-lived proof for the open bootstrap page generation. */
+export function issueOwnerBootstrapActionBinding(
+  context: OwnerBootstrapActionBindingContext,
+  now = new Date(),
+): OwnerBootstrapActionBinding {
+  const current = currentSeconds(now)
+  const expiry = currentSeconds(
+    new Date(now.getTime() + ownerBootstrapBindingLifetimeMilliseconds),
+  )
+  if (!Number.isSafeInteger(expiry) || expiry <= current) {
+    throw new TypeError('Cannot issue an owner-bootstrap action binding at this time.')
+  }
+  const encodedExpiry = expiry.toString(36)
+  const encodedSignature = signature(
+    ownerBootstrapActionBindingPurpose,
+    [context.expectedEpoch],
+    encodedExpiry,
+  ).toString('base64url')
+  return `${actionBindingVersion}.${ownerBootstrapActionBindingPurpose}.${encodedExpiry}.${encodedSignature}` as OwnerBootstrapActionBinding
+}
+
+/** Verifies bootstrap purpose and epoch without trusting a browser-supplied lifecycle value. */
+export function verifyOwnerBootstrapActionBinding(
+  binding: unknown,
+  context: OwnerBootstrapActionBindingContext,
+  now = new Date(),
+): binding is OwnerBootstrapActionBinding {
+  const parsed = parseBinding(binding, ownerBootstrapActionBindingPurpose)
+  if (!parsed) return false
+  const expiry = Number.parseInt(parsed.encodedExpiry, 36)
+  if (currentSeconds(now) >= expiry) return false
+
+  let expectedSignature: Buffer
+  try {
+    expectedSignature = signature(
+      ownerBootstrapActionBindingPurpose,
       [context.expectedEpoch],
       parsed.encodedExpiry,
     )

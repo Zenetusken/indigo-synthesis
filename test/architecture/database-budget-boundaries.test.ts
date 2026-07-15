@@ -135,6 +135,7 @@ describe('database connection budget boundaries', () => {
         'src/platform/db/credential-connections.ts',
         new Set([
           'src/composition/identity-auth-mutations.ts',
+          'src/composition/identity-bootstrap-mutations.ts',
           'src/modules/identity/infrastructure/credential-lifecycle-lock.ts',
         ]),
       ],

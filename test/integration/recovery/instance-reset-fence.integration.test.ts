@@ -2,14 +2,14 @@ import { count, eq, sql } from 'drizzle-orm'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/composition/identity-bootstrap-mutations'
+import {
   createInstanceResetPlan,
   executeInstanceReset,
 } from '@/modules/data-portability/application/deletion'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
-import {
-  createOwnerWithBootstrapCode,
-  issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   CredentialLifecycleUnavailableError,
   credentialLifecycleConnectionLimit,

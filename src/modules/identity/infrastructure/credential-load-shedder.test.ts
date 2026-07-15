@@ -5,10 +5,15 @@ const start = new Date('2026-07-15T12:00:00.000Z')
 
 function attempt(
   shedder: ReturnType<typeof createCredentialLoadShedder>,
-  input: { readonly email: string; readonly address: string; readonly now?: Date },
+  input: {
+    readonly email: string
+    readonly address: string
+    readonly now?: Date
+    readonly purpose?: 'sign-in' | 'owner-bootstrap'
+  },
 ) {
   return shedder.admit({
-    purpose: 'sign-in',
+    purpose: input.purpose ?? 'sign-in',
     email: input.email,
     clientAddress: input.address,
     now: input.now ?? start,
@@ -95,6 +100,41 @@ describe('credential load shedder', () => {
     expect(shedder.activeBucketCount()).toBe(0)
     expect(
       attempt(shedder, { address: '198.51.100.1', email: 'one@example.test' }),
+    ).toEqual({ admitted: true })
+  })
+
+  it('normalizes bootstrap email identities without sharing authority with sign-in', () => {
+    const shedder = createCredentialLoadShedder({
+      maximumBuckets: 8,
+      secret: 'load-shedder-test-secret',
+    })
+    for (let index = 0; index < 5; index += 1) {
+      expect(
+        attempt(shedder, {
+          purpose: 'owner-bootstrap',
+          address: `198.51.100.${index + 1}`,
+          email: index % 2 === 0 ? ' Owner@Example.Test ' : 'owner@example.test',
+        }),
+      ).toEqual({ admitted: true })
+    }
+
+    expect(
+      attempt(shedder, {
+        purpose: 'owner-bootstrap',
+        address: '198.51.100.20',
+        email: 'OWNER@example.test',
+      }),
+    ).toEqual({
+      admitted: false,
+      reason: 'throttled',
+      scope: 'owner-bootstrap:email',
+    })
+    expect(
+      attempt(shedder, {
+        purpose: 'sign-in',
+        address: '198.51.100.20',
+        email: 'owner@example.test',
+      }),
     ).toEqual({ admitted: true })
   })
 })

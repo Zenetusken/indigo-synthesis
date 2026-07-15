@@ -3,7 +3,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OwnerBootstrapActionBinding } from '../application/action-binding'
 import { BootstrapForm } from './bootstrap-form'
+
+const actionBinding =
+  'iab1.owner-bootstrap.test.bootstrap-binding' as OwnerBootstrapActionBinding
+const refreshedActionBinding =
+  'iab1.owner-bootstrap.refreshed.bootstrap-binding' as OwnerBootstrapActionBinding
 
 const bootstrapMocks = vi.hoisted(() => ({
   push: vi.fn(),
@@ -60,16 +66,19 @@ describe('BootstrapForm', () => {
 
   it('replaces the one-time bootstrap route after creating the owner', async () => {
     bootstrapMocks.bootstrapOwner.mockResolvedValueOnce({ kind: 'created' })
-    render(<BootstrapForm />)
+    render(<BootstrapForm actionBinding={actionBinding} />)
 
     submitBootstrapForm()
 
     await expectDeparture('/sign-in?created=1')
+    expect(bootstrapMocks.bootstrapOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ actionBinding }),
+    )
   })
 
   it('replaces the one-time bootstrap route when another request already claimed it', async () => {
     bootstrapMocks.bootstrapOwner.mockResolvedValueOnce({ kind: 'closed' })
-    render(<BootstrapForm />)
+    render(<BootstrapForm actionBinding={actionBinding} />)
 
     submitBootstrapForm()
 
@@ -79,30 +88,48 @@ describe('BootstrapForm', () => {
   it('replaces the route when a transport interruption resolves to a closed instance', async () => {
     bootstrapMocks.bootstrapOwner.mockRejectedValueOnce(new Error('request interrupted'))
     bootstrapMocks.getOwnerBootstrapStatus.mockResolvedValueOnce('closed')
-    render(<BootstrapForm />)
+    render(<BootstrapForm actionBinding={actionBinding} />)
 
     submitBootstrapForm()
 
     await expectDeparture('/sign-in?claimed=1')
   })
 
-  it('keeps the form on a rejected bootstrap and focuses a safe error', async () => {
-    bootstrapMocks.bootstrapOwner.mockResolvedValueOnce({ kind: 'rejected' })
-    render(<BootstrapForm />)
+  it('keeps entries, reloads a rejected page, and submits its replacement binding', async () => {
+    bootstrapMocks.bootstrapOwner
+      .mockResolvedValueOnce({ kind: 'rejected' })
+      .mockResolvedValueOnce({ kind: 'created' })
+    const { rerender } = render(<BootstrapForm actionBinding={actionBinding} />)
 
     submitBootstrapForm()
     const alert = await screen.findByRole('alert')
 
-    expect(alert).toHaveTextContent('Check the host-issued code and account fields')
+    expect(alert).toHaveTextContent('The page may have expired')
     await waitFor(() => expect(alert).toHaveFocus())
+    expect(screen.getByLabelText('Local sign-in email')).toHaveValue('owner@example.test')
     expect(bootstrapMocks.replace).not.toHaveBeenCalled()
-    expect(bootstrapMocks.refresh).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload bootstrap' }))
+    expect(bootstrapMocks.refresh).toHaveBeenCalledOnce()
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Bootstrap reloaded.'),
+    )
+
+    rerender(<BootstrapForm actionBinding={refreshedActionBinding} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Create owner account' }))
+
+    await waitFor(() => expect(bootstrapMocks.bootstrapOwner).toHaveBeenCalledTimes(2))
+    expect(bootstrapMocks.bootstrapOwner).toHaveBeenLastCalledWith(
+      expect.objectContaining({ actionBinding: refreshedActionBinding }),
+    )
+    await waitFor(() =>
+      expect(bootstrapMocks.replace).toHaveBeenCalledWith('/sign-in?created=1'),
+    )
   })
 
   it('keeps entered values when an interrupted request resolves to an open instance', async () => {
     bootstrapMocks.bootstrapOwner.mockRejectedValueOnce(new Error('request interrupted'))
     bootstrapMocks.getOwnerBootstrapStatus.mockResolvedValueOnce('open')
-    render(<BootstrapForm />)
+    render(<BootstrapForm actionBinding={actionBinding} />)
 
     submitBootstrapForm()
     const alert = await screen.findByRole('alert')

@@ -12,7 +12,7 @@
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '../../src/modules/identity/bootstrap/owner-bootstrap'
+} from '../../src/composition/identity-bootstrap-mutations'
 import { resetAuthForTests } from '../../src/modules/identity/infrastructure/auth'
 import { getFutureLoadFactBundlesForSession } from '../../src/modules/training/application/future-load-fact-bundle'
 import {

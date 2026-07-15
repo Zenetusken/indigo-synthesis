@@ -1,9 +1,6 @@
 import { isAbsolute, resolve } from 'node:path'
-import {
-  issueOwnerBootstrap,
-  OwnerBootstrapError,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
-import { closeDb } from '@/platform/db/client'
+import { issueOwnerBootstrapFromHostCli } from '@/composition/identity-bootstrap-mutations'
+import { OwnerBootstrapError } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { createOwnerSecretFile } from '@/platform/security/owner-secret-file'
 
 const codeFileMaxBytes = 256
@@ -59,7 +56,9 @@ async function main(): Promise<void> {
   })
 
   try {
-    const issued = await issueOwnerBootstrap({ ttlMinutes: command.ttlMinutes })
+    const issued = await issueOwnerBootstrapFromHostCli({
+      ttlMinutes: command.ttlMinutes,
+    })
     await file.writeSecret(issued.code)
     process.stdout.write(
       `Owner bootstrap code written to ${command.codeFile}; it expires at ${issued.expiresAt.toISOString()}.\n`,
@@ -90,6 +89,4 @@ try {
     )
   }
   process.exitCode = 1
-} finally {
-  await closeDb()
 }

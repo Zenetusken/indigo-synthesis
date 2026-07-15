@@ -1,10 +1,12 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { getTableName, isTable } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import * as databaseSchema from '@/platform/db/schema'
+import nextConfig from '../../next.config'
 import { e2eApplicationDataResetTableOrder } from '../e2e/support/application-data-reset'
 import {
   defaultE2eSuiteSelection,
@@ -14,6 +16,10 @@ import {
 const projectRoot = process.cwd()
 
 describe('clean-clone operator contract', () => {
+  it('never serializes server-action credentials into development logs', () => {
+    expect(nextConfig.logging).toMatchObject({ serverFunctions: false })
+  })
+
   it('pins integration tests to the test runtime and development fixture', () => {
     const manifest = JSON.parse(
       readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
@@ -206,8 +212,8 @@ describe('clean-clone operator contract', () => {
       'utf8',
     )
     expect(restartReplay).not.toContain('TRUNCATE TABLE')
-    expect(restartReplay).toContain(
-      "import { clearApplicationData } from './support/journey'",
+    expect(restartReplay).toMatch(
+      /import\s*{[^}]*\bclearApplicationData\b[^}]*}\s*from\s*['"]\.\/support\/journey['"]/,
     )
   })
 
@@ -238,4 +244,91 @@ describe('clean-clone operator contract', () => {
     expect(liveConfig).toContain("INDIGO_LLM_TIMEOUT_MS: '3000'")
     expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
+
+  it('serializes owner bootstrap host commands before running their entrypoints', async () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    expect(manifest.scripts?.['owner:bootstrap']).toBe(
+      'bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts',
+    )
+
+    const directory = mkdtempSync(join(tmpdir(), 'indigo-external-host-lock-'))
+    const firstMarker = join(directory, 'first-entrypoint-ran')
+    const secondMarker = join(directory, 'second-entrypoint-ran')
+    const wrapper = resolve(projectRoot, 'scripts/run-external-host-command.sh')
+    const fixture = resolve(
+      projectRoot,
+      'test/architecture/fixtures/external-host-lock-entrypoint.ts',
+    )
+    const first = spawn('bash', [wrapper, fixture, firstMarker, 'hold'], {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let firstStderr = ''
+    first.stderr.setEncoding('utf8')
+    first.stderr.on('data', (chunk: string) => {
+      firstStderr += chunk
+    })
+
+    try {
+      await new Promise<void>((resolveReady, rejectReady) => {
+        let stdout = ''
+        const timeout = setTimeout(() => {
+          rejectReady(
+            new Error(`Timed out waiting for the first host wrapper: ${firstStderr}`),
+          )
+        }, 5_000)
+        const settle = (operation: () => void): void => {
+          clearTimeout(timeout)
+          first.stdout.removeAllListeners('data')
+          first.removeAllListeners('exit')
+          operation()
+        }
+        first.stdout.setEncoding('utf8')
+        first.stdout.on('data', (chunk: string) => {
+          stdout += chunk
+          if (stdout.includes('READY\n')) settle(resolveReady)
+        })
+        first.once('exit', (code, signal) => {
+          settle(() => {
+            rejectReady(
+              new Error(
+                `First host wrapper exited before readiness (code=${code}, signal=${signal}): ${firstStderr}`,
+              ),
+            )
+          })
+        })
+      })
+
+      expect(existsSync(firstMarker)).toBe(true)
+      const second = spawnSync('bash', [wrapper, fixture, secondMarker, 'exit'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: process.env,
+      })
+      expect(second.status).toBe(75)
+      expect(`${second.stdout}${second.stderr}`).toContain(
+        'another Indigo host database command is active',
+      )
+      expect(existsSync(secondMarker)).toBe(false)
+    } finally {
+      if (first.exitCode === null && first.signalCode === null) {
+        const exit = new Promise<void>((resolveExit) => {
+          const timeout = setTimeout(() => {
+            first.kill('SIGKILL')
+          }, 5_000)
+          first.once('exit', () => {
+            clearTimeout(timeout)
+            resolveExit()
+          })
+        })
+        first.stdin.end('\n')
+        await exit
+      }
+      rmSync(directory, { force: true, recursive: true })
+    }
+  }, 15_000)
 })

@@ -24,7 +24,7 @@
     "test:integration": "NODE_ENV=test INDIGO_CONTENT_MODE=development INDIGO_LLM_MODE=disabled node --env-file-if-exists=.env.local ./node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
     "test:e2e": "bash scripts/e2e/run.sh default",
     "test:e2e:llm": "bash scripts/e2e/run.sh llm",
-    "owner:bootstrap": "node --env-file-if-exists=.env.local --import tsx scripts/identity/bootstrap-owner.ts",
+    "owner:bootstrap": "bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts",
     "owner:recover": "node --env-file-if-exists=.env.local --import tsx scripts/identity/recover-owner.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/db/migrate.ts",

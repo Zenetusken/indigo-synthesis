@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark } from '@/components'
-import { getInstallationStatus } from '@/modules/identity/application/installation'
+import { getBootstrapPageInstallation } from '@/modules/identity/server/bootstrap'
 import { BootstrapForm } from '@/modules/identity/ui/bootstrap-form'
 import styles from '../auth-layout.module.css'
 
@@ -14,7 +14,7 @@ export default async function BootstrapPage({
 }: {
   searchParams: Promise<{ reset?: string }>
 }) {
-  const installation = await getInstallationStatus()
+  const installation = await getBootstrapPageInstallation()
   if (installation.kind === 'closed') redirect('/sign-in')
 
   const query = await searchParams
@@ -41,7 +41,7 @@ export default async function BootstrapPage({
           </p>
         </header>
 
-        <BootstrapForm />
+        <BootstrapForm actionBinding={installation.actionBinding} />
 
         <p className={styles.footnote}>
           Your account and training data stay in this installation’s PostgreSQL database.

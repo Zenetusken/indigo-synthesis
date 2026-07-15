@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { getServerConfig } from '@/platform/config/server'
+import { normalizeRecoveryEmail } from '../recovery/recovery-policy'
 import type { WebRecoveryPurpose } from './web-recovery-rate-limit'
 
 const loadShedderWindowMilliseconds = 60_000
@@ -7,7 +8,8 @@ const productionMaximumBuckets = 2_048
 const loadShedderLimits = Object.freeze({ address: 30, email: 5 })
 
 type LoadShedderDimension = 'address' | 'email'
-type LoadShedderScope = `${WebRecoveryPurpose}:${LoadShedderDimension}`
+export type CredentialLoadShedderPurpose = WebRecoveryPurpose | 'owner-bootstrap'
+type LoadShedderScope = `${CredentialLoadShedderPurpose}:${LoadShedderDimension}`
 
 type LoadShedderBucket = {
   readonly expiresAt: number
@@ -24,7 +26,7 @@ export type CredentialLoadShedderAdmission =
 
 export type CredentialLoadShedder = Readonly<{
   admit(input: {
-    readonly purpose: WebRecoveryPurpose
+    readonly purpose: CredentialLoadShedderPurpose
     readonly email: string
     readonly clientAddress: string
     readonly now?: Date
@@ -84,7 +86,7 @@ export function createCredentialLoadShedder(options?: {
         {
           dimension: 'email' as const,
           scope: `${input.purpose}:email` as const,
-          value: input.email,
+          value: normalizeRecoveryEmail(input.email),
         },
       ].map((dimension) => ({
         ...dimension,
@@ -131,7 +133,7 @@ export function createCredentialLoadShedder(options?: {
 let productionLoadShedder: CredentialLoadShedder | undefined
 
 export function admitCredentialLoadShedder(input: {
-  readonly purpose: WebRecoveryPurpose
+  readonly purpose: CredentialLoadShedderPurpose
   readonly email: string
   readonly clientAddress: string
 }): CredentialLoadShedderAdmission {

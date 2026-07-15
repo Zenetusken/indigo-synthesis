@@ -158,6 +158,27 @@ function pgValueImportDescriptions(path: string, source: string): readonly strin
   return descriptions
 }
 
+function directConstructorCount(
+  path: string,
+  source: string,
+  constructorName: string,
+): number {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+  let count = 0
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === constructorName
+    ) {
+      count += 1
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return count
+}
+
 function databaseRuntimeConstructionDescriptions(
   path: string,
   source: string,
@@ -275,6 +296,7 @@ describe('PostgreSQL constructor census', () => {
     const allowed = new Map<string, readonly string[]>([
       ['src/platform/db/bounded-pool.ts', ['named:Pool->Pool']],
       ['src/platform/db/disposable-integration-database.ts', ['named:Client->Client']],
+      ['src/platform/db/external-host-command.ts', ['named:Client->Client']],
       ['src/platform/db/postgres-value.ts', ['default:pg']],
       ['scripts/db/backup-restore-drill.ts', ['named:Client->Client']],
       ['scripts/db/reset-e2e.ts', ['named:Client->Client']],
@@ -291,6 +313,16 @@ describe('PostgreSQL constructor census', () => {
     expect(Object.fromEntries(observed)).toEqual(Object.fromEntries(allowed))
   })
 
+  it('constructs exactly one raw pg Client in the external-host adapter', () => {
+    const path = resolve(process.cwd(), 'src/platform/db/external-host-command.ts')
+    const source = readCodeSources(resolve(process.cwd(), 'src')).get(path)
+
+    expect(source, 'missing src/platform/db/external-host-command.ts').toBeTypeOf(
+      'string',
+    )
+    expect(directConstructorCount(path, source ?? '', 'Client')).toBe(1)
+  })
+
   it('pins the public value surface of every raw-pg allowlisted module', () => {
     const files = new Map([
       ...readCodeSources(resolve(process.cwd(), 'src')),
@@ -305,6 +337,7 @@ describe('PostgreSQL constructor census', () => {
           'function:createDisposableIntegrationDatabase',
         ],
       ],
+      ['src/platform/db/external-host-command.ts', ['function:withExternalHostCommand']],
       ['src/platform/db/postgres-value.ts', ['function:prepareStablePostgresValue']],
       ['scripts/db/backup-restore-drill.ts', []],
       ['scripts/db/reset-e2e.ts', []],

@@ -19,6 +19,7 @@ import type {
   PrelockedSessionLease,
   PrelockedSessionOperation,
 } from '@/application/coordination/prelocked-session'
+import type { PostgresSessionClient } from '@/platform/db/postgres-session-client'
 import { prepareStablePostgresValue } from '@/platform/db/postgres-value'
 import {
   bindContentLockedUnitOfWorkExecution,
@@ -78,7 +79,7 @@ export type PostgresUnitOfWorkGatewayContext<ReadGateways, WriteGateways> = {
 }
 
 export type ResolvedPrelockedSession = {
-  readonly client: PoolClient
+  readonly client: PostgresSessionClient
   readonly signal: AbortSignal
   finish(): void
   /** Destroys the outer lease when inner session state is no longer trustworthy. */
@@ -446,7 +447,7 @@ function isMutationStatement(sql: string): boolean {
 }
 
 class TransactionQueryTracker {
-  readonly #client: PoolClient
+  readonly #client: PostgresSessionClient
   readonly #work = new AsyncWorkTracker()
   readonly #signal: AbortSignal | undefined
   readonly #queryTimeoutMs: number
@@ -456,7 +457,7 @@ class TransactionQueryTracker {
   #uncertain: unknown
 
   constructor(
-    client: PoolClient,
+    client: PostgresSessionClient,
     signal: AbortSignal | undefined,
     queryTimeoutMs: number,
     onUncertain: (error: InFlightQueryUncertain) => void,
@@ -764,7 +765,7 @@ function combinedSignal(
 }
 
 function queryWithGuard<Row extends Record<string, unknown> = Record<string, unknown>>(
-  client: PoolClient,
+  client: PostgresSessionClient,
   text: string,
   values: readonly unknown[] | undefined,
   options: {
@@ -965,7 +966,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
       authorityClaim.finish({ committed: false })
       throw error
     }
-    let client: PoolClient | undefined
+    let client: PostgresSessionClient | undefined
     let ordinary = false
     let destroyPrelocked: ((error: Error) => void) | undefined
     let finishPrelocked: (() => void) | undefined
@@ -1379,10 +1380,13 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
             const destroyError = errorForDestruction(
               poison ?? new CoordinationError('uow.cleanup-failed'),
             )
-            if (ordinary) client.release(destroyError)
-            else destroyPrelocked?.(destroyError)
+            if (ordinary) {
+              if (ordinaryMonitor) ordinaryMonitor.client.release(destroyError)
+              else cleanupError ??= new CoordinationError('uow.cleanup-failed')
+            } else destroyPrelocked?.(destroyError)
           } else if (ordinary) {
-            client.release()
+            if (ordinaryMonitor) ordinaryMonitor.client.release()
+            else cleanupError ??= new CoordinationError('uow.cleanup-failed')
           }
         } catch (error) {
           cleanupError ??= error
@@ -1417,7 +1421,7 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
   }
 
   async #acquireLocks(
-    client: PoolClient,
+    client: PostgresSessionClient,
     locks: readonly SessionLock[],
     acquired: SessionLock[],
     signal?: AbortSignal,
@@ -1456,7 +1460,10 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
     }
   }
 
-  async #releaseLocks(client: PoolClient, acquired: SessionLock[]): Promise<void> {
+  async #releaseLocks(
+    client: PostgresSessionClient,
+    acquired: SessionLock[],
+  ): Promise<void> {
     let firstError: unknown
     for (const lock of acquired.reverse()) {
       try {

@@ -8,6 +8,11 @@ import { Client } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
 import {
+  createOwnerFromWebWithBootstrapCode,
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/composition/identity-bootstrap-mutations'
+import {
   type CheckedSignOutActionBinding,
   checkedSignOutActionBindingHeader,
   identityActionBindingHeader,
@@ -17,19 +22,17 @@ import {
   deriveIdentityRole,
   OwnerAuthorizationError,
 } from '@/modules/identity/application/actor'
-import {
-  createOwnerWithBootstrapCode,
-  issueOwnerBootstrap,
-  type OwnerBootstrapError,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+import type { OwnerBootstrapError } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   issueCheckedSignOutActionBinding,
   issueEmailSignInActionBinding,
+  issueOwnerBootstrapActionBinding,
 } from '@/modules/identity/infrastructure/action-binding'
 import {
   readIdentitySession,
   resetAuthForTests,
 } from '@/modules/identity/infrastructure/auth'
+import { credentialEmailLockDigest } from '@/modules/identity/infrastructure/credential-digests'
 import {
   CredentialLifecycleCapacityError,
   credentialLifecycleConnectionLimit,
@@ -93,6 +96,10 @@ type CheckedSignOutFixture = {
   readonly userId: string
 }
 
+type CapturedOutcome<T> =
+  | { readonly status: 'fulfilled'; readonly value: T }
+  | { readonly status: 'rejected'; readonly error: unknown }
+
 const bootstrapCandidates = [
   {
     name: 'First Owner',
@@ -118,6 +125,13 @@ function deferred<T>() {
     resolve = resolvePromise
   })
   return { promise, resolve }
+}
+
+function captureOutcome<T>(promise: Promise<T>): Promise<CapturedOutcome<T>> {
+  return promise.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (error: unknown) => ({ status: 'rejected', error }),
+  )
 }
 
 function responseCookieHeader(response: Response): string {
@@ -225,20 +239,32 @@ async function checkedSignOutFixture(
   }
 }
 
-async function waitForControlAdvisoryWait(expected = 1): Promise<void> {
+async function waitForAdvisoryWait(input: {
+  readonly applicationName: string
+  readonly description: string
+  readonly expected?: number
+}): Promise<void> {
   const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
     const result = await getDb().execute<{ waiting: number }>(sql`
       SELECT count(*)::integer AS waiting
       FROM pg_stat_activity
       WHERE datname = current_database()
-        AND application_name = 'indigo-synthesis:control'
+        AND application_name = ${input.applicationName}
         AND wait_event = 'advisory'
     `)
-    if (Number(result.rows[0]?.waiting ?? 0) >= expected) return
+    if (Number(result.rows[0]?.waiting ?? 0) >= (input.expected ?? 1)) return
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  throw new Error('Checked sign-out did not reach the deferred commit barrier.')
+  throw new Error(`Timed out waiting for ${input.description}.`)
+}
+
+function waitForControlAdvisoryWait(expected = 1): Promise<void> {
+  return waitForAdvisoryWait({
+    applicationName: 'indigo-synthesis:control',
+    description: 'the control-session advisory-lock barrier',
+    expected,
+  })
 }
 
 function providerMutationPort(
@@ -253,9 +279,28 @@ function providerMutationPort(
 
 async function runBootstrapCli(arguments_: readonly string[]) {
   return execFile(
+    'bash',
+    [
+      'scripts/run-external-host-command.sh',
+      'scripts/identity/bootstrap-owner.ts',
+      ...arguments_,
+    ],
+    { cwd: process.cwd(), env: process.env },
+  )
+}
+
+async function runBootstrapCliDirect(arguments_: readonly string[]) {
+  const environment: NodeJS.ProcessEnv = { ...process.env }
+  for (const name of Object.keys(environment)) {
+    if (name.startsWith('INDIGO_EXTERNAL_HOST_LOCK_')) delete environment[name]
+  }
+  return execFile(
     process.execPath,
     ['--import', 'tsx', 'scripts/identity/bootstrap-owner.ts', ...arguments_],
-    { cwd: process.cwd(), env: process.env },
+    {
+      cwd: process.cwd(),
+      env: environment,
+    },
   )
 }
 
@@ -344,6 +389,24 @@ describe('identity database boundary', () => {
     await expect(createOwnerWithBootstrapCode(input)).rejects.toMatchObject({
       code: 'owner-bootstrap.capability-invalid',
     })
+    const [openInstallation] = await getDb()
+      .select({ epoch: installationState.productMutationEpoch })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!openInstallation) throw new Error('Open installation fixture is missing.')
+    const backdatedBinding = issueOwnerBootstrapActionBinding(
+      { expectedEpoch: openInstallation.epoch },
+      issuedAt,
+    )
+    const forgedWebInput = {
+      ...bootstrapCandidates[0],
+      code: issued.code,
+      actionBinding: backdatedBinding,
+      now: issuedAt,
+    }
+    await expect(
+      createOwnerFromWebWithBootstrapCode(forgedWebInput),
+    ).rejects.toMatchObject({ code: 'owner-bootstrap.capability-invalid' })
     await expect(
       createOwnerWithBootstrapCode({
         ...input,
@@ -352,6 +415,18 @@ describe('identity database boundary', () => {
       }),
     ).rejects.toMatchObject({ code: 'owner-bootstrap.capability-invalid' })
 
+    const fresh = await issueOwnerBootstrap({ ttlMinutes: 5 })
+    const staleBinding = issueOwnerBootstrapActionBinding({
+      expectedEpoch: newUuidV7(),
+    })
+    await expect(
+      createOwnerFromWebWithBootstrapCode({
+        ...bootstrapCandidates[0],
+        code: fresh.code,
+        actionBinding: staleBinding,
+      }),
+    ).rejects.toMatchObject({ code: 'owner-bootstrap.action-binding-invalid' })
+
     const [userCount] = await getDb().select({ value: count() }).from(user)
     const [installation] = await getDb()
       .select()
@@ -359,6 +434,73 @@ describe('identity database boundary', () => {
       .where(eq(installationState.singleton, 1))
     expect(userCount?.value).toBe(0)
     expect(installation).toMatchObject({ ownerUserId: null, bootstrapClosedAt: null })
+  })
+
+  it('rejects an old redemption after replacement issuance commits first', async () => {
+    const original = await issueOwnerBootstrap({ ttlMinutes: 15 })
+    const candidate = bootstrapCandidates[0]
+    const emailLockKey = `indigo:credential-lifecycle:email:${credentialEmailLockDigest(candidate.email)}`
+    const blocker = new Client({ connectionString: getServerConfig().databaseUrl })
+    await blocker.connect()
+    await blocker.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [
+      emailLockKey,
+    ])
+
+    let lockHeld = true
+    let redemption:
+      | Promise<CapturedOutcome<Awaited<ReturnType<typeof createOwnerWithBootstrapCode>>>>
+      | undefined
+    try {
+      redemption = captureOutcome(
+        createOwnerWithBootstrapCode({ ...candidate, code: original.code }),
+      )
+      await waitForAdvisoryWait({
+        applicationName: 'indigo-synthesis:control',
+        description: 'the old bootstrap redemption to reach its email lock',
+      })
+
+      const replacement = await issueOwnerBootstrap({ ttlMinutes: 15 })
+      expect(replacement.capabilityId).not.toBe(original.capabilityId)
+      const [visibleReplacement] = await getDb()
+        .select({ id: verification.id })
+        .from(verification)
+        .where(eq(verification.identifier, 'indigo:owner-bootstrap'))
+      expect(visibleReplacement?.id).toBe(replacement.capabilityId)
+
+      await blocker.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [
+        emailLockKey,
+      ])
+      lockHeld = false
+      const redemptionOutcome = await redemption
+      expect(redemptionOutcome.status).toBe('rejected')
+      if (redemptionOutcome.status !== 'rejected') {
+        throw new Error('A redemption of the replaced bootstrap code succeeded.')
+      }
+      expect(redemptionOutcome.error).toMatchObject({
+        code: 'owner-bootstrap.capability-invalid',
+      })
+
+      const [userCount] = await getDb().select({ value: count() }).from(user)
+      const [accountCount] = await getDb().select({ value: count() }).from(account)
+      const [installation] = await getDb()
+        .select()
+        .from(installationState)
+        .where(eq(installationState.singleton, 1))
+      expect(userCount?.value).toBe(0)
+      expect(accountCount?.value).toBe(0)
+      expect(installation).toMatchObject({
+        ownerUserId: null,
+        bootstrapClosedAt: null,
+      })
+    } finally {
+      if (lockHeld) {
+        await blocker
+          .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [emailLockKey])
+          .catch(() => undefined)
+      }
+      await blocker.end().catch(() => undefined)
+      await redemption?.catch(() => undefined)
+    }
   })
 
   it('issues a host-only capability without printing or storing the secret', async () => {
@@ -381,6 +523,16 @@ describe('identity database boundary', () => {
     expect(metadata.mode & 0o777).toBe(0o600)
     expect(`${issuedProcess.stdout}${issuedProcess.stderr}`).not.toContain(bootstrapCode)
     expect(stored?.value).not.toContain(bootstrapCode)
+  })
+
+  it('refuses direct CLI invocation that bypasses the common external-host lock', async () => {
+    const codeFile = join(bootstrapSecretsDirectory, 'unguarded-bootstrap-code')
+    await expect(
+      runBootstrapCliDirect(['issue', '--code-file', codeFile, '--ttl-minutes', '15']),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining('run-external-host-command.sh'),
+    })
+    await expect(stat(codeFile)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('rolls back the owner, installation claim, and capability consumption on failure', async () => {
@@ -438,49 +590,127 @@ describe('identity database boundary', () => {
     expect(installation).toMatchObject({ ownerUserId: null, bootstrapClosedAt: null })
   })
 
-  it('serializes concurrent use of one capability exactly once', async () => {
-    const outcomes = await Promise.allSettled(
-      bootstrapCandidates.map((candidate) =>
-        createOwnerWithBootstrapCode({ ...candidate, code: bootstrapCode }),
-      ),
+  it('keeps the committed owner claim when redemption wins replacement issuance', async () => {
+    const issuanceBarrierKey = 'identity-bootstrap-redemption-before-issuance'
+    const blocker = new Client({ connectionString: getServerConfig().databaseUrl })
+    await blocker.connect()
+    await blocker.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [
+      issuanceBarrierKey,
+    ])
+    await getDb().execute(
+      sql.raw(`
+        CREATE FUNCTION indigo_test_block_bootstrap_issuance()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF current_setting('application_name', true) = 'indigo-synthesis:external-host' THEN
+            PERFORM pg_advisory_xact_lock(
+              hashtextextended('${issuanceBarrierKey}', 0)
+            );
+          END IF;
+          RETURN NULL;
+        END;
+        $function$
+      `),
     )
-    const successfulIndexes = outcomes
-      .map((outcome, index) => (outcome.status === 'fulfilled' ? index : -1))
-      .filter((index) => index >= 0)
+    await getDb().execute(
+      sql.raw(`
+        CREATE TRIGGER indigo_test_bootstrap_issuance_barrier
+        BEFORE DELETE ON verification
+        FOR EACH STATEMENT
+        EXECUTE FUNCTION indigo_test_block_bootstrap_issuance()
+      `),
+    )
 
-    expect(successfulIndexes).toHaveLength(1)
+    let lockHeld = true
+    let replacementIssuance:
+      | Promise<CapturedOutcome<Awaited<ReturnType<typeof issueOwnerBootstrap>>>>
+      | undefined
+    let outcomes: PromiseSettledResult<
+      Awaited<ReturnType<typeof createOwnerWithBootstrapCode>>
+    >[] = []
+    try {
+      replacementIssuance = captureOutcome(issueOwnerBootstrap({ ttlMinutes: 15 }))
+      await waitForAdvisoryWait({
+        applicationName: 'indigo-synthesis:external-host',
+        description: 'replacement issuance to reach its pre-write barrier',
+      })
 
-    const successfulIndex = successfulIndexes[0]
-    const successfulOutcome = outcomes[successfulIndex]
-    const winningCandidate = bootstrapCandidates[successfulIndex]
+      outcomes = await Promise.allSettled(
+        bootstrapCandidates.map((candidate) =>
+          createOwnerWithBootstrapCode({ ...candidate, code: bootstrapCode }),
+        ),
+      )
+      const successfulIndexes = outcomes
+        .map((outcome, index) => (outcome.status === 'fulfilled' ? index : -1))
+        .filter((index) => index >= 0)
+      expect(successfulIndexes).toHaveLength(1)
 
-    if (successfulOutcome?.status !== 'fulfilled' || !winningCandidate) {
-      throw new Error('Concurrent bootstrap produced no successful owner.')
+      const successfulIndex = successfulIndexes[0]
+      const successfulOutcome = outcomes[successfulIndex]
+      const winningCandidate = bootstrapCandidates[successfulIndex]
+      if (successfulOutcome?.status !== 'fulfilled' || !winningCandidate) {
+        throw new Error('Concurrent bootstrap produced no successful owner.')
+      }
+      owner = { ...winningCandidate, id: successfulOutcome.value.id }
+
+      const [claimedBeforeIssuanceResumes] = await getDb()
+        .select({
+          ownerUserId: installationState.ownerUserId,
+          bootstrapClosedAt: installationState.bootstrapClosedAt,
+        })
+        .from(installationState)
+        .where(eq(installationState.singleton, 1))
+      expect(claimedBeforeIssuanceResumes?.ownerUserId).toBe(owner.id)
+      expect(claimedBeforeIssuanceResumes?.bootstrapClosedAt).toBeInstanceOf(Date)
+
+      await blocker.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [
+        issuanceBarrierKey,
+      ])
+      lockHeld = false
+      const issuanceOutcome = await replacementIssuance
+      expect(issuanceOutcome.status).toBe('rejected')
+      if (issuanceOutcome.status !== 'rejected') {
+        throw new Error('Replacement issuance overwrote a committed owner claim.')
+      }
+
+      const [userCount] = await getDb().select({ value: count() }).from(user)
+      const [accountCount] = await getDb().select({ value: count() }).from(account)
+      const [installation] = await getDb()
+        .select()
+        .from(installationState)
+        .where(eq(installationState.singleton, 1))
+      expect(userCount?.value).toBe(1)
+      expect(accountCount?.value).toBe(1)
+      expect(installation?.ownerUserId).toBe(owner.id)
+      expect(await getInstallationOwnerUserId()).toBe(owner.id)
+      expect(installation?.bootstrapClosedAt).toBeInstanceOf(Date)
+      expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+      const [pendingCount] = await getDb()
+        .select({ value: count() })
+        .from(verification)
+        .where(eq(verification.identifier, 'indigo:owner-bootstrap'))
+      expect(pendingCount?.value).toBe(0)
+    } finally {
+      if (lockHeld) {
+        await blocker
+          .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [
+            issuanceBarrierKey,
+          ])
+          .catch(() => undefined)
+      }
+      await blocker.end().catch(() => undefined)
+      await replacementIssuance?.catch(() => undefined)
+      await getDb().execute(
+        sql.raw(
+          'DROP TRIGGER IF EXISTS indigo_test_bootstrap_issuance_barrier ON verification',
+        ),
+      )
+      await getDb().execute(
+        sql.raw('DROP FUNCTION IF EXISTS indigo_test_block_bootstrap_issuance()'),
+      )
     }
-
-    owner = {
-      ...winningCandidate,
-      id: successfulOutcome.value.id,
-    }
-
-    const [userCount] = await getDb().select({ value: count() }).from(user)
-    const [accountCount] = await getDb().select({ value: count() }).from(account)
-    const [installation] = await getDb()
-      .select()
-      .from(installationState)
-      .where(eq(installationState.singleton, 1))
-
-    expect(userCount?.value).toBe(1)
-    expect(accountCount?.value).toBe(1)
-    expect(installation?.ownerUserId).toBe(owner.id)
-    expect(await getInstallationOwnerUserId()).toBe(owner.id)
-    expect(installation?.bootstrapClosedAt).toBeInstanceOf(Date)
-    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
-    const [pendingCount] = await getDb()
-      .select({ value: count() })
-      .from(verification)
-      .where(eq(verification.identifier, 'indigo:owner-bootstrap'))
-    expect(pendingCount?.value).toBe(0)
   })
 
   it('rejects replay of the consumed capability', async () => {

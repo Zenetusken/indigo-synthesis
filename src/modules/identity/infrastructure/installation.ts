@@ -14,6 +14,13 @@ export type ServerSignInInstallationState =
       readonly productMutationEpoch: string
     }
 
+export type ServerBootstrapInstallationState =
+  | {
+      readonly kind: 'open'
+      readonly productMutationEpoch: string
+    }
+  | { readonly kind: 'closed' }
+
 /**
  * Identity-owned issuance projection for a server-rendered authenticated action. The raw
  * lifecycle value remains server-side and is committed only into an opaque action binding.
@@ -64,4 +71,28 @@ export async function getServerSignInInstallationState(): Promise<ServerSignInIn
     kind: 'closed',
     productMutationEpoch: state.productMutationEpoch,
   }
+}
+
+/** Coherent installation projection used to issue one anti-ABA bootstrap page binding. */
+export async function getServerBootstrapInstallationState(): Promise<ServerBootstrapInstallationState> {
+  const [state] = await getDb()
+    .select({
+      ownerUserId: installationState.ownerUserId,
+      bootstrapClosedAt: installationState.bootstrapClosedAt,
+      productMutationEpoch: installationState.productMutationEpoch,
+    })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+    .limit(1)
+
+  if (!state) {
+    throw new Error('Installation state is missing. Run the current database migrations.')
+  }
+  if (state.ownerUserId === null && state.bootstrapClosedAt === null) {
+    return { kind: 'open', productMutationEpoch: state.productMutationEpoch }
+  }
+  if (state.ownerUserId === null || state.bootstrapClosedAt === null) {
+    throw new Error('Installation state owner lifecycle is inconsistent.')
+  }
+  return { kind: 'closed' }
 }

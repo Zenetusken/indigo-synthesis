@@ -6,11 +6,11 @@ import { promisify } from 'node:util'
 import { and, count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
-import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
 import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'

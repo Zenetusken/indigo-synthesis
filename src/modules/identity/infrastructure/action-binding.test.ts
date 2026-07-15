@@ -3,8 +3,10 @@ import { resetServerConfigForTests } from '@/platform/config/server'
 import {
   issueCheckedSignOutActionBinding,
   issueEmailSignInActionBinding,
+  issueOwnerBootstrapActionBinding,
   verifyCheckedSignOutActionBinding,
   verifyEmailSignInActionBinding,
+  verifyOwnerBootstrapActionBinding,
 } from './action-binding'
 
 const now = new Date('2026-07-15T12:00:00.000Z')
@@ -172,6 +174,78 @@ describe('email sign-in action binding', () => {
     ).toBe(false)
     expect(
       verifyEmailSignInActionBinding(
+        binding,
+        { expectedEpoch: context.expectedEpoch },
+        new Date(now.getTime() + 15 * 60 * 1_000),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('owner bootstrap action binding', () => {
+  beforeEach(() => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://localhost/indigo_action_binding_test')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'action-binding-test-secret-at-least-32-characters')
+    vi.stubEnv('BETTER_AUTH_URL', 'http://127.0.0.1:3000')
+    vi.stubEnv('INDIGO_CONTENT_MODE', 'development')
+    vi.stubEnv('NODE_ENV', 'test')
+    resetServerConfigForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    resetServerConfigForTests()
+  })
+
+  it('binds only the open installation generation under its own purpose', () => {
+    const binding = issueOwnerBootstrapActionBinding(
+      { expectedEpoch: context.expectedEpoch },
+      now,
+    )
+
+    expect(binding).toMatch(
+      /^iab1\.owner-bootstrap\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(binding).not.toContain(context.expectedEpoch)
+    expect(
+      verifyOwnerBootstrapActionBinding(
+        binding,
+        { expectedEpoch: context.expectedEpoch },
+        now,
+      ),
+    ).toBe(true)
+    expect(
+      verifyEmailSignInActionBinding(
+        binding,
+        { expectedEpoch: context.expectedEpoch },
+        now,
+      ),
+    ).toBe(false)
+  })
+
+  it('rejects a replaced generation, tampering, and expiry', () => {
+    const binding = issueOwnerBootstrapActionBinding(
+      { expectedEpoch: context.expectedEpoch },
+      now,
+    )
+    const tampered = `${binding.slice(0, -1)}${binding.endsWith('A') ? 'B' : 'A'}`
+
+    expect(
+      verifyOwnerBootstrapActionBinding(
+        binding,
+        { expectedEpoch: 'replacement-generation' },
+        now,
+      ),
+    ).toBe(false)
+    expect(
+      verifyOwnerBootstrapActionBinding(
+        tampered,
+        { expectedEpoch: context.expectedEpoch },
+        now,
+      ),
+    ).toBe(false)
+    expect(
+      verifyOwnerBootstrapActionBinding(
         binding,
         { expectedEpoch: context.expectedEpoch },
         new Date(now.getTime() + 15 * 60 * 1_000),

@@ -3,12 +3,12 @@ import { and, count, eq, sql } from 'drizzle-orm'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
-import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
-import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
+import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'

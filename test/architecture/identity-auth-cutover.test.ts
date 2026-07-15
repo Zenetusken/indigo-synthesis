@@ -219,6 +219,11 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/modules/identity/infrastructure/action-binding.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    ['verifyOwnerBootstrapActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/actor.ts',
     ['issueCheckedSignOutActionBinding'],
   ],
@@ -226,6 +231,24 @@ const identityAuthPolicies = policy([
     'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/sign-in-page.ts',
     ['issueEmailSignInActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
+    'src/modules/identity/server/bootstrap.ts',
+    ['issueOwnerBootstrapActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/bootstrap-mutation.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    [
+      'captureOwnerBootstrapIssuance',
+      'captureOwnerBootstrapRedemption',
+      'createScopedIdentityBootstrapMutationGateway',
+      'ownerBootstrapIssuanceCaptureView',
+      'ownerBootstrapRedemptionCaptureView',
+      'recheckOwnerBootstrapIssuance',
+      'recheckOwnerBootstrapRedemption',
+    ],
   ],
   [
     'src/modules/identity/infrastructure/expired-session-cleanup.ts',
@@ -238,9 +261,24 @@ const identityAuthPolicies = policy([
     ['createScopedDrizzleDatabase'],
   ],
   [
+    'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-auth-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/db/external-host-command.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    ['withExternalHostCommand'],
   ],
   [
     'src/modules/identity/server/auth-mutation-port.ts',
@@ -288,17 +326,72 @@ const identityAuthPolicies = policy([
     ['admitCredentialLoadShedder'],
   ],
   [
+    'src/modules/identity/infrastructure/credential-load-shedder.ts',
+    'src/modules/identity/server/bootstrap.ts',
+    ['admitCredentialLoadShedder'],
+  ],
+  [
     'src/composition/identity-auth-mutations.ts',
     'src/app/api/auth/[...all]/route.ts',
     ['getProductionIdentityAuthMutationPort'],
+  ],
+  [
+    'src/composition/identity-bootstrap-mutations.ts',
+    'src/modules/identity/server/bootstrap.ts',
+    ['createOwnerFromWebWithBootstrapCode'],
+  ],
+])
+
+const externalHostBootstrapPolicies = policy([
+  [
+    'src/platform/db/external-host-command.ts',
+    'src/composition/identity-bootstrap-mutations.ts',
+    ['withExternalHostCommand'],
+  ],
+  [
+    'src/composition/identity-bootstrap-mutations.ts',
+    'src/modules/identity/server/bootstrap.ts',
+    ['createOwnerFromWebWithBootstrapCode'],
+  ],
+  [
+    'src/composition/identity-bootstrap-mutations.ts',
+    'scripts/identity/bootstrap-owner.ts',
+    ['issueOwnerBootstrapFromHostCli'],
+  ],
+  [
+    'src/composition/identity-bootstrap-mutations.ts',
+    'scripts/llm/dry-run-session-synthesize.ts',
+    ['createOwnerWithBootstrapCode', 'issueOwnerBootstrap'],
   ],
 ])
 
 describe('Identity authentication cutover boundaries', () => {
   const sourceFiles = readCodeSources(sourceRoot)
+  const productionFiles = new Map([
+    ...sourceFiles,
+    ...readCodeSources(resolve(process.cwd(), 'scripts')),
+  ])
 
   it('keeps every scoped/provider/capture seam on exact audited consumers', () => {
     expect(exactRuntimeImportViolations(sourceFiles, identityAuthPolicies)).toEqual([])
+  })
+
+  it('seals the external-host adapter and bootstrap composition across src and scripts', () => {
+    expect(
+      exactRuntimeImportViolations(productionFiles, externalHostBootstrapPolicies),
+    ).toEqual([])
+
+    const rogue = resolve(process.cwd(), 'scripts/identity/rogue-host-capture.ts')
+    const synthetic = new Map(productionFiles)
+    synthetic.set(
+      rogue,
+      "import { withExternalHostCommand } from '@/platform/db/external-host-command'\nvoid withExternalHostCommand\n",
+    )
+    expect(
+      exactRuntimeImportViolations(synthetic, externalHostBootstrapPolicies),
+    ).toContain(
+      'scripts/identity/rogue-host-capture.ts: unauthorized broad import -> src/platform/db/external-host-command.ts',
+    )
   })
 
   it('detects aliases, re-exports, literal and computed loading outside the root', () => {

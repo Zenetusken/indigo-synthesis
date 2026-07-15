@@ -1,11 +1,11 @@
 import { count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { createDataExport } from '@/modules/data-portability/application/export'
-import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
+import { createDataExport } from '@/modules/data-portability/application/export'
+import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import {
   programRevisionContentIsRevoked,

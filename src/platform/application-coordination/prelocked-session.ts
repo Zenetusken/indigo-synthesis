@@ -1,5 +1,4 @@
 import { performance } from 'node:perf_hooks'
-import type { PoolClient } from 'pg'
 import {
   CoordinationError,
   type MutationAuthority,
@@ -12,6 +11,7 @@ import {
   type PrelockedSessionOptions,
   type PrelockedSessionPort,
 } from '@/application/coordination/prelocked-session'
+import type { PostgresSessionClient } from '@/platform/db/postgres-session-client'
 import {
   acquireSubmittedEmailPrelockedControlClient,
   acquireTrustedPrelockedControlClient,
@@ -37,7 +37,7 @@ import {
 } from './postgres-query-guard'
 
 type AcquiredPrelockedSession = {
-  readonly client: PoolClient
+  readonly client: PostgresSessionClient
   connectionError(): Error | undefined
   subscribeConnectionError(listener: (error: Error) => void): () => void
   /**
@@ -56,7 +56,7 @@ type CredentialLock = {
 type ExternalHostConnectionState = {
   status: 'available' | 'closed' | 'in-use'
   readonly hostInvocationId: string
-  readonly client: PoolClient
+  readonly client: PostgresSessionClient
   readonly closeTimeoutMs: number
   readonly close: (error: Error | undefined) => Promise<void> | void
   readonly forceDestroy: (error: Error) => void
@@ -69,7 +69,7 @@ type ClientErrorMonitor = {
   readonly subscribe: (listener: (error: Error) => void) => () => void
 }
 
-function monitorClientErrors(client: PoolClient): ClientErrorMonitor {
+function monitorClientErrors(client: PostgresSessionClient): ClientErrorMonitor {
   let observed: Error | undefined
   const listeners = new Set<(error: Error) => void>()
   const onError = (error: Error): void => {
@@ -129,7 +129,7 @@ type ExternalHostOutcome<Result> =
 export async function withPlatformExternalHostConnection<Result>(
   input: {
     readonly hostInvocationId: string
-    readonly client: PoolClient
+    readonly client: PostgresSessionClient
     readonly closeTimeoutMs?: number
     readonly close: (error: Error | undefined) => Promise<void> | void
     /** Must synchronously hard-destroy the socket when graceful close misses its bound. */
@@ -283,7 +283,7 @@ function unlockStatement(mode: CredentialLock['mode']): string {
 }
 
 async function releaseCredentialLocks(
-  client: PoolClient,
+  client: PostgresSessionClient,
   monitor: ClientErrorMonitor,
   acquired: readonly CredentialLock[],
   deadline: number,
@@ -323,7 +323,7 @@ async function releaseCredentialLocks(
 }
 
 async function cleanupCredentialLockState(
-  client: PoolClient,
+  client: PostgresSessionClient,
   monitor: ClientErrorMonitor,
   acquired: readonly CredentialLock[],
   lockTimeoutConfigured: boolean,
@@ -352,7 +352,7 @@ async function cleanupCredentialLockState(
 }
 
 function guardedPrelockQuery<Row extends Record<string, unknown>>(
-  client: PoolClient,
+  client: PostgresSessionClient,
   text: string,
   values: readonly unknown[] | undefined,
   options: {
@@ -378,7 +378,7 @@ function externalHostRelease(
   connection: PlatformExternalHostConnection | undefined,
   expectedInvocationId: string,
 ): {
-  readonly client: PoolClient
+  readonly client: PostgresSessionClient
   readonly monitor: ClientErrorMonitor
   close(error: Error | undefined): Promise<void>
 } {
@@ -410,7 +410,7 @@ async function acquirePrelockedSession(
   const plan = consumePlatformCredentialPrelockPlan(authorityScope)
   if (options.signal?.aborted) throw new CoordinationError('uow.cancelled')
 
-  let client: PoolClient
+  let client: PostgresSessionClient
   let monitor: ClientErrorMonitor
   let closeClient: (error: Error | undefined) => Promise<void>
   if (plan.lane === 'external-host') {
@@ -428,7 +428,7 @@ async function acquirePrelockedSession(
     client = acquired.client
     monitor = acquired
     closeClient = async (error) => {
-      client.release(error)
+      acquired.client.release(error)
     }
   }
 
@@ -703,7 +703,7 @@ export function createPlatformPrelockedSessionIntentFactory(): PlatformPrelocked
 }
 
 export type ResolvedPlatformPrelockedSession = {
-  readonly client: PoolClient
+  readonly client: PostgresSessionClient
   readonly signal: AbortSignal
   finish(): void
   destroy(error: Error): void
