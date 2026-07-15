@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { explainFutureLoadDecisionAction } from './actions'
@@ -90,20 +90,24 @@ describe('FutureLoadExplanationControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Explain in plain language' }))
     await screen.findByText('A grounded explanation that must be suppressed.')
 
-    window.dispatchEvent(
-      new CustomEvent(latePainReportedEvent, {
-        detail: { sessionId: 'another-session' },
-      }),
-    )
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(latePainReportedEvent, {
+          detail: { sessionId: 'another-session' },
+        }),
+      )
+    })
     expect(
       screen.getByText('A grounded explanation that must be suppressed.'),
     ).toBeVisible()
 
-    window.dispatchEvent(
-      new CustomEvent(latePainReportedEvent, {
-        detail: { sessionId: 'session-1' },
-      }),
-    )
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(latePainReportedEvent, {
+          detail: { sessionId: 'session-1' },
+        }),
+      )
+    })
 
     await waitFor(() =>
       expect(
@@ -113,6 +117,64 @@ describe('FutureLoadExplanationControl', () => {
     expect(
       screen.getByRole('button', { name: 'Explain in plain language' }),
     ).toBeDisabled()
+  })
+
+  it('clears busy presentation when late pain invalidates an in-flight request', async () => {
+    let resolveAction: (
+      result: Awaited<ReturnType<typeof explainFutureLoadDecisionAction>>,
+    ) => void = () => undefined
+    const actionResult = new Promise<
+      Awaited<ReturnType<typeof explainFutureLoadDecisionAction>>
+    >((resolve) => {
+      resolveAction = resolve
+    })
+    vi.mocked(explainFutureLoadDecisionAction).mockReturnValue(actionResult)
+    render(<FutureLoadExplanationControl sessionId="session-1" decisionId="decision-1" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explain in plain language' }))
+    expect(await screen.findByRole('button', { name: 'Explaining…' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    )
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(latePainReportedEvent, {
+          detail: { sessionId: 'session-1' },
+        }),
+      )
+    })
+
+    const disabledButton = screen.getByRole('button', {
+      name: 'Explain in plain language',
+    })
+    expect(disabledButton).toBeDisabled()
+    expect(disabledButton).not.toHaveAttribute('aria-busy')
+    expect(
+      screen.getByText(/original code remains visible as historical evidence/),
+    ).toBeVisible()
+
+    await act(async () => {
+      resolveAction({
+        status: 'available',
+        prose: 'A late result that must remain suppressed.',
+        modelId: 'qwen3.5-9b-q4_k_m',
+        modelContentDigest: 'a'.repeat(64),
+        promptVersion: 'future-load.v2',
+        factBundleHash: 'b'.repeat(64),
+        durationMs: 12,
+        inferred: true,
+        fromCache: false,
+        generateDurationMs: 1000,
+      })
+      await actionResult
+    })
+
+    expect(
+      screen.queryByText('A late result that must remain suppressed.'),
+    ).not.toBeInTheDocument()
+    expect(disabledButton).toBeDisabled()
+    expect(disabledButton).not.toHaveAttribute('aria-busy')
   })
 
   it('explains why revoked content cannot use the optional model', () => {
