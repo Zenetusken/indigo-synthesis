@@ -61,7 +61,7 @@ These are the decisions a new developer must understand. Each links to where it 
 | **Gate 0 governs reviewed numbers.** All methodology numbers are labeled dev-config until Gate 0; the fixture is replaced through review, never relabeled. | Product-truth / safety governance; separates buildable engineering from human-gated content. | [Methodology v1 pack](../product/METHODOLOGY_V1_DECISION_PACK.md) |
 | **Write-authority fence (Part A, shipped).** Ownership = *write* authority; a checked-in manifest maps every table to an owner + declared debt grants; enforced by compile-time bijection (O1) and a runtime write census (O2–O5). | Contains and makes visible the cross-module co-write debt without a big up-front refactor; the interim guardrail. | [ADR 0007](adr/0007-schema-table-ownership.md), [SCHEMA_OWNERSHIP_SPEC.md](SCHEMA_OWNERSHIP_SPEC.md), merged in #9 |
 | **Part B = proper module boundaries.** Build the ports/gateways + `UnitOfWork` that ARCHITECTURE/AGENTS describe; the fence is only ever *interim*, never the accepted terminal design. | The "always proper architecture" principle; a real boundary a newcomer cannot route around. | ADR 0007 §Part B, [ARCHITECTURE.md](ARCHITECTURE.md) |
-| **Calibration is an engine, the decision stays in `training`.** Calibration is a deterministic engine + derived e1RM state, exposed as a `computeNextLoad(facts)` port; the caller passes the facts so it reads no peer tables. The future-load *decision record* + its atomic invalidation gate stay in `training` (the gate is a locked read over training's session lifecycle and cannot leave without shearing atomicity). | Converged over **three adversarial-review rounds** — moving the decision to calibration repeatedly broke atomicity / the write-fence. | [ADR 0008](adr/0008-calibration-module-boundary.md), [CALIBRATION_SPEC.md](CALIBRATION_SPEC.md), merged in #10 |
+| **Calibration is an engine, the decision stays in `training`.** Calibration is a deterministic engine + derived e1RM state, exposed as a `computeNextLoad(facts)` port; the caller passes the facts so it reads no peer tables. The future-load *decision record* + its atomic invalidation gate stay in `training` (the gate is a locked read over training's session lifecycle and cannot leave without shearing atomicity). | Converged over **three adversarial-review rounds** (the boundary was *inverted* after the second; the third confirmed it) — moving the decision to calibration repeatedly broke atomicity / the write-fence. | [ADR 0008](adr/0008-calibration-module-boundary.md), [CALIBRATION_SPEC.md](CALIBRATION_SPEC.md), merged in #10 |
 | **The `UnitOfWork` is the mechanism that retires cross-module co-writes.** A transaction-scoped composition of module ports; calibration's on-completion write is its first real use and the re-entry trigger ADR 0007 named. | A multi-module atomic write cannot be expressed by table-reaching without the fence flagging it; ARCHITECTURE's stated target. | [ADR 0001](adr/0001-modular-monolith.md), ARCHITECTURE.md "Cross-module composition" |
 | **Calibration methodology direction (owner product-direction, Gate-0-revisable).** e1RM-anchored, *adaptive* (layered base + override); deload = scheduled backstop **and** triggered; layoff = auto-back-off by time away. | The owner's chosen product direction (recorded, not a clinical claim); the engine expresses fixed-linear as a degenerate config if Gate 0 prefers it. | CALIBRATION_SPEC §4 |
 | **Safety outranks everything.** Input gates (reject an implausible baseline at anchor) + an *unconditional* output clamp (bounds every prescribed session-to-session delta, incl. after a re-anchor). | Gate 0 §F: "safety rules must outrank every other rule." | CALIBRATION_SPEC §5 |
@@ -74,9 +74,10 @@ These are the decisions a new developer must understand. Each links to where it 
   census (O2–O5). *Note:* there is **no in-repo CI**; the fence and tests run under
   `pnpm test` / `pnpm validate` (local / pre-merge). Adding CI to actually gate merges is an
   open item.
-- **Merged & accepted:** the calibration engine spec + **ADR 0008** — status **accepted**
-  (2026-07-15, #10). Part B is the committed direction; ADR 0007's Part B disposition is
-  recorded (build the proper boundary — the write-fence is interim, not terminal).
+- **Merged, ADR accepted:** the calibration engine spec + **ADR 0008** were merged in **#10**
+  (as *proposed*); **ADR 0008 was accepted** (2026-07-15) in **#12**, committing Part B (ADR
+  0007's Part B disposition recorded — build the proper boundary; the write-fence is interim,
+  not terminal). The **spec itself remains `draft for review`** — its numbers are Gate-0-gated.
 - **Tabled:** the local-LLM arc continuation (lives on the `feat/schema-ownership-spec` branch).
 - **Open production-release blockers** ([MVP_STATUS](../MVP_STATUS.md)): (1) Methodology Gate 0,
   (2) reviewed content release, (3) WCAG/device review, (4) schema ownership — Part A shipped,
@@ -117,13 +118,21 @@ The converged boundary and the falsifiable K1–K7 definition of done.
 
 ### Stage 4 — Calibration module skeleton
 - **Goal:** the `calibration` module + its owned schema (derived **e1RM / working-max /
-  calibration-state** tables); update `ownership.ts` (add `'calibration'` to `ModuleId`; the
-  schema-derived `SqlTableName` + glob scanner auto-cover the new tables); the typed
+  calibration-state** tables) with a **checked-in Drizzle migration** that creates them
+  (PostgreSQL-only, one migration authority — [ADR 0002](adr/0002-postgresql-only.md)); update
+  the fence manifest (`ownership.ts`): add `'calibration'` to `ModuleId`, **add the new
+  calibration schema file to the `SqlTableName` imports** (the runtime glob scanner already
+  discovers it, but the *compile-time* `SqlTableName` union is fixed to the
+  auth/installation/product schema files and must be extended), and **add an explicit
+  `{ owner: 'calibration' }` entry per new table** (the manifest is a `satisfies Record<
+  SqlTableName, …>` bijection — new tables are *demanded*, not auto-covered). The typed
   `computeNextLoad(facts)` port (no engine logic yet).
 - **Depends on:** Stage 2. **Unblocks:** Stage 5.
-- **DoD:** the module owns its tables; the fence is green (O1 bijection covers the new tables;
-  O2 shows no undeclared writes); the compute port is typed and reads no peer tables.
-- **Decisions:** ADR 0008 (calibration = engine), ADR 0007 (fence).
+- **DoD:** the migration creates the tables and `pnpm db:migrate` on a fresh DB succeeds; the
+  module owns its tables; the fence is green (O1 bijection covers the new tables; O2 shows no
+  undeclared writes); the compute port is typed and reads no peer tables.
+- **Decisions:** ADR 0008 (calibration = engine), ADR 0007 (fence), ADR 0002 (one migration
+  authority).
 
 ### Stage 5 — The calibration engine *(deterministic, dev-config)*
 - **Goal:** implement `computeNextLoad`: e1RM derivation → `e1RM × phase-intensity%` anchor →
@@ -199,27 +208,30 @@ The converged boundary and the falsifiable K1–K7 definition of done.
 
 ```text
 Stage 0  write-fence (DONE #9)
-Stage 1  calibration spec + ADR 0008 (DONE #10)
+Stage 1  calibration spec + ADR 0008 (DONE #10; ADR accepted #12)
    │
 Stage 2  ACCEPT ADR 0008 + Part B  (DONE 2026-07-15)
-   │
-Stage 3  build UnitOfWork ──────────────────────────────┐
-   │                                                     │
-Stage 4  calibration module skeleton                     │
-   │                                                     │
-Stage 5  calibration engine (dev-config, golden vectors) │
-   │                                                     │
-Stage 6  completion workflow via UnitOfWork ◄────────────┘   ← retires Programs↔Training co-write
-   ├── Stage 7  LLM explanation consumer
-   └── Stage 8  real prescriptions on the J-path
-   │
-Stage 9  complete Part B (audit port, safety_hold API, DP ports, O6, close blocker 4)
+   ├─────────────────────────────────┐
+   ▼ (parallel)                       ▼
+Stage 3  build UnitOfWork         Stage 4  calibration module skeleton (+ Drizzle migration)
+   │                                  │
+   │                                  ▼
+   │                              Stage 5  calibration engine (dev-config, golden vectors)
+   │                                  │
+   └──────────►  Stage 6  ◄───────────┘   completion workflow via UnitOfWork  (needs Stage 3 + Stage 5)
+                    │                      ← retires Programs↔Training co-write
+                    ├── Stage 7  LLM explanation consumer
+                    ├── Stage 8  real prescriptions on the J-path
+                    ▼
+                 Stage 9  complete Part B (audit port, safety_hold API, DP ports, O6, close blocker 4)
 
-Parallel (gates PRODUCTION, not the build): Gate 0 methodology review · CI · independent reviews
+Parallel track (gates PRODUCTION, not the build): Gate 0 methodology review · CI · independent reviews
 ```
 
-Critical path to Part B: **2 → 3 → 4 → 5 → 6 → 9**. Stages 7 and 8 branch off 6 and are not on
-the critical path to the boundary work, but are on the path to a usable product loop.
+Critical path to Part B: **2 → 4 → 5 → 6 → 9** (the longest chain). **Stage 3 (the `UnitOfWork`)
+runs in parallel** with 4 → 5 and also gates Stage 6, so it must land before 6 — *not* before 4.
+Stages 7 and 8 branch off 6 (the usable product loop) and are not on the critical path to the
+boundary work.
 
 ---
 
