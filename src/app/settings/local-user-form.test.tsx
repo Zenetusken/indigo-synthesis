@@ -3,8 +3,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { LocalUserCreateActionBinding } from '@/modules/identity/application/action-binding'
 import type { LocalUserActionState } from './actions'
 import { LocalUserForm } from './local-user-form'
+
+const targetUserId = 'preallocated-local-user-id'
+const actionBinding = 'opaque-local-user-create-binding' as LocalUserCreateActionBinding
+
+function form() {
+  return <LocalUserForm targetUserId={targetUserId} actionBinding={actionBinding} />
+}
 
 const formMocks = vi.hoisted(() => ({
   action: vi.fn(),
@@ -38,14 +46,14 @@ describe('LocalUserForm', () => {
   afterEach(cleanup)
 
   it('clears both live passwords after rejection and resets all fields after success', async () => {
-    const view = render(<LocalUserForm />)
+    const view = render(form())
     fillForm()
 
     formMocks.state = {
       errors: ['The owner password was not accepted.'],
       createdEmail: null,
     }
-    view.rerender(<LocalUserForm />)
+    view.rerender(form())
     const alert = await screen.findByRole('alert')
     await waitFor(() => expect(alert).toHaveFocus())
     expect(screen.getByLabelText('Name')).toHaveValue('Local Trainee')
@@ -66,11 +74,23 @@ describe('LocalUserForm', () => {
 
     fillForm()
     formMocks.state = { errors: [], createdEmail: 'trainee@example.test' }
-    view.rerender(<LocalUserForm />)
+    view.rerender(form())
     await screen.findByRole('status')
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue(''))
     expect(screen.getByLabelText('Local sign-in email')).toHaveValue('')
     expect(screen.getByLabelText('Initial password')).toHaveValue('')
     expect(screen.getByLabelText('Current owner password')).toHaveValue('')
+  })
+
+  it('submits only the preallocated target and opaque proof as hidden authority fields', () => {
+    const { container } = render(form())
+    const hiddenFields = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="hidden"]'),
+    )
+
+    expect(hiddenFields.map(({ name, value }) => ({ name, value }))).toEqual([
+      { name: 'targetUserId', value: targetUserId },
+      { name: 'actionBinding', value: actionBinding },
+    ])
   })
 })

@@ -5,6 +5,10 @@ import {
   checkedSignOutActionBindingPurpose,
   type EmailSignInActionBinding,
   emailSignInActionBindingPurpose,
+  type LocalUserCreateActionBinding,
+  localUserCreateActionBindingPurpose,
+  type MemberResetIssueActionBinding,
+  memberResetIssueActionBindingPurpose,
   type OwnerBootstrapActionBinding,
   ownerBootstrapActionBindingPurpose,
 } from '../application/action-binding'
@@ -14,6 +18,7 @@ const actionBindingDomain = 'indigo-identity-action-binding-v1\0'
 const base64urlSha256Pattern = /^[A-Za-z0-9_-]{43}$/
 const canonicalBase36Pattern = /^[1-9a-z][0-9a-z]*$/
 const maximumIdentityFieldBytes = 512
+const authenticatedFormBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const emailSignInBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const ownerBootstrapBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const checkedSignOutCleanupGraceMilliseconds = 15 * 60 * 1_000
@@ -21,6 +26,8 @@ const checkedSignOutCleanupGraceMilliseconds = 15 * 60 * 1_000
 type IdentityActionBindingPurpose =
   | typeof checkedSignOutActionBindingPurpose
   | typeof emailSignInActionBindingPurpose
+  | typeof localUserCreateActionBindingPurpose
+  | typeof memberResetIssueActionBindingPurpose
   | typeof ownerBootstrapActionBindingPurpose
 
 export type CheckedSignOutActionBindingContext = {
@@ -36,6 +43,28 @@ type CheckedSignOutActionBindingIssuance = CheckedSignOutActionBindingContext & 
 
 export type EmailSignInActionBindingContext = {
   readonly expectedEpoch: string
+}
+
+export type LocalUserCreateActionBindingContext = {
+  readonly expectedEpoch: string
+  readonly sessionId: string
+  readonly actorUserId: string
+  readonly targetUserId: string
+}
+
+type LocalUserCreateActionBindingIssuance = LocalUserCreateActionBindingContext & {
+  readonly sessionExpiresAt: Date
+}
+
+export type MemberResetIssueActionBindingContext = {
+  readonly expectedEpoch: string
+  readonly sessionId: string
+  readonly actorUserId: string
+  readonly targetUserId: string
+}
+
+type MemberResetIssueActionBindingIssuance = MemberResetIssueActionBindingContext & {
+  readonly sessionExpiresAt: Date
 }
 
 export type OwnerBootstrapActionBindingContext = {
@@ -127,6 +156,71 @@ function parseBinding(
   return { encodedExpiry, suppliedSignature }
 }
 
+function authenticatedFormExpiry(sessionExpiresAt: Date, now: Date): string {
+  const expiry = expiresAtSeconds(
+    new Date(
+      Math.min(
+        sessionExpiresAt.getTime(),
+        now.getTime() + authenticatedFormBindingLifetimeMilliseconds,
+      ),
+    ),
+  )
+  if (expiry <= currentSeconds(now)) {
+    throw new TypeError(
+      'Cannot issue an authenticated form binding for an expired session.',
+    )
+  }
+  return expiry.toString(36)
+}
+
+function issueAuthenticatedFormBinding(
+  purpose:
+    | typeof localUserCreateActionBindingPurpose
+    | typeof memberResetIssueActionBindingPurpose,
+  input: LocalUserCreateActionBindingIssuance | MemberResetIssueActionBindingIssuance,
+  now: Date,
+): string {
+  const encodedExpiry = authenticatedFormExpiry(input.sessionExpiresAt, now)
+  const encodedSignature = signature(
+    purpose,
+    [input.expectedEpoch, input.sessionId, input.actorUserId, input.targetUserId],
+    encodedExpiry,
+  ).toString('base64url')
+  return `${actionBindingVersion}.${purpose}.${encodedExpiry}.${encodedSignature}`
+}
+
+function verifyAuthenticatedFormBinding(
+  binding: unknown,
+  purpose:
+    | typeof localUserCreateActionBindingPurpose
+    | typeof memberResetIssueActionBindingPurpose,
+  context: LocalUserCreateActionBindingContext | MemberResetIssueActionBindingContext,
+  now: Date,
+): boolean {
+  const parsed = parseBinding(binding, purpose)
+  if (!parsed) return false
+
+  const expiry = Number.parseInt(parsed.encodedExpiry, 36)
+  if (currentSeconds(now) >= expiry) return false
+
+  let expectedSignature: Buffer
+  try {
+    expectedSignature = signature(
+      purpose,
+      [
+        context.expectedEpoch,
+        context.sessionId,
+        context.actorUserId,
+        context.targetUserId,
+      ],
+      parsed.encodedExpiry,
+    )
+  } catch {
+    return false
+  }
+  return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
 export function issueCheckedSignOutActionBinding(
   input: CheckedSignOutActionBindingIssuance,
   now = new Date(),
@@ -216,6 +310,58 @@ export function verifyEmailSignInActionBinding(
     return false
   }
   return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
+/** Issues a short-lived proof for one preallocated local-user creation target. */
+export function issueLocalUserCreateActionBinding(
+  input: LocalUserCreateActionBindingIssuance,
+  now = new Date(),
+): LocalUserCreateActionBinding {
+  return issueAuthenticatedFormBinding(
+    localUserCreateActionBindingPurpose,
+    input,
+    now,
+  ) as LocalUserCreateActionBinding
+}
+
+/** Re-checks every server-observed identity dimension bound into local-user creation. */
+export function verifyLocalUserCreateActionBinding(
+  binding: unknown,
+  context: LocalUserCreateActionBindingContext,
+  now = new Date(),
+): binding is LocalUserCreateActionBinding {
+  return verifyAuthenticatedFormBinding(
+    binding,
+    localUserCreateActionBindingPurpose,
+    context,
+    now,
+  )
+}
+
+/** Issues a purpose-separated, short-lived proof for one member reset target. */
+export function issueMemberResetIssueActionBinding(
+  input: MemberResetIssueActionBindingIssuance,
+  now = new Date(),
+): MemberResetIssueActionBinding {
+  return issueAuthenticatedFormBinding(
+    memberResetIssueActionBindingPurpose,
+    input,
+    now,
+  ) as MemberResetIssueActionBinding
+}
+
+/** Re-checks every server-observed identity dimension bound into member reset issuance. */
+export function verifyMemberResetIssueActionBinding(
+  binding: unknown,
+  context: MemberResetIssueActionBindingContext,
+  now = new Date(),
+): binding is MemberResetIssueActionBinding {
+  return verifyAuthenticatedFormBinding(
+    binding,
+    memberResetIssueActionBindingPurpose,
+    context,
+    now,
+  )
 }
 
 /** Issues a purpose-separated, short-lived proof for the open bootstrap page generation. */

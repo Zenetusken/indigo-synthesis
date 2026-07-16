@@ -1,8 +1,13 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { requireUiActor } from '@/modules/identity/server/actor'
+import {
+  issueLocalUserCreationFormEnvelope,
+  issueMemberResetIssuanceFormEnvelope,
+  requireUiActor,
+} from '@/modules/identity/server/actor'
 import { listLocalUsersAsOwner } from '@/modules/identity/server/local-users'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { pluralize } from '@/platform/format/plural'
@@ -19,6 +24,37 @@ export default async function SettingsPage() {
     getAthleteProfile(actor.userId),
     actor.role === 'owner' ? listLocalUsersAsOwner(actor) : Promise.resolve([]),
   ])
+  const formIssuedAt = new Date()
+  const localUserCreationForm =
+    actor.role === 'owner'
+      ? issueLocalUserCreationFormEnvelope(
+          actor.authenticatedActionEnvelope,
+          formIssuedAt,
+        )
+      : null
+  if (actor.role === 'owner' && !localUserCreationForm) redirect('/sign-in')
+  const memberResetForms = new Map(
+    actor.role === 'owner'
+      ? localUsers
+          .filter((localUser) => localUser.id !== actor.userId)
+          .map((localUser) => {
+            const envelope = issueMemberResetIssuanceFormEnvelope(
+              actor.authenticatedActionEnvelope,
+              localUser.id,
+              formIssuedAt,
+            )
+            if (!envelope) redirect('/sign-in')
+            return [localUser.id, envelope] as const
+          })
+      : [],
+  )
+  const memberResetFormFor = (targetUserId: string) => {
+    const envelope = memberResetForms.get(targetUserId)
+    if (!envelope) {
+      throw new TypeError('A rendered member reset target has no action envelope.')
+    }
+    return envelope
+  }
 
   return (
     <ProductFrame
@@ -75,8 +111,8 @@ export default async function SettingsPage() {
                     </div>
                     {localUser.id !== actor.userId ? (
                       <MemberResetForm
-                        targetUserId={localUser.id}
                         targetName={localUser.name}
+                        {...memberResetFormFor(localUser.id)}
                       />
                     ) : null}
                   </li>
@@ -85,7 +121,7 @@ export default async function SettingsPage() {
             ) : (
               <p>No additional local users yet.</p>
             )}
-            <LocalUserForm />
+            {localUserCreationForm ? <LocalUserForm {...localUserCreationForm} /> : null}
           </section>
         ) : null}
 

@@ -225,7 +225,11 @@ const identityAuthPolicies = policy([
   [
     'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/actor.ts',
-    ['issueCheckedSignOutActionBinding'],
+    [
+      'issueCheckedSignOutActionBinding',
+      'issueLocalUserCreateActionBinding',
+      'issueMemberResetIssueActionBinding',
+    ],
   ],
   [
     'src/modules/identity/infrastructure/action-binding.ts',
@@ -291,6 +295,19 @@ const identityAuthPolicies = policy([
     ['createEmailSignInMutationCommand', 'emailSignInMutationCommandView'],
   ],
   [
+    'src/modules/identity/server/credential-administration-command.ts',
+    'src/app/settings/actions.ts',
+    [
+      'captureLocalUserCreationMutationCommand',
+      'captureMemberResetIssuanceMutationCommand',
+    ],
+  ],
+  [
+    'src/modules/identity/server/credential-administration-command.ts',
+    'src/composition/identity-credential-administration.ts',
+    ['localUserCreationMutationCommandView', 'memberResetIssuanceMutationCommandView'],
+  ],
+  [
     'src/modules/identity/infrastructure/auth.ts',
     'src/composition/identity-auth-mutations.ts',
     ['clearProvenAbsentIdentitySession', 'verifyIdentitySessionCookie'],
@@ -299,6 +316,11 @@ const identityAuthPolicies = policy([
     'src/modules/identity/infrastructure/auth.ts',
     'src/modules/identity/server/actor.ts',
     ['readIdentitySession'],
+  ],
+  [
+    'src/modules/identity/infrastructure/auth.ts',
+    'src/modules/identity/server/credential-administration-command.ts',
+    ['verifyIdentitySessionCookie'],
   ],
   [
     'src/modules/identity/infrastructure/auth.ts',

@@ -3,9 +3,13 @@ import { resetServerConfigForTests } from '@/platform/config/server'
 import {
   issueCheckedSignOutActionBinding,
   issueEmailSignInActionBinding,
+  issueLocalUserCreateActionBinding,
+  issueMemberResetIssueActionBinding,
   issueOwnerBootstrapActionBinding,
   verifyCheckedSignOutActionBinding,
   verifyEmailSignInActionBinding,
+  verifyLocalUserCreateActionBinding,
+  verifyMemberResetIssueActionBinding,
   verifyOwnerBootstrapActionBinding,
 } from './action-binding'
 
@@ -179,6 +183,129 @@ describe('email sign-in action binding', () => {
         new Date(now.getTime() + 15 * 60 * 1_000),
       ),
     ).toBe(false)
+  })
+})
+
+describe('authenticated settings action bindings', () => {
+  beforeEach(() => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://localhost/indigo_action_binding_test')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'action-binding-test-secret-at-least-32-characters')
+    vi.stubEnv('BETTER_AUTH_URL', 'http://127.0.0.1:3000')
+    vi.stubEnv('INDIGO_CONTENT_MODE', 'development')
+    vi.stubEnv('NODE_ENV', 'test')
+    resetServerConfigForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    resetServerConfigForTests()
+  })
+
+  const localUserContext = {
+    ...context,
+    targetUserId: 'preallocated-local-user-019f3456',
+  } as const
+  const memberResetContext = {
+    ...context,
+    targetUserId: 'existing-member-019f7890',
+  } as const
+
+  it('binds local-user creation to epoch, session, owner, and preallocated target', () => {
+    const binding = issueLocalUserCreateActionBinding(
+      { ...localUserContext, sessionExpiresAt },
+      now,
+    )
+
+    expect(binding).toMatch(
+      /^iab1\.local-user-create\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(verifyLocalUserCreateActionBinding(binding, localUserContext, now)).toBe(true)
+
+    const transport = JSON.stringify({ binding })
+    for (const privateIdentity of Object.values(localUserContext)) {
+      expect(transport).not.toContain(privateIdentity)
+    }
+    for (const replacement of [
+      { ...localUserContext, expectedEpoch: 'replacement-epoch' },
+      { ...localUserContext, sessionId: 'replacement-session' },
+      { ...localUserContext, actorUserId: 'replacement-owner' },
+      { ...localUserContext, targetUserId: 'replacement-target' },
+    ]) {
+      expect(verifyLocalUserCreateActionBinding(binding, replacement, now)).toBe(false)
+    }
+  })
+
+  it('purpose-separates member reset issuance and binds the exact target', () => {
+    const binding = issueMemberResetIssueActionBinding(
+      { ...memberResetContext, sessionExpiresAt },
+      now,
+    )
+
+    expect(binding).toMatch(
+      /^iab1\.member-reset-issue\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(verifyMemberResetIssueActionBinding(binding, memberResetContext, now)).toBe(
+      true,
+    )
+    expect(
+      verifyMemberResetIssueActionBinding(
+        binding,
+        { ...memberResetContext, targetUserId: 'another-member' },
+        now,
+      ),
+    ).toBe(false)
+    expect(verifyLocalUserCreateActionBinding(binding, localUserContext, now)).toBe(false)
+  })
+
+  it('expires at the earlier of fifteen minutes and the authenticated session', () => {
+    const shortSessionExpiry = new Date(now.getTime() + 5 * 60 * 1_000)
+    const shortBinding = issueLocalUserCreateActionBinding(
+      { ...localUserContext, sessionExpiresAt: shortSessionExpiry },
+      now,
+    )
+    const longBinding = issueMemberResetIssueActionBinding(
+      { ...memberResetContext, sessionExpiresAt },
+      now,
+    )
+
+    expect(
+      verifyLocalUserCreateActionBinding(
+        shortBinding,
+        localUserContext,
+        new Date(shortSessionExpiry.getTime() - 1_000),
+      ),
+    ).toBe(true)
+    expect(
+      verifyLocalUserCreateActionBinding(
+        shortBinding,
+        localUserContext,
+        shortSessionExpiry,
+      ),
+    ).toBe(false)
+    expect(
+      verifyMemberResetIssueActionBinding(
+        longBinding,
+        memberResetContext,
+        new Date(now.getTime() + 15 * 60 * 1_000),
+      ),
+    ).toBe(false)
+  })
+
+  it('refuses to issue either authenticated form binding for an expired session', () => {
+    const expiredSession = new Date(now.getTime() - 1)
+
+    expect(() =>
+      issueLocalUserCreateActionBinding(
+        { ...localUserContext, sessionExpiresAt: expiredSession },
+        now,
+      ),
+    ).toThrow('expired session')
+    expect(() =>
+      issueMemberResetIssueActionBinding(
+        { ...memberResetContext, sessionExpiresAt: expiredSession },
+        now,
+      ),
+    ).toThrow('expired session')
   })
 })
 

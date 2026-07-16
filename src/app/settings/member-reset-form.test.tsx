@@ -3,8 +3,23 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MemberResetIssueActionBinding } from '@/modules/identity/application/action-binding'
 import type { MemberResetIssueActionState } from './actions'
 import { MemberResetForm } from './member-reset-form'
+
+const targetUserId = 'member-id'
+const targetName = 'Local Trainee'
+const actionBinding = 'opaque-member-reset-binding' as MemberResetIssueActionBinding
+
+function form() {
+  return (
+    <MemberResetForm
+      targetUserId={targetUserId}
+      targetName={targetName}
+      actionBinding={actionBinding}
+    />
+  )
+}
 
 const formMocks = vi.hoisted(() => ({
   action: vi.fn(),
@@ -27,9 +42,7 @@ describe('MemberResetForm', () => {
   afterEach(cleanup)
 
   it('names the target, warns about invalidation, and clears reauthentication secrets', async () => {
-    const view = render(
-      <MemberResetForm targetUserId="member-id" targetName="Local Trainee" />,
-    )
+    const view = render(form())
     const summary = screen.getByText('Issue password reset code for Local Trainee')
     expect(summary).toBeVisible()
     fireEvent.click(summary)
@@ -43,7 +56,7 @@ describe('MemberResetForm', () => {
     fireEvent.change(password, { target: { value: 'current-owner-password' } })
 
     formMocks.state = { errors: ['The owner password was not accepted.'], issued: null }
-    view.rerender(<MemberResetForm targetUserId="member-id" targetName="Local Trainee" />)
+    view.rerender(form())
     const alert = await screen.findByRole('alert')
     await waitFor(() => expect(alert).toHaveFocus())
     expect(password).toHaveValue('')
@@ -61,8 +74,20 @@ describe('MemberResetForm', () => {
         expiresAt: '2026-07-13T18:00:00.000Z',
       },
     }
-    view.rerender(<MemberResetForm targetUserId="member-id" targetName="Local Trainee" />)
+    view.rerender(form())
     expect(await screen.findByRole('status')).toHaveTextContent('indigo_m1_one_time_code')
     expect(password).toHaveValue('')
+  })
+
+  it('submits only the selected target and opaque proof as hidden authority fields', () => {
+    const { container } = render(form())
+    const hiddenFields = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="hidden"]'),
+    )
+
+    expect(hiddenFields.map(({ name, value }) => ({ name, value }))).toEqual([
+      { name: 'targetUserId', value: targetUserId },
+      { name: 'actionBinding', value: actionBinding },
+    ])
   })
 })

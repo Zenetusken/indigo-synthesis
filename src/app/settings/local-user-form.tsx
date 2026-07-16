@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef } from 'react'
 import { ActionButton } from '@/components/action-button'
+import type { LocalUserCreateActionBinding } from '@/modules/identity/application/action-binding'
 import { createLocalUserAction, type LocalUserActionState } from './actions'
 import styles from './settings.module.css'
 
@@ -10,7 +11,13 @@ const initialLocalUserActionState: LocalUserActionState = {
   createdEmail: null,
 }
 
-export function LocalUserForm() {
+export function LocalUserForm({
+  targetUserId,
+  actionBinding,
+}: {
+  readonly targetUserId: string
+  readonly actionBinding: LocalUserCreateActionBinding
+}) {
   const [state, action, pending] = useActionState(
     createLocalUserAction,
     initialLocalUserActionState,
@@ -38,6 +45,8 @@ export function LocalUserForm() {
 
   return (
     <form action={action} className={styles.form} ref={formRef}>
+      <input name="targetUserId" type="hidden" value={targetUserId} />
+      <input name="actionBinding" type="hidden" value={actionBinding} />
       {state.errors.length > 0 ? (
         <div
           className={styles.error}
