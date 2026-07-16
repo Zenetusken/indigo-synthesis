@@ -1,5 +1,6 @@
-import { and, count, eq, isNull, sql } from 'drizzle-orm'
+import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { getProductionDataPortabilitySubjectExportPort } from '@/composition/data-portability-subject-export'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
@@ -9,11 +10,11 @@ import {
   createInstanceResetPlan,
   createSubjectDeletionPlan,
 } from '@/modules/data-portability/application/deletion'
-import { createDataExport } from '@/modules/data-portability/application/export'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
+import { issueSubjectExportCommand } from '@/modules/identity/infrastructure/subject-export-authority'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
 import { revokeContentRelease } from '@/modules/programs/application/content-revocations'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
@@ -34,6 +35,7 @@ import {
   athleteTrainingDays,
   auditEvents,
   contentReleaseRevocations,
+  deletionPlans,
   deletionTombstones,
   destructiveReauthenticationStates,
   exercisePrescriptions,
@@ -49,6 +51,7 @@ import {
   programs,
   safetyHoldResolutions,
   safetyHolds,
+  session,
   sessionExercises,
   sessionFeedback,
   setPrescriptions,
@@ -65,6 +68,7 @@ import {
   submitInstanceResetThroughProductionPort,
   submitSubjectDeletionThroughProductionPort,
 } from '../support/destructive-mutation'
+import { createSubjectExportThroughProductionPort } from '../support/subject-export'
 
 const ownerPassword = 'portability-owner-password'
 const otherUserPassword = 'portability-member-password'
@@ -657,7 +661,7 @@ describe('subject export and exact instance reset', () => {
       .select({ productMutationEpoch: installationState.productMutationEpoch })
       .from(installationState)
     if (!installation) throw new Error('Export fixture has no installation state.')
-    const archive = await createDataExport(actor)
+    const archive = await createSubjectExportThroughProductionPort(bootstrapToken)
     const revisions = archive.programs.flatMap((program) => program.revisions)
     const statuses = archive.sessions.map((session) => session.status).sort()
 
@@ -728,7 +732,7 @@ describe('subject export and exact instance reset', () => {
         }),
       ]),
     )
-    expect(archive.manifest.schemaVersion).toBe('1.5.0-development')
+    expect(archive.manifest.schemaVersion).toBe('1.6.0-development')
     expect(archive.profile.safetyHolds).toEqual([
       expect.objectContaining({
         id: resolvedHoldId,
@@ -789,10 +793,244 @@ describe('subject export and exact instance reset', () => {
         updatedAt: new Date('2026-07-11T12:15:00.000Z'),
       })
       .where(eq(workoutSessions.id, activeSessionId))
-    const pausedArchive = await createDataExport(actor)
+    const pausedArchive = await createSubjectExportThroughProductionPort(bootstrapToken)
     expect(
       pausedArchive.sessions.find((session) => session.id === activeSessionId),
     ).toMatchObject({ status: 'paused' })
+  })
+
+  it('omits actual credential and operational canaries from the archive', async () => {
+    let retainedPlanId: string | null = null
+    let reauthenticationStateIds: string[] = []
+    let denialAuditIds: string[] = []
+    const operationalAuditId = newUuidV7()
+    const operationalMetadataCanary = `private-operational-metadata-${newUuidV7()}`
+    const memberResetVerificationId = newUuidV7()
+    const memberResetVerificationValue = `private-member-reset-${newUuidV7()}`
+    const rateLimitBucketKey = 'e'.repeat(64)
+    const tombstoneId = newUuidV7()
+    const tombstoneCompletionDigest = `private-tombstone-digest-${newUuidV7()}`
+    const tombstoneRowCountsCanary = `private-tombstone-row-counts-${newUuidV7()}`
+
+    try {
+      const deniedPlan = await createSubjectDeletionPlan(actor)
+      const denied = await submitSubjectDeletionThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan: deniedPlan,
+        password: 'definitely-not-the-owner-password',
+      })
+      expect(denied).toEqual({ kind: 'reauthentication-failed' })
+      const retainedPlan = await createSubjectDeletionPlan(actor)
+      retainedPlanId = retainedPlan.id
+      const privateFixtureAt = new Date('2026-07-13T10:00:00.000Z')
+      await getDb().transaction(async (transaction) => {
+        await transaction.insert(verification).values({
+          id: memberResetVerificationId,
+          identifier: `indigo:member-reset:${otherUser.id}`,
+          value: memberResetVerificationValue,
+          expiresAt: new Date(privateFixtureAt.getTime() + 15 * 60_000),
+          createdAt: privateFixtureAt,
+          updatedAt: privateFixtureAt,
+        })
+        await transaction.insert(memberResetStates).values({
+          targetUserId: otherUser.id,
+          activeVerificationId: memberResetVerificationId,
+          lastIssuedAt: privateFixtureAt,
+          createdAt: privateFixtureAt,
+          updatedAt: privateFixtureAt,
+        })
+        await transaction.insert(webRecoveryRateLimitBuckets).values({
+          scope: 'member-reset:email',
+          bucketKey: rateLimitBucketKey,
+          windowStartedAt: privateFixtureAt,
+          attemptCount: 1,
+          retryAfter: null,
+          lastAttemptAt: privateFixtureAt,
+          createdAt: privateFixtureAt,
+          updatedAt: privateFixtureAt,
+        })
+        await transaction.insert(deletionTombstones).values({
+          id: tombstoneId,
+          actorClass: 'trainee',
+          scope: 'trainee-data',
+          schemaVersion: '1.6.0-development',
+          rowCounts: { privateCanary: tombstoneRowCountsCanary },
+          completionDigest: tombstoneCompletionDigest,
+          createdAt: privateFixtureAt,
+        })
+      })
+
+      const [credential] = await getDb()
+        .select({
+          id: account.id,
+          providerId: account.providerId,
+          passwordHash: account.password,
+        })
+        .from(account)
+        .where(
+          and(eq(account.userId, actor.userId), eq(account.providerId, 'credential')),
+        )
+        .limit(1)
+      const [activeSession] = await getDb()
+        .select({ id: session.id, token: session.token })
+        .from(session)
+        .where(eq(session.token, bootstrapToken))
+        .limit(1)
+      const recoveryRows = await getDb()
+        .select({ id: verification.id, value: verification.value })
+        .from(verification)
+      const reauthenticationRows = credential
+        ? await getDb()
+            .select({ id: destructiveReauthenticationStates.id })
+            .from(destructiveReauthenticationStates)
+            .where(eq(destructiveReauthenticationStates.accountId, credential.id))
+        : []
+      reauthenticationStateIds = reauthenticationRows.map((row) => row.id)
+      const resetRows = await getDb()
+        .select({
+          targetUserId: memberResetStates.targetUserId,
+          activeVerificationId: memberResetStates.activeVerificationId,
+        })
+        .from(memberResetStates)
+      const rateLimitRows = await getDb()
+        .select({ bucketKey: webRecoveryRateLimitBuckets.bucketKey })
+        .from(webRecoveryRateLimitBuckets)
+      const tombstoneRows = await getDb()
+        .select({
+          id: deletionTombstones.id,
+          completionDigest: deletionTombstones.completionDigest,
+          rowCounts: deletionTombstones.rowCounts,
+        })
+        .from(deletionTombstones)
+      const [installation] = await getDb()
+        .select({ epoch: installationState.productMutationEpoch })
+        .from(installationState)
+        .limit(1)
+      const denialAudits =
+        reauthenticationStateIds.length === 0
+          ? []
+          : await getDb()
+              .select({ id: auditEvents.id })
+              .from(auditEvents)
+              .where(
+                and(
+                  eq(auditEvents.eventType, 'destructive-reauthentication-denied'),
+                  inArray(auditEvents.entityId, reauthenticationStateIds),
+                ),
+              )
+      denialAuditIds = denialAudits.map((event) => event.id)
+
+      if (!credential?.passwordHash || !activeSession || !installation) {
+        throw new Error('Export secret-canary fixture is incomplete.')
+      }
+      expect(credential.providerId).toBe('credential')
+      expect(credential.passwordHash).not.toBe(ownerPassword)
+      expect(reauthenticationStateIds).not.toHaveLength(0)
+      expect(recoveryRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: memberResetVerificationId,
+            value: memberResetVerificationValue,
+          }),
+        ]),
+      )
+      expect(resetRows).toEqual(
+        expect.arrayContaining([
+          {
+            targetUserId: otherUser.id,
+            activeVerificationId: memberResetVerificationId,
+          },
+        ]),
+      )
+      expect(rateLimitRows).toContainEqual({ bucketKey: rateLimitBucketKey })
+      expect(tombstoneRows).toContainEqual({
+        id: tombstoneId,
+        completionDigest: tombstoneCompletionDigest,
+        rowCounts: { privateCanary: tombstoneRowCountsCanary },
+      })
+
+      await getDb()
+        .insert(auditEvents)
+        .values({
+          id: operationalAuditId,
+          actorUserId: actor.userId,
+          subjectUserId: actor.userId,
+          eventType: 'test-private-operational-metadata',
+          entityType: 'destructive-reauthentication-state',
+          entityId: reauthenticationStateIds[0],
+          metadata: { privateCanary: operationalMetadataCanary },
+          createdAt: new Date(),
+        })
+      denialAuditIds = [...denialAuditIds, operationalAuditId]
+
+      const archive = await createSubjectExportThroughProductionPort(bootstrapToken)
+      const serialized = JSON.stringify(archive)
+      const secretCanaries = [
+        credential.id,
+        credential.passwordHash,
+        activeSession.id,
+        activeSession.token,
+        retainedPlan.id,
+        retainedPlan.digest,
+        installation.epoch,
+        operationalMetadataCanary,
+        tombstoneRowCountsCanary,
+        ...recoveryRows.flatMap((row) => [row.id, row.value]),
+        ...reauthenticationStateIds,
+        ...resetRows.flatMap((row) =>
+          row.activeVerificationId
+            ? [row.targetUserId, row.activeVerificationId]
+            : [row.targetUserId],
+        ),
+        ...rateLimitRows.map((row) => row.bucketKey),
+        ...tombstoneRows.flatMap((row) => [row.id, row.completionDigest]),
+      ]
+      for (const canary of secretCanaries) {
+        expect(serialized, `private canary: ${canary}`).not.toContain(canary)
+      }
+      expect(serialized).not.toContain('"providerId"')
+      expect(
+        archive.auditEvents.find((event) => event.id === operationalAuditId),
+      ).toEqual(expect.objectContaining({ entityId: null, metadata: {} }))
+    } finally {
+      await getDb().transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`)
+        if (denialAuditIds.length > 0) {
+          await transaction
+            .delete(auditEvents)
+            .where(inArray(auditEvents.id, denialAuditIds))
+        }
+        if (reauthenticationStateIds.length > 0) {
+          await transaction
+            .delete(destructiveReauthenticationStates)
+            .where(
+              inArray(destructiveReauthenticationStates.id, reauthenticationStateIds),
+            )
+        }
+        await transaction
+          .delete(memberResetStates)
+          .where(eq(memberResetStates.targetUserId, otherUser.id))
+        await transaction
+          .delete(verification)
+          .where(eq(verification.id, memberResetVerificationId))
+        await transaction
+          .delete(webRecoveryRateLimitBuckets)
+          .where(
+            and(
+              eq(webRecoveryRateLimitBuckets.scope, 'member-reset:email'),
+              eq(webRecoveryRateLimitBuckets.bucketKey, rateLimitBucketKey),
+            ),
+          )
+        await transaction
+          .delete(deletionTombstones)
+          .where(eq(deletionTombstones.id, tombstoneId))
+        if (retainedPlanId) {
+          await transaction
+            .delete(deletionPlans)
+            .where(eq(deletionPlans.id, retainedPlanId))
+        }
+      })
+    }
   })
 
   it('retains cached prose when development content is non-revoked but ineligible', async () => {
@@ -800,7 +1038,7 @@ describe('subject export and exact instance reset', () => {
     process.env.INDIGO_CONTENT_MODE = 'reviewed'
     resetServerConfigForTests()
     try {
-      const archive = await createDataExport(actor)
+      const archive = await createSubjectExportThroughProductionPort(bootstrapToken)
       const completed = archive.sessions.find(
         (session) => session.id === completedSessionId,
       )
@@ -844,6 +1082,7 @@ describe('subject export and exact instance reset', () => {
     const revocationId = newUuidV7()
     const contentId = `member-redaction-methodology-${revocationId}`
     const now = new Date('2026-07-11T15:00:00.000Z')
+    let memberSessionToken: string | null = null
 
     try {
       await getDb().transaction(async (transaction) => {
@@ -885,11 +1124,16 @@ describe('subject export and exact instance reset', () => {
         })
       })
 
-      const archive = await createDataExport({
-        userId: otherUser.id,
-        name: 'Other Local User',
+      const memberSignIn = await authRequest('/sign-in/email', {
         email: otherUser.email,
+        password: otherUserPassword,
       })
+      const memberSignInBody = (await memberSignIn.json()) as { token?: string }
+      if (!memberSignIn.ok || !memberSignInBody.token) {
+        throw new Error('Could not create the member export test session.')
+      }
+      memberSessionToken = memberSignInBody.token
+      const archive = await createSubjectExportThroughProductionPort(memberSessionToken)
 
       expect(archive.contentReleaseRevocations).toEqual([
         expect.objectContaining({
@@ -914,10 +1158,48 @@ describe('subject export and exact instance reset', () => {
     } finally {
       await getDb().transaction(async (transaction) => {
         await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`)
+        if (memberSessionToken) {
+          await transaction.delete(session).where(eq(session.token, memberSessionToken))
+        }
         await transaction
           .delete(contentReleaseRevocations)
           .where(eq(contentReleaseRevocations.id, revocationId))
         await transaction.delete(programs).where(eq(programs.id, memberProgramId))
+      })
+    }
+  })
+
+  it('fails the whole archive for a DB-valid cross-subject relationship', async () => {
+    const hostileReceiptId = newUuidV7()
+    const now = new Date('2026-07-11T15:30:00.000Z')
+
+    try {
+      await getDb()
+        .insert(trainingCommandReceipts)
+        .values({
+          commandId: hostileReceiptId,
+          userId: otherUser.id,
+          commandType: 'complete-workout',
+          sessionId: activeSessionId,
+          targetId: activeSessionId,
+          requestHash: 'hostile-cross-subject-request',
+          resultSnapshot: { status: 'succeeded' },
+          createdAt: now,
+        })
+
+      const result = await getProductionDataPortabilitySubjectExportPort().create(
+        issueSubjectExportCommand({ verifiedSessionToken: bootstrapToken }),
+      )
+
+      expect(result).toEqual({ kind: 'invalid' })
+      expect(JSON.stringify(result)).not.toContain(hostileReceiptId)
+      expect(JSON.stringify(result)).not.toContain(otherUser.id)
+    } finally {
+      await getDb().transaction(async (transaction) => {
+        await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`)
+        await transaction
+          .delete(trainingCommandReceipts)
+          .where(eq(trainingCommandReceipts.commandId, hostileReceiptId))
       })
     }
   })
@@ -996,7 +1278,7 @@ describe('subject export and exact instance reset', () => {
       })
     })
 
-    const archive = await createDataExport(actor)
+    const archive = await createSubjectExportThroughProductionPort(bootstrapToken)
     const completed = archive.sessions.find(
       (session) => session.id === completedSessionId,
     )

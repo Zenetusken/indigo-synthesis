@@ -378,6 +378,58 @@ const identityAuthPolicies = policy([
     ],
   ],
   [
+    'src/modules/identity/infrastructure/subject-export-authority.ts',
+    'src/composition/data-portability-subject-export.ts',
+    [
+      'IdentitySubjectExportAuthorityUnavailableError',
+      'IdentitySubjectExportCommandError',
+      'IdentitySubjectExportInvariantError',
+      'captureSubjectExportAuthority',
+      'recheckSubjectExportAuthority',
+      'subjectExportAuthorityView',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/subject-export-authority.ts',
+    'src/modules/identity/server/subject-export-command.ts',
+    ['issueSubjectExportCommand'],
+  ],
+  [
+    'src/modules/identity/server/subject-export-command.ts',
+    'src/app/api/export/route.ts',
+    ['captureSubjectExportCommand'],
+  ],
+  [
+    'src/composition/data-portability-subject-export.ts',
+    'src/app/api/export/route.ts',
+    ['getProductionDataPortabilitySubjectExportPort'],
+  ],
+  [
+    'src/modules/data-portability/infrastructure/scoped-subject-export.ts',
+    'src/composition/data-portability-subject-export.ts',
+    ['SubjectExportGraphInvariantError', 'createScopedSubjectExportGateway'],
+  ],
+  [
+    'src/modules/data-portability/application/export.ts',
+    'src/modules/data-portability/infrastructure/scoped-subject-export.ts',
+    ['DataExportError'],
+  ],
+  [
+    'src/modules/data-portability/application/export.ts',
+    'src/composition/data-portability-subject-export.ts',
+    ['DataExportError', 'finalizeDataExport'],
+  ],
+  [
+    'src/modules/data-portability/application/export.ts',
+    'src/modules/data-portability/application/deletion.ts',
+    ['exportSchemaVersion'],
+  ],
+  [
+    'src/modules/data-portability/application/export.ts',
+    'src/modules/data-portability/infrastructure/scoped-destructive-adapter.ts',
+    ['exportSchemaVersion'],
+  ],
+  [
     'src/modules/identity/infrastructure/recovery-mutation.ts',
     'src/composition/identity-recovery-mutations.ts',
     [
@@ -518,6 +570,11 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/data-portability-subject-export.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
+    'src/platform/application-coordination/scoped-drizzle.ts',
     'src/composition/identity-recovery-mutations.ts',
     ['createScopedDrizzleDatabase'],
   ],
@@ -549,6 +606,11 @@ const identityAuthPolicies = policy([
   [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/data-portability-destructive-mutations.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/data-portability-subject-export.ts',
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
@@ -665,6 +727,11 @@ const identityAuthPolicies = policy([
   [
     'src/modules/identity/infrastructure/auth.ts',
     'src/modules/identity/server/destructive-command.ts',
+    ['verifyIdentitySessionCookie'],
+  ],
+  [
+    'src/modules/identity/infrastructure/auth.ts',
+    'src/modules/identity/server/subject-export-command.ts',
     ['verifyIdentitySessionCookie'],
   ],
   [

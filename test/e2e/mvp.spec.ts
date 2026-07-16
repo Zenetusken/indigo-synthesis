@@ -257,7 +257,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
       }[]
     }[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.5.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.6.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)

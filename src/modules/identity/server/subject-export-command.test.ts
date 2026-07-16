@@ -44,6 +44,9 @@ describe('subject export server command', () => {
     )
     expect(verificationRequest.headers.get('cookie')).toContain('signed-private-cookie')
     expect(verificationRequest.headers.get('x-request-id')).toBe('export-request-1')
+    expect(verificationRequest.headers.get('origin')).toBe(
+      'https://training.example.test',
+    )
     expect(verificationRequest.headers.has('content-length')).toBe(false)
     expect(verificationRequest.headers.has('content-type')).toBe(false)
   })
@@ -61,5 +64,22 @@ describe('subject export server command', () => {
     await expect(captureSubjectExportCommand(exportRequest())).resolves.toEqual({
       kind: 'rejected',
     })
+  })
+
+  it('normalizes internal verification to the configured origin behind a host alias', async () => {
+    const captured = await captureSubjectExportCommand(
+      new Request('http://localhost:3100/api/export', {
+        headers: { cookie: 'indigo.session_token=signed-private-cookie' },
+      }),
+    )
+
+    expect(captured.kind).toBe('captured')
+    const verificationRequest = commandMocks.verifyCookie.mock.calls[0]?.[0] as Request
+    expect(verificationRequest.url).toBe(
+      'https://training.example.test/api/auth/indigo/verify-session-cookie',
+    )
+    expect(verificationRequest.headers.get('origin')).toBe(
+      'https://training.example.test',
+    )
   })
 })

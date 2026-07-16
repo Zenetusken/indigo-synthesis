@@ -4,9 +4,9 @@ import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/composition/identity-bootstrap-mutations'
-import { createDataExport } from '@/modules/data-portability/application/export'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   programRevisionContentIsRevoked,
   revokeContentRelease,
@@ -24,7 +24,7 @@ import {
   skipSet,
   startWorkout,
 } from '@/modules/training/application/workouts'
-import { resetServerConfigForTests } from '@/platform/config/server'
+import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
@@ -38,6 +38,7 @@ import {
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
+import { createSubjectExportThroughProductionPort } from '../support/subject-export'
 import {
   resetProductData,
   seedCoherentProgram,
@@ -48,6 +49,7 @@ import {
 
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let ownerActor: AuthenticatedActor
+let ownerSessionToken: string
 
 async function revokeFixtureMethodology(
   contentVersion = '0.0.1-development',
@@ -100,6 +102,22 @@ beforeAll(async () => {
     email: owner.email,
     role: 'owner',
   }
+  const origin = getServerConfig().appOrigin
+  const signIn = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+    new Request(`${origin}/api/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({
+        email: ownerActor.email,
+        password: 'content-revocation-owner-password',
+      }),
+    }),
+  )
+  const signInBody = (await signIn.json()) as { token?: string }
+  if (!signIn.ok || !signInBody.token) {
+    throw new Error('Could not create the content-revocation export session.')
+  }
+  ownerSessionToken = signInBody.token
 })
 
 beforeEach(async () => {
@@ -361,7 +379,7 @@ describe('runtime content revocation', () => {
       reason: 'content-ineligible',
     })
 
-    const archive = await createDataExport(ownerActor)
+    const archive = await createSubjectExportThroughProductionPort(ownerSessionToken)
     expect(archive.identity.id).toBe(ownerActor.userId)
     expect(archive.contentReleaseRevocations).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: revocationId })]),
