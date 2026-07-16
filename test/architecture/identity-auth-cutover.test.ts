@@ -351,10 +351,30 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/modules/identity/infrastructure/recovery-mutation.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
+    [
+      'captureOwnerRecoveryCliRedemption',
+      'captureOwnerRecoveryIssuance',
+      'ownerRecoveryCliRedemptionCaptureView',
+      'ownerRecoveryIssuanceCaptureView',
+      'recheckOwnerRecoveryCliRedemption',
+      'recheckOwnerRecoveryIssuance',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/recovery-mutation.ts',
     'src/modules/identity/infrastructure/scoped-browser-recovery.ts',
     [
       'claimMemberResetRedemptionMutationScope',
       'claimOwnerRecoveryWebRedemptionMutationScope',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/recovery-mutation.ts',
+    'src/modules/identity/infrastructure/scoped-host-recovery.ts',
+    [
+      'claimOwnerRecoveryCliRedemptionMutationScope',
+      'claimOwnerRecoveryIssuanceMutationScope',
     ],
   ],
   [
@@ -383,6 +403,14 @@ const identityAuthPolicies = policy([
     ],
   ],
   [
+    'src/modules/identity/infrastructure/scoped-host-recovery.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
+    [
+      'createScopedOwnerRecoveryCliRedemptionMutationGateway',
+      'createScopedOwnerRecoveryIssuanceMutationGateway',
+    ],
+  ],
+  [
     'src/modules/identity/infrastructure/expired-session-cleanup.ts',
     'src/composition/identity-auth-mutations.ts',
     ['cleanupExpiredAccountSessions'],
@@ -408,6 +436,11 @@ const identityAuthPolicies = policy([
     ['createScopedDrizzleDatabase'],
   ],
   [
+    'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-auth-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
@@ -428,8 +461,18 @@ const identityAuthPolicies = policy([
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
     'src/platform/db/external-host-command.ts',
     'src/composition/identity-bootstrap-mutations.ts',
+    ['withExternalHostCommand'],
+  ],
+  [
+    'src/platform/db/external-host-command.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
     ['withExternalHostCommand'],
   ],
   [
@@ -578,6 +621,26 @@ const identityAuthPolicies = policy([
     'src/app/recover/actions.ts',
     ['getProductionIdentityRecoveryMutationPort'],
   ],
+  [
+    'src/composition/identity-host-recovery-mutations.ts',
+    'scripts/identity/recover-owner.ts',
+    ['issueOwnerRecoveryFromHostCli', 'redeemOwnerRecoveryFromHostCli'],
+  ],
+  [
+    'src/modules/identity/recovery/owner-recovery-contract.ts',
+    'src/composition/identity-host-recovery-mutations.ts',
+    ['OwnerRecoveryError'],
+  ],
+  [
+    'src/modules/identity/recovery/owner-recovery-contract.ts',
+    'src/modules/identity/recovery/owner-recovery.ts',
+    ['OwnerRecoveryError'],
+  ],
+  [
+    'src/modules/identity/recovery/owner-recovery-contract.ts',
+    'scripts/identity/recover-owner.ts',
+    ['OwnerRecoveryError'],
+  ],
 ])
 
 const externalHostIdentityPolicies = sealTargets(
@@ -585,6 +648,11 @@ const externalHostIdentityPolicies = sealTargets(
     [
       'src/platform/db/external-host-command.ts',
       'src/composition/identity-bootstrap-mutations.ts',
+      ['withExternalHostCommand'],
+    ],
+    [
+      'src/platform/db/external-host-command.ts',
+      'src/composition/identity-host-recovery-mutations.ts',
       ['withExternalHostCommand'],
     ],
     [
@@ -603,12 +671,30 @@ const externalHostIdentityPolicies = sealTargets(
       ['createOwnerWithBootstrapCode', 'issueOwnerBootstrap'],
     ],
     [
-      'src/modules/identity/recovery/owner-recovery.ts',
+      'src/composition/identity-host-recovery-mutations.ts',
       'scripts/identity/recover-owner.ts',
-      ['OwnerRecoveryError', 'issueOwnerRecovery', 'redeemOwnerRecovery'],
+      ['issueOwnerRecoveryFromHostCli', 'redeemOwnerRecoveryFromHostCli'],
+    ],
+    [
+      'src/modules/identity/recovery/owner-recovery-contract.ts',
+      'src/composition/identity-host-recovery-mutations.ts',
+      ['OwnerRecoveryError'],
+    ],
+    [
+      'src/modules/identity/recovery/owner-recovery-contract.ts',
+      'src/modules/identity/recovery/owner-recovery.ts',
+      ['OwnerRecoveryError'],
+    ],
+    [
+      'src/modules/identity/recovery/owner-recovery-contract.ts',
+      'scripts/identity/recover-owner.ts',
+      ['OwnerRecoveryError'],
     ],
   ]),
-  ['src/modules/identity/recovery/member-reset.ts'],
+  [
+    'src/modules/identity/recovery/member-reset.ts',
+    'src/modules/identity/recovery/owner-recovery.ts',
+  ],
 )
 
 describe('Identity authentication cutover boundaries', () => {
@@ -710,6 +796,81 @@ describe('Identity authentication cutover boundaries', () => {
       synthetic.set(action, `${sourceFiles.get(action) ?? ''}\n${injectedImport}`)
       expect(violations(synthetic)).toContain(expected)
     }
+  })
+
+  it('keeps host recovery on its external composition and off global or web paths', () => {
+    const entries = [
+      resolve(process.cwd(), 'scripts/identity/recover-owner.ts'),
+      resolve(sourceRoot, 'composition/identity-host-recovery-mutations.ts'),
+    ]
+    const forbiddenTargets = new Set(
+      [
+        'modules/identity/infrastructure/scoped-browser-recovery.ts',
+        'modules/identity/recovery/owner-recovery.ts',
+        'platform/db/client.ts',
+        'platform/db/credential-connections.ts',
+      ].map((path) => resolve(sourceRoot, path)),
+    )
+    const violations = (files: ReadonlyMap<string, string>) => {
+      const graph = analyzeImportGraph(files, { sourceRoot })
+      const runtimeDependencies = runtimeDependencyKeys(files)
+      const outgoing = new Map<string, string[]>()
+      for (const edge of graph.edges) {
+        if (
+          !edge.to ||
+          !runtimeDependencies.has(`${edge.from}\0${edge.kind}\0${edge.specifier}`)
+        ) {
+          continue
+        }
+        const targets = outgoing.get(edge.from) ?? []
+        targets.push(edge.to)
+        outgoing.set(edge.from, targets)
+      }
+
+      const found = new Set<string>()
+      for (const root of entries) {
+        const pending = [root]
+        const seen = new Set<string>()
+        while (pending.length > 0) {
+          const current = pending.pop() as string
+          if (seen.has(current)) continue
+          seen.add(current)
+          for (const target of outgoing.get(current) ?? []) {
+            if (forbiddenTargets.has(target)) {
+              found.add(`${projectPath(root)} -> ${projectPath(target)}`)
+            } else {
+              pending.push(target)
+            }
+          }
+        }
+      }
+      return [...found].sort()
+    }
+
+    expect(violations(productionFiles)).toEqual([])
+
+    const synthetic = new Map(productionFiles)
+    synthetic.set(
+      entries[0],
+      `${productionFiles.get(entries[0]) ?? ''}\nimport { getDb } from '@/platform/db/client'\nvoid getDb\n`,
+    )
+    expect(violations(synthetic)).toContain(
+      'scripts/identity/recover-owner.ts -> src/platform/db/client.ts',
+    )
+
+    const helper = resolve(sourceRoot, 'composition/rogue-host-recovery-helper.ts')
+    const transitive = new Map(productionFiles)
+    transitive.set(
+      helper,
+      "import { getDb } from '@/platform/db/client'\nexport const rogueHostRecoveryHelper = getDb\n",
+    )
+    transitive.set(
+      entries[1],
+      `${productionFiles.get(entries[1]) ?? ''}\nimport { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n`,
+    )
+    expect(violations(transitive)).toContain(
+      'src/composition/identity-host-recovery-mutations.ts -> src/platform/db/client.ts',
+    )
   })
 
   it('seals external-host Identity and retired browser recovery across src and scripts', () => {

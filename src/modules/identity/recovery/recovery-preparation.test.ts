@@ -10,6 +10,7 @@ import {
   ownerRecoveryStoredValueMatches,
   parseMemberResetRedemptionInput,
   parseOwnerRecoveryHostRedemptionInput,
+  parseOwnerRecoveryIssuanceInput,
   parseOwnerRecoveryWebRedemptionInput,
   prepareMemberResetIssuance,
   prepareMemberResetRedemption,
@@ -76,6 +77,12 @@ describe('recovery preparation', () => {
   })
 
   it('prepares strict owner issuance and enforces both TTL ranges', () => {
+    expect(
+      parseOwnerRecoveryIssuanceInput({
+        ownerEmail: ' Owner@Example.TEST ',
+        ttlMinutes: 60,
+      }),
+    ).toEqual({ normalizedOwnerEmail: 'owner@example.test', ttlMinutes: 60 })
     const prepared = prepareOwnerRecoveryIssuance({
       ownerUserId: '01900000-0000-7000-8000-000000000001',
       ownerEmail: ' Owner@Example.TEST ',
@@ -105,11 +112,9 @@ describe('recovery preparation', () => {
       }),
     ).toThrow(expect.objectContaining({ code: 'member-reset.ttl-invalid' }))
     expect(() =>
-      prepareOwnerRecoveryIssuance({
-        ownerUserId: prepared.ownerUserId,
+      parseOwnerRecoveryIssuanceInput({
         ownerEmail: prepared.normalizedOwnerEmail,
         ttlMinutes: 61,
-        commandEnteredAt,
       }),
     ).toThrow(expect.objectContaining({ code: 'owner-recovery.ttl-invalid' }))
   })

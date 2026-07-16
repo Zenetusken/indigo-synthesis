@@ -91,6 +91,33 @@ export async function issueE2eOwnerBootstrap() {
   }
 }
 
+/** Exercises host-only owner-recovery issuance through the serialized production command. */
+export async function issueE2eOwnerRecovery(ownerEmail: string) {
+  const directory = await mkdtemp(join(tmpdir(), 'indigo-e2e-owner-recovery-'))
+  await chmod(directory, 0o700)
+  const codeFile = join(directory, 'owner-recovery-code')
+  try {
+    await execFile(
+      'bash',
+      [
+        'scripts/run-external-host-command.sh',
+        'scripts/identity/recover-owner.ts',
+        'issue',
+        '--owner-email',
+        ownerEmail,
+        '--code-file',
+        codeFile,
+        '--ttl-minutes',
+        '15',
+      ],
+      { cwd: process.cwd(), env: process.env },
+    )
+    return Object.freeze({ code: (await readFile(codeFile, 'utf8')).trim() })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 export async function clearApplicationData(): Promise<void> {
   validateLocalE2eResetTarget(e2eAdministrationUrl, process.env.E2E_DATABASE_URL)
   const client = await databaseClient()

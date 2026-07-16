@@ -4,6 +4,7 @@ import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/composition/identity-bootstrap-mutations'
+import { issueOwnerRecovery } from '@/composition/identity-host-recovery-mutations'
 import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
   createSubjectDeletionPlan,
@@ -16,7 +17,6 @@ import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
-import { issueOwnerRecovery } from '@/modules/identity/recovery/owner-recovery'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'

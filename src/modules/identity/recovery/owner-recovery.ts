@@ -21,6 +21,11 @@ import {
   isWebRecoveryAttemptThrottled,
 } from '../infrastructure/web-recovery-rate-limit'
 import { credentialAuditContext, type WebCredentialContext } from './credential-context'
+import {
+  type IssuedOwnerRecovery,
+  OwnerRecoveryError,
+  type RedeemedOwnerRecovery,
+} from './owner-recovery-contract'
 import { normalizeRecoveryEmail, publicRecoveryFailure } from './recovery-policy'
 import {
   ownerRecoveryIdentifier,
@@ -32,26 +37,8 @@ const minimumTtlMinutes = 5
 const maximumTtlMinutes = 60
 const invalidPasswordHashInput = 'indigo-invalid-owner-recovery-password'
 
-export class OwnerRecoveryError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message)
-    this.name = 'OwnerRecoveryError'
-  }
-}
-
-export type IssuedOwnerRecovery = {
-  readonly recoveryId: string
-  readonly code: string
-  readonly expiresAt: Date
-}
-
-export type RedeemedOwnerRecovery = {
-  readonly ownerUserId: string
-  readonly revokedSessionCount: number
-}
+export type { IssuedOwnerRecovery, RedeemedOwnerRecovery }
+export { OwnerRecoveryError }
 
 export type RedeemOwnerRecoveryWebResult =
   | ({ readonly kind: 'redeemed' } & RedeemedOwnerRecovery)

@@ -245,12 +245,15 @@ describe('clean-clone operator contract', () => {
     expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
 
-  it('serializes owner bootstrap host commands before running their entrypoints', async () => {
+  it('serializes owner bootstrap and recovery before running their entrypoints', async () => {
     const manifest = JSON.parse(
       readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
     ) as { scripts?: Record<string, string> }
     expect(manifest.scripts?.['owner:bootstrap']).toBe(
       'bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts',
+    )
+    expect(manifest.scripts?.['owner:recover']).toBe(
+      'bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts',
     )
 
     const directory = mkdtempSync(join(tmpdir(), 'indigo-external-host-lock-'))

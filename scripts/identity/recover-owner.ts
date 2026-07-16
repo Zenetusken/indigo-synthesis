@@ -1,10 +1,9 @@
 import { isAbsolute, resolve } from 'node:path'
 import {
-  issueOwnerRecovery,
-  OwnerRecoveryError,
-  redeemOwnerRecovery,
-} from '@/modules/identity/recovery/owner-recovery'
-import { closeDb } from '@/platform/db/client'
+  issueOwnerRecoveryFromHostCli,
+  redeemOwnerRecoveryFromHostCli,
+} from '@/composition/identity-host-recovery-mutations'
+import { OwnerRecoveryError } from '@/modules/identity/recovery/owner-recovery-contract'
 import {
   createOwnerSecretFile,
   openOwnerSecretFile,
@@ -110,7 +109,7 @@ async function issue(command: Extract<ParsedCommand, { kind: 'issue' }>): Promis
     maxBytes: recoveryCodeFileLimitBytes,
   })
   try {
-    const issued = await issueOwnerRecovery({
+    const issued = await issueOwnerRecoveryFromHostCli({
       ownerEmail: command.ownerEmail,
       ttlMinutes: command.ttlMinutes,
     })
@@ -152,7 +151,7 @@ async function redeem(
       codeFile.readSecret(),
       passwordFile.readSecret(),
     ])
-    const redeemed = await redeemOwnerRecovery({
+    const redeemed = await redeemOwnerRecoveryFromHostCli({
       ownerEmail: command.ownerEmail,
       code,
       newPassword,
@@ -190,6 +189,4 @@ try {
     )
   }
   process.exitCode = 1
-} finally {
-  await closeDb()
 }

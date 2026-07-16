@@ -49,6 +49,11 @@ export type ParsedRecoveryRedemptionInput = Readonly<{
   passwordIsValid: boolean
 }>
 
+export type ParsedOwnerRecoveryIssuanceInput = Readonly<{
+  normalizedOwnerEmail: string
+  ttlMinutes: number
+}>
+
 export type PreparedRecoveryRedemption = Readonly<{
   auditEventId: string
   commandEnteredAt: Date
@@ -299,6 +304,16 @@ export function parseOwnerRecoveryHostRedemptionInput(input: {
   })
 }
 
+export function parseOwnerRecoveryIssuanceInput(input: {
+  readonly ownerEmail: unknown
+  readonly ttlMinutes: number
+}): ParsedOwnerRecoveryIssuanceInput {
+  return Object.freeze({
+    normalizedOwnerEmail: normalizeOwnerRecoveryEmail(input.ownerEmail),
+    ttlMinutes: validateTtl('owner-recovery', input.ttlMinutes),
+  })
+}
+
 export function prepareMemberResetIssuance(input: {
   readonly targetUserId: string
   readonly ttlMinutes?: number
@@ -338,7 +353,11 @@ export function prepareOwnerRecoveryIssuance(input: {
   readonly commandEnteredAt: Date
 }): PreparedOwnerRecoveryIssuance {
   const commandEnteredAt = captureRecoveryCommandEntry(input.commandEnteredAt)
-  const ttlMinutes = validateTtl('owner-recovery', input.ttlMinutes)
+  const parsed = parseOwnerRecoveryIssuanceInput({
+    ownerEmail: input.ownerEmail,
+    ttlMinutes: input.ttlMinutes,
+  })
+  const ttlMinutes = parsed.ttlMinutes
   const expiresAt = expiry(commandEnteredAt, ttlMinutes)
   const code = `indigo_r1_${randomBytes(recoveryPreparationPolicy.codeEntropyBytes).toString('base64url')}`
   const recoveryId = preparationId(commandEnteredAt)
@@ -346,7 +365,7 @@ export function prepareOwnerRecoveryIssuance(input: {
     recoveryId,
     auditEventId: preparationId(commandEnteredAt),
     ownerUserId: input.ownerUserId,
-    normalizedOwnerEmail: normalizeOwnerRecoveryEmail(input.ownerEmail),
+    normalizedOwnerEmail: parsed.normalizedOwnerEmail,
     identifier: ownerRecoveryIdentifier(input.ownerUserId),
     code,
     storedValue: ownerRecoveryStoredValue(code),

@@ -527,6 +527,43 @@ export type OwnerRecoveryWebRedemptionMutationScope = Readonly<{
   }> | null
 }>
 
+/**
+ * Capture-private host CLI owner-recovery redemption material. Unlike the web
+ * scope, this authority is bound to the serialized external-host invocation and
+ * deliberately carries no submitted-email rate-limit surface.
+ */
+export type OwnerRecoveryCliRedemptionMutationScope = Readonly<{
+  purpose: 'owner-recovery-cli-redemption'
+  normalizedEmail: string
+  codeIdentity: string
+  commandEnteredAt: Date
+  hostInvocationId: string
+  ownerUserId: string | null
+  ownerEmailMatches: boolean
+  credentialId: string | null
+  credentialUpdatedAt: Date | null
+  verification: Readonly<{
+    id: string
+    identifier: string
+    storedValue: string
+    expiresAt: Date
+  }> | null
+}>
+
+/** Capture-private host owner-recovery issuance material. */
+export type OwnerRecoveryIssuanceMutationScope = Readonly<{
+  purpose: 'owner-recovery-issue'
+  normalizedEmail: string
+  commandEnteredAt: Date
+  hostInvocationId: string
+  ownerUserId: string | null
+  ownerEmailMatches: boolean
+  verification: Readonly<{
+    id: string
+    identifier: string
+  }> | null
+}>
+
 export type RecoveryMutationRecheck =
   | Readonly<{ status: 'current' }>
   | Readonly<{
@@ -1274,6 +1311,59 @@ export function claimOwnerRecoveryWebRedemptionMutationScope(
           storedValue: pending.value,
           expiresAt: new Date(pending.expiresAt.getTime()),
         })
+      : null,
+  })
+}
+
+/**
+ * Consumes a successfully rechecked capture for the unthrottled host CLI
+ * redemption path. The external-host invocation identity remains private to
+ * this purpose-narrow scope.
+ */
+export function claimOwnerRecoveryCliRedemptionMutationScope(
+  capture: OwnerRecoveryCliRedemptionCapture,
+): OwnerRecoveryCliRedemptionMutationScope {
+  const state = claimRecheckedState(ownerCliCaptures.get(capture))
+  if (state.hostInvocationId === null) throw staleCapture()
+  const credential = state.snapshot.credentials[0] ?? null
+  const pending = state.snapshot.verifications[0] ?? null
+  return Object.freeze({
+    purpose: 'owner-recovery-cli-redemption',
+    normalizedEmail: state.normalizedEmail,
+    codeIdentity: state.codeIdentity,
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    hostInvocationId: state.hostInvocationId,
+    ownerUserId: state.snapshot.owner?.id ?? null,
+    ownerEmailMatches: ownerEmailMatches(state.snapshot, state.normalizedEmail),
+    credentialId: credential?.id ?? null,
+    credentialUpdatedAt:
+      credential === null ? null : new Date(credential.updatedAt.getTime()),
+    verification: pending
+      ? Object.freeze({
+          id: pending.id,
+          identifier: pending.identifier,
+          storedValue: pending.value,
+          expiresAt: new Date(pending.expiresAt.getTime()),
+        })
+      : null,
+  })
+}
+
+/** Consumes a successfully rechecked capture for host-only issuance. */
+export function claimOwnerRecoveryIssuanceMutationScope(
+  capture: OwnerRecoveryIssuanceCapture,
+): OwnerRecoveryIssuanceMutationScope {
+  const state = claimRecheckedState(ownerIssuanceCaptures.get(capture))
+  const pending = state.snapshot.verifications[0] ?? null
+  return Object.freeze({
+    purpose: 'owner-recovery-issue',
+    normalizedEmail: state.normalizedEmail,
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    hostInvocationId: state.hostInvocationId,
+    ownerUserId: state.snapshot.owner?.id ?? null,
+    ownerEmailMatches: ownerEmailMatches(state.snapshot, state.normalizedEmail),
+    verification: pending
+      ? Object.freeze({ id: pending.id, identifier: pending.identifier })
       : null,
   })
 }
