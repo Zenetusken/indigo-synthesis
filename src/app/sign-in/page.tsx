@@ -2,6 +2,10 @@ import type { Metadata, Route } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark, Disclosure } from '@/components'
+import {
+  verifyInstanceResetNoticeReceipt,
+  verifySubjectDeletionNoticeReceipt,
+} from '@/modules/data-portability/server/destructive-notice'
 import { workoutSignInReturnTo } from '@/modules/identity/application/sign-in-return'
 import { getActor } from '@/modules/identity/server/actor'
 import { getSignInPageInstallation } from '@/modules/identity/server/sign-in-page'
@@ -21,19 +25,43 @@ export default async function SignInPage({
   searchParams: Promise<{
     claimed?: string
     created?: string
-    deleted?: string
     expired?: string
+    notice?: string
     recovered?: string
     returnTo?: string
     reset?: string
     signedOut?: string
   }>
 }) {
-  const installation = await getSignInPageInstallation()
-  if (installation.kind === 'open') redirect('/bootstrap')
   const query = await searchParams
+  const subjectDeletionNotice = verifySubjectDeletionNoticeReceipt(query.notice)
+  const instanceResetNotice = verifyInstanceResetNoticeReceipt(query.notice)
+  const installation = await getSignInPageInstallation()
+  if (installation.kind === 'open') {
+    redirect(
+      instanceResetNotice
+        ? (`/bootstrap?notice=${encodeURIComponent(query.notice ?? '')}` as Route)
+        : '/bootstrap',
+    )
+  }
   const returnTo = workoutSignInReturnTo(query.returnTo)
-  if (await getActor()) redirect((returnTo ?? '/') as Route)
+  const actor = await getActor()
+  if (actor) {
+    if (
+      subjectDeletionNotice?.kind === 'outcome-unknown' &&
+      subjectDeletionNotice.actorRole === actor.role
+    ) {
+      redirect(
+        `/settings/delete-account?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
+      )
+    }
+    if (instanceResetNotice?.kind === 'outcome-unknown' && actor.role === 'owner') {
+      redirect(
+        `/settings/delete?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
+      )
+    }
+    redirect((returnTo ?? '/') as Route)
+  }
 
   const contentModeLabel =
     getServerConfig().contentMode === 'development'
@@ -62,9 +90,28 @@ export default async function SignInPage({
           </p>
         ) : null}
 
-        {query.deleted === '1' ? (
+        {subjectDeletionNotice?.kind === 'deleted' &&
+        subjectDeletionNotice.actorRole === 'member' ? (
           <p className={styles.notice} role="status">
             Local account and subject-scoped training data deleted.
+            {subjectDeletionNotice.warning === 'cleanup-failed'
+              ? ' Database cleanup reported a warning after commit; do not repeat the deletion.'
+              : null}
+          </p>
+        ) : null}
+
+        {subjectDeletionNotice?.kind === 'outcome-unknown' &&
+        subjectDeletionNotice.actorRole === 'member' ? (
+          <p className={styles.notice} role="status">
+            Account deletion could not be confirmed. Do not resubmit it; sign in to check
+            whether the account still exists.
+          </p>
+        ) : null}
+
+        {instanceResetNotice?.kind === 'outcome-unknown' ? (
+          <p className={styles.notice} role="status">
+            Instance reset could not be confirmed. Do not resubmit it; sign in to check
+            whether this installation is still claimed.
           </p>
         ) : null}
 

@@ -217,6 +217,7 @@ describe('database connection budget boundaries', () => {
           'src/composition/identity-bootstrap-mutations.ts',
           'src/composition/identity-credential-administration.ts',
           'src/composition/identity-recovery-mutations.ts',
+          'src/composition/data-portability-destructive-mutations.ts',
           'src/modules/identity/infrastructure/credential-lifecycle-lock.ts',
         ]),
       ],
@@ -257,6 +258,10 @@ describe('database connection budget boundaries', () => {
           'CredentialConnectionCapacityError',
           'withSubmittedEmailCredentialCapture',
         ]),
+      ],
+      [
+        'src/composition/data-portability-destructive-mutations.ts',
+        new Set(['CredentialConnectionCapacityError', 'withTrustedCredentialCapture']),
       ],
       [
         'src/modules/identity/infrastructure/credential-lifecycle-lock.ts',

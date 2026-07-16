@@ -1,4 +1,4 @@
-import { and, count, eq } from 'drizzle-orm'
+import { and, count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   createOwnerWithBootstrapCode,
@@ -7,10 +7,8 @@ import {
 import { issueOwnerRecovery } from '@/composition/identity-host-recovery-mutations'
 import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
+  createInstanceResetPlan,
   createSubjectDeletionPlan,
-  type DeletionError,
-  executeInstanceReset,
-  executeSubjectDeletion,
 } from '@/modules/data-portability/application/deletion'
 import { destructiveReauthenticationPolicy } from '@/modules/data-portability/application/destructive-reauthentication'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
@@ -39,6 +37,12 @@ import {
   verification,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
+import {
+  renderInstanceResetIntegrationBinding,
+  renderSubjectDeletionIntegrationBinding,
+  submitInstanceResetThroughProductionPort,
+  submitSubjectDeletionThroughProductionPort,
+} from '../support/destructive-mutation'
 
 const ownerPassword = 'deletion-hardening-owner-password'
 const memberPassword = 'deletion-hardening-member-password'
@@ -86,25 +90,27 @@ async function seedTrainingSubject(actor: AuthenticatedActor): Promise<void> {
   await generateDraftProgram(actor.userId, '2026-07-14')
 }
 
-function subjectDeletionAttempt(password: string): Promise<void> {
-  return executeSubjectDeletion({
-    actor: owner,
-    planId: 'missing-trainee-data-plan',
-    planDigest: 'missing-trainee-data-digest',
+function subjectDeletionAttempt(password: string) {
+  return submitSubjectDeletionThroughProductionPort({
+    sessionToken: ownerSessionToken,
+    plan: {
+      id: 'missing-trainee-data-plan',
+      digest: 'missing-trainee-data-digest',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000),
+    },
     password,
-    typedConfirmation: 'DELETE',
-    acknowledged: true,
   })
 }
 
-function instanceResetAttempt(password: string): Promise<void> {
-  return executeInstanceReset({
-    actor: owner,
-    planId: 'missing-instance-reset-plan',
-    planDigest: 'missing-instance-reset-digest',
+function instanceResetAttempt(password: string) {
+  return submitInstanceResetThroughProductionPort({
+    sessionToken: ownerSessionToken,
+    plan: {
+      id: 'missing-instance-reset-plan',
+      digest: 'missing-instance-reset-digest',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000),
+    },
     password,
-    typedConfirmation: 'RESET',
-    acknowledged: true,
   })
 }
 
@@ -171,6 +177,66 @@ afterAll(async () => {
 })
 
 describe.sequential('destructive deletion hardening', () => {
+  it('rejects stale rendered bindings after an epoch replacement before destructive reauthentication', async () => {
+    const [before] = await getDb()
+      .select({ epoch: installationState.productMutationEpoch })
+      .from(installationState)
+      .where(eq(installationState.singleton, 1))
+    if (!before) throw new Error('Missing installation epoch fixture.')
+
+    const subjectPlan = await createSubjectDeletionPlan(owner)
+    const resetPlan = await createInstanceResetPlan(owner)
+    const subjectBinding = await renderSubjectDeletionIntegrationBinding({
+      sessionToken: ownerSessionToken,
+      plan: subjectPlan,
+    })
+    const resetBinding = await renderInstanceResetIntegrationBinding({
+      sessionToken: ownerSessionToken,
+      plan: resetPlan,
+    })
+
+    try {
+      await getDb()
+        .update(installationState)
+        .set({ productMutationEpoch: sql`gen_random_uuid()` })
+        .where(eq(installationState.singleton, 1))
+
+      await expect(
+        submitSubjectDeletionThroughProductionPort({
+          sessionToken: ownerSessionToken,
+          plan: subjectPlan,
+          password: ownerPassword,
+          renderedBinding: subjectBinding,
+        }),
+      ).resolves.toEqual({ kind: 'confirmation-rejected' })
+      await expect(
+        submitInstanceResetThroughProductionPort({
+          sessionToken: ownerSessionToken,
+          plan: resetPlan,
+          password: ownerPassword,
+          renderedBinding: resetBinding,
+        }),
+      ).resolves.toEqual({ kind: 'confirmation-rejected' })
+
+      const retainedPlans = await getDb()
+        .select({ id: deletionPlans.id })
+        .from(deletionPlans)
+        .where(eq(deletionPlans.userId, owner.userId))
+      const [reauthenticationCount] = await getDb()
+        .select({ value: count() })
+        .from(destructiveReauthenticationStates)
+      expect(retainedPlans.map(({ id }) => id)).toEqual(
+        expect.arrayContaining([subjectPlan.id, resetPlan.id]),
+      )
+      expect(reauthenticationCount?.value).toBe(0)
+    } finally {
+      await getDb()
+        .update(installationState)
+        .set({ productMutationEpoch: before.epoch })
+        .where(eq(installationState.singleton, 1))
+    }
+  })
+
   it('enforces independent PostgreSQL attempt windows, lockout, expiry, audit, and success reset', async () => {
     await createSubjectDeletionPlan(owner)
     for (
@@ -178,21 +244,21 @@ describe.sequential('destructive deletion hardening', () => {
       attempt < destructiveReauthenticationPolicy.maximumFailedAttempts;
       attempt += 1
     ) {
-      await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
-        code: 'deletion.reauthentication-failed',
-      } satisfies Partial<DeletionError>)
+      await expect(subjectDeletionAttempt('wrong-password')).resolves.toEqual({
+        kind: 'reauthentication-failed',
+      })
     }
 
-    await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
-      code: 'deletion.reauthentication-locked',
-    } satisfies Partial<DeletionError>)
+    await expect(subjectDeletionAttempt('wrong-password')).resolves.toEqual({
+      kind: 'reauthentication-locked',
+    })
     const [auditsAtLockout] = await getDb()
       .select({ value: count() })
       .from(auditEvents)
       .where(eq(auditEvents.eventType, 'destructive-reauthentication-denied'))
-    await expect(subjectDeletionAttempt(ownerPassword)).rejects.toMatchObject({
-      code: 'deletion.reauthentication-locked',
-    } satisfies Partial<DeletionError>)
+    await expect(subjectDeletionAttempt(ownerPassword)).resolves.toEqual({
+      kind: 'reauthentication-locked',
+    })
 
     const [lockedSubjectState] = await getDb()
       .select()
@@ -219,9 +285,9 @@ describe.sequential('destructive deletion hardening', () => {
       )
     expect(subjectPlansAfterDenial?.value).toBe(0)
 
-    await expect(instanceResetAttempt('wrong-password')).rejects.toMatchObject({
-      code: 'deletion.reauthentication-failed',
-    } satisfies Partial<DeletionError>)
+    await expect(instanceResetAttempt('wrong-password')).resolves.toEqual({
+      kind: 'reauthentication-failed',
+    })
     const purposeStates = await getDb()
       .select({ purpose: destructiveReauthenticationStates.purpose })
       .from(destructiveReauthenticationStates)
@@ -246,23 +312,23 @@ describe.sequential('destructive deletion hardening', () => {
       })
       .where(eq(destructiveReauthenticationStates.id, lockedSubjectState?.id ?? ''))
 
-    await expect(subjectDeletionAttempt(ownerPassword)).rejects.toMatchObject({
-      code: 'deletion.plan-invalid',
-    } satisfies Partial<DeletionError>)
-    await expect(instanceResetAttempt(ownerPassword)).rejects.toMatchObject({
-      code: 'deletion.plan-invalid',
-    } satisfies Partial<DeletionError>)
+    await expect(subjectDeletionAttempt(ownerPassword)).resolves.toEqual({
+      kind: 'plan-invalid',
+    })
+    await expect(instanceResetAttempt(ownerPassword)).resolves.toEqual({
+      kind: 'plan-invalid',
+    })
     const [statesAfterSuccess] = await getDb()
       .select({ value: count() })
       .from(destructiveReauthenticationStates)
     expect(statesAfterSuccess?.value).toBe(0)
 
-    await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
-      code: 'deletion.reauthentication-failed',
-    } satisfies Partial<DeletionError>)
-    await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
-      code: 'deletion.reauthentication-failed',
-    } satisfies Partial<DeletionError>)
+    await expect(subjectDeletionAttempt('wrong-password')).resolves.toEqual({
+      kind: 'reauthentication-failed',
+    })
+    await expect(subjectDeletionAttempt('wrong-password')).resolves.toEqual({
+      kind: 'reauthentication-failed',
+    })
     const [partialWindow] = await getDb()
       .select()
       .from(destructiveReauthenticationStates)
@@ -279,9 +345,9 @@ describe.sequential('destructive deletion hardening', () => {
         updatedAt: new Date(oldWindowStart.getTime() + 1_000),
       })
       .where(eq(destructiveReauthenticationStates.id, partialWindow.id))
-    await expect(subjectDeletionAttempt('wrong-password')).rejects.toMatchObject({
-      code: 'deletion.reauthentication-failed',
-    } satisfies Partial<DeletionError>)
+    await expect(subjectDeletionAttempt('wrong-password')).resolves.toEqual({
+      kind: 'reauthentication-failed',
+    })
     const [renewedWindow] = await getDb()
       .select()
       .from(destructiveReauthenticationStates)
@@ -329,13 +395,16 @@ describe.sequential('destructive deletion hardening', () => {
       deletionPlans: 1,
     })
 
-    await executeSubjectDeletion({
-      actor: owner,
-      planId: plan.id,
-      planDigest: plan.digest,
-      password: ownerPassword,
-      typedConfirmation: 'DELETE',
-      acknowledged: true,
+    await expect(
+      submitSubjectDeletionThroughProductionPort({
+        sessionToken: ownerSessionToken,
+        plan,
+        password: ownerPassword,
+      }),
+    ).resolves.toEqual({
+      kind: 'deleted',
+      actorRole: 'owner',
+      warning: null,
     })
 
     const [installation] = await getDb().select().from(installationState)

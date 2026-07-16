@@ -127,8 +127,8 @@ export type CrossCuttingOperator = {
   readonly allow: {
     /** Export projection reads across the schema. */
     readonly read: '*'
-    /** Ordered deletion of personal/product rows across the schema. */
-    readonly delete: '*'
+    /** Temporary Stage 3 non-owned tables deleted by the scoped adapter. */
+    readonly delete: readonly SqlTableName[]
     /** Non-owned tables it may UPDATE (owned tables use their owner grant). */
     readonly update: readonly SqlTableName[]
     /** Non-owned tables it may INSERT (owned tables use their owner grant). */
@@ -313,7 +313,43 @@ export const crossCuttingOperator = {
     'ownership; no other module may hold it (ADR 0007; spec C4).',
   allow: {
     read: '*',
-    delete: '*',
+    // Exact union of non-owned DELETEs issued by the temporary scoped
+    // destructive adapter. DP-owned ledger DELETEs remain owner grants.
+    delete: [
+      'account',
+      'adjustment_decision',
+      'adjustment_decision_invalidation',
+      'athlete_equipment',
+      'athlete_profile',
+      'athlete_training_day',
+      'audit_event',
+      'content_release_revocation',
+      'destructive_reauthentication_state',
+      'exercise_prescription',
+      'future_load_explanation_cache',
+      'member_reset_state',
+      'performed_set',
+      'performed_set_correction',
+      'planned_workout',
+      'program',
+      'program_revision',
+      'program_revision_invalidation',
+      'program_revision_lineage',
+      'safety_hold',
+      'safety_hold_resolution',
+      'session',
+      'session_exercise',
+      'session_feedback',
+      'session_feedback_correction',
+      'set_prescription',
+      'strength_baseline',
+      'training_command_receipt',
+      'training_fact_correction',
+      'user',
+      'verification',
+      'web_recovery_rate_limit_bucket',
+      'workout_session',
+    ],
     // installation_state is identity-owned, so DP's instance-reset UPDATE needs
     // an explicit operator grant. DP-owned tables (deletion_plan,
     // deletion_tombstone) are authorized by their owner grants, not here

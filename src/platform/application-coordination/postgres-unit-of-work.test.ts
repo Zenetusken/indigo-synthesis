@@ -17,6 +17,7 @@ import type {
   UnitOfWorkRequest,
   UnitOfWorkScope,
 } from '@/application/coordination'
+import { CoordinationError } from '@/application/coordination'
 import type { CanonicalValue } from '@/shared/canonical-json'
 import {
   createContentLockPlanPort,
@@ -786,6 +787,102 @@ describe('PostgresUnitOfWork', () => {
       unitOfWork(ordinaryDatabase).run(exportRequest(), async () => 'exported'),
     ).resolves.toBe('exported')
     expect(transactionLocalStateValues(ordinaryDatabase)).toEqual([['', '']])
+  })
+
+  it.each(
+    (['subject-deletion', 'instance-reset'] as const).flatMap((operation) => [
+      { failureMode: 'query-rejection' as const, operation },
+      { failureMode: 'connection-error' as const, operation },
+    ]),
+  )('lets $operation composition preserve a confirmed commit on post-COMMIT $failureMode', async ({
+    failureMode,
+    operation,
+  }) => {
+    const cleanupFailure = new Error('post-commit session cleanup failed')
+    let database: FakeClient
+    database = fakeClient((text) => {
+      if (text !== 'RESET lock_timeout') return undefined
+      if (failureMode === 'connection-error') {
+        ;(database.client as unknown as EventEmitter).emit('error', cleanupFailure)
+      }
+      return Promise.reject(cleanupFailure)
+    })
+    installFakePrelockedRuntime(database)
+    const port = createPlatformPrelockedSessionPort()
+    const intents = createPlatformPrelockedSessionIntentFactory()
+    let confirmedResult: string | null = null
+
+    const observeCommittedResult = async (
+      request: SubjectDeletionRequest | InstanceResetRequest,
+    ): Promise<string> => {
+      try {
+        await prelockedUnitOfWork().run(request, async () => 'committed')
+        confirmedResult = `${operation}:committed`
+      } catch (error) {
+        if (
+          !(error instanceof CoordinationError) ||
+          error.code !== 'uow.cleanup-failed'
+        ) {
+          throw error
+        }
+        confirmedResult = `${operation}:committed-with-cleanup-warning`
+      }
+      return confirmedResult
+    }
+
+    const composed = async (): Promise<string> => {
+      try {
+        if (operation === 'subject-deletion') {
+          const attempt = authorityIssuer.traineeDataDeletionAttempt({ authenticated })
+          return await port.withPrelockedSessionLease(
+            intents.subjectDeletion(attempt),
+            async (lease) => {
+              const promoted = promoteDestructive(attempt, 'subject-deletion', lease)
+              const request: SubjectDeletionRequest = {
+                operation: 'subject-deletion',
+                authority: promoted.authority,
+                session: { kind: 'prelocked', lease },
+                expectedEpoch,
+                productFence: 'shared',
+                subjectLock: { subjectUserId: 'actor-1', mode: 'exclusive' },
+                content: { kind: 'none' },
+                mode: { isolation: 'serializable', access: 'read-write' },
+              }
+              return observeCommittedResult(request)
+            },
+          )
+        }
+
+        const attempt = authorityIssuer.instanceResetAttempt({ authenticated })
+        return await port.withPrelockedSessionLease(
+          intents.instanceReset(attempt),
+          async (lease) => {
+            const promoted = promoteDestructive(attempt, 'instance-reset', lease)
+            const request: InstanceResetRequest = {
+              operation: 'instance-reset',
+              authority: promoted.authority,
+              session: { kind: 'prelocked', lease },
+              expectedEpoch,
+              productFence: 'exclusive',
+              subjectLock: null,
+              content: { kind: 'none' },
+              mode: { isolation: 'serializable', access: 'read-write' },
+            }
+            return observeCommittedResult(request)
+          },
+        )
+      } catch (error) {
+        if (confirmedResult) return confirmedResult
+        throw error
+      }
+    }
+
+    await expect(composed()).resolves.toBe(`${operation}:committed-with-cleanup-warning`)
+    expect(database.transcript.findIndex(({ text }) => text === 'COMMIT')).toBeLessThan(
+      database.transcript.findIndex(({ text }) => text === 'RESET lock_timeout'),
+    )
+    expect(database.release).toHaveBeenCalledWith(cleanupFailure)
+    expect(port.activeLeaseScopeCount()).toBe(0)
   })
 
   it('locks before BEGIN, makes Identity first, then installs request-derived privilege', async () => {

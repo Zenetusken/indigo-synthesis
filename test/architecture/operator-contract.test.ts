@@ -167,18 +167,26 @@ describe('clean-clone operator contract', () => {
     expect(new Set(e2eTables).size).toBe(e2eTables.length)
     expect([...e2eTables].sort()).toEqual(schemaTables)
 
-    const deletionSource = readFileSync(
-      resolve(projectRoot, 'src/modules/data-portability/application/deletion.ts'),
+    const destructiveAdapterSource = readFileSync(
+      resolve(
+        projectRoot,
+        'src/modules/data-portability/infrastructure/scoped-destructive-adapter.ts',
+      ),
       'utf8',
     )
-    const instanceResetStart = deletionSource.indexOf(
-      'export async function executeInstanceReset',
+    const instanceResetStart = destructiveAdapterSource.indexOf(
+      'async function executeInstanceReset',
     )
     expect(instanceResetStart).toBeGreaterThan(-1)
+    const instanceResetEnd = destructiveAdapterSource.indexOf(
+      'export function createScopedSubjectDeletionAttemptGateway',
+      instanceResetStart,
+    )
+    expect(instanceResetEnd).toBeGreaterThan(instanceResetStart)
     const productionTableExports = [
-      ...deletionSource
-        .slice(instanceResetStart)
-        .matchAll(/await transaction\s*\.delete\((\w+)\)/g),
+      ...destructiveAdapterSource
+        .slice(instanceResetStart, instanceResetEnd)
+        .matchAll(/await database\.delete\((\w+)\)/g),
     ].map((match) => match[1])
     const tableNameByExport = new Map<string, string>()
     for (const [exportName, table] of Object.entries(databaseSchema)) {

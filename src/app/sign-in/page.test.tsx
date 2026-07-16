@@ -11,6 +11,8 @@ const pageMocks = vi.hoisted(() => ({
   getActor: vi.fn(),
   getSignInPageInstallation: vi.fn(),
   redirect: vi.fn(),
+  verifyResetNotice: vi.fn(),
+  verifySubjectNotice: vi.fn(),
 }))
 
 vi.mock('next/link', () => ({
@@ -24,6 +26,10 @@ vi.mock('next/link', () => ({
 }))
 vi.mock('next/navigation', () => ({
   redirect: pageMocks.redirect,
+}))
+vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
+  verifyInstanceResetNoticeReceipt: pageMocks.verifyResetNotice,
+  verifySubjectDeletionNoticeReceipt: pageMocks.verifySubjectNotice,
 }))
 vi.mock('@/modules/identity/server/sign-in-page', () => ({
   getSignInPageInstallation: pageMocks.getSignInPageInstallation,
@@ -61,6 +67,8 @@ describe('Sign-in orientation', () => {
       actionBinding: 'opaque-sign-in-binding',
     })
     pageMocks.getActor.mockResolvedValue(null)
+    pageMocks.verifyResetNotice.mockReturnValue(null)
+    pageMocks.verifySubjectNotice.mockReturnValue(null)
   })
 
   afterEach(cleanup)
@@ -129,6 +137,95 @@ describe('Sign-in orientation', () => {
       'Signed out from this local account.',
     )
     expect(screen.getByRole('status')).not.toHaveTextContent(/session|token|account id/i)
+  })
+
+  it('orients an uncertain member deletion without claiming either outcome', async () => {
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    await renderSignIn({ notice: 'signed-member-unknown' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Account deletion could not be confirmed.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Do not resubmit it')
+  })
+
+  it('returns an authenticated member with uncertain deletion to the checking page', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({ userId: 'member-id', role: 'member' })
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'signed-member-unknown' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/settings/delete-account?notice=signed-member-unknown',
+    )
+  })
+
+  it('returns an authenticated owner with uncertain reset to the checking page', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({ userId: 'owner-id', role: 'owner' })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({ searchParams: Promise.resolve({ notice: 'signed-reset-unknown' }) }),
+    ).rejects.toBe(redirectSignal)
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/settings/delete?notice=signed-reset-unknown',
+    )
+  })
+
+  it('preserves reset uncertainty when an open installation redirects to bootstrap', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getSignInPageInstallation.mockResolvedValueOnce({ kind: 'open' })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({ searchParams: Promise.resolve({ notice: 'signed-reset-unknown' }) }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/bootstrap?notice=signed-reset-unknown',
+    )
+  })
+
+  it('marks cleanup-after-commit as a warning without weakening deletion success', async () => {
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'deleted',
+      actorRole: 'member',
+      warning: 'cleanup-failed',
+    })
+    await renderSignIn({ notice: 'signed-member-cleanup' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Local account and subject-scoped training data deleted.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('do not repeat the deletion')
+  })
+
+  it('ignores an invalid receipt instead of inventing a destructive notice', async () => {
+    await renderSignIn({ notice: 'tampered-or-expired' })
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(pageMocks.verifySubjectNotice).toHaveBeenCalledWith('tampered-or-expired')
+    expect(pageMocks.verifyResetNotice).toHaveBeenCalledWith('tampered-or-expired')
   })
 
   it('orients an expired athlete and preserves only the exact saved-workout return', async () => {

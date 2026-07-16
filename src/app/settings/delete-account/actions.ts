@@ -1,46 +1,95 @@
 'use server'
 
 import { redirect } from 'next/navigation'
+import { getProductionDataPortabilityDestructiveMutationPort } from '@/composition/data-portability-destructive-mutations'
+import { createSubjectDeletionPlan } from '@/modules/data-portability/application/deletion'
 import {
-  createSubjectDeletionPlan,
-  DeletionError,
-  executeSubjectDeletion,
-} from '@/modules/data-portability/application/deletion'
+  type DestructiveNoticeFailureKind,
+  issueSubjectDeletionNoticeReceipt,
+  type SubjectDeletionNoticeReceiptPayload,
+} from '@/modules/data-portability/server/destructive-notice'
 import { requireActor } from '@/modules/identity/server/actor'
+import { captureTraineeDataDeletionMutationCommand } from '@/modules/identity/server/destructive-command'
 
-function deletionError(code: string): never {
-  redirect(`/settings/delete-account?error=${encodeURIComponent(code)}` as never)
+function noticeUrl(path: string, payload: SubjectDeletionNoticeReceiptPayload): string {
+  const receipt = issueSubjectDeletionNoticeReceipt(payload)
+  return `${path}?notice=${encodeURIComponent(receipt)}`
+}
+
+function deletionError(kind: DestructiveNoticeFailureKind): never {
+  redirect(noticeUrl('/settings/delete-account', { kind }) as never)
+}
+
+function unreachableResult(value: never): never {
+  throw new TypeError(`Unexpected subject-deletion result: ${String(value)}`)
 }
 
 export async function createAccountDeletionPreviewAction(): Promise<void> {
   const actor = await requireActor()
   try {
     await createSubjectDeletionPlan(actor)
-  } catch (error) {
-    deletionError(error instanceof DeletionError ? error.code : 'deletion.preview-failed')
+  } catch {
+    deletionError('preview-failed')
   }
   redirect('/settings/delete-account' as never)
 }
 
 export async function deleteAccountAction(formData: FormData): Promise<void> {
-  const actor = await requireActor()
+  const commandEnteredAt = new Date()
+  let captured: Awaited<ReturnType<typeof captureTraineeDataDeletionMutationCommand>>
   try {
-    await executeSubjectDeletion({
-      actor,
-      planId: String(formData.get('planId') ?? ''),
-      planDigest: String(formData.get('planDigest') ?? ''),
-      password: String(formData.get('password') ?? ''),
-      typedConfirmation: String(formData.get('typedConfirmation') ?? ''),
-      acknowledged: formData.get('acknowledged') === 'on',
+    captured = await captureTraineeDataDeletionMutationCommand({
+      formData,
+      commandEnteredAt,
     })
-  } catch (error) {
-    deletionError(
-      error instanceof DeletionError ? error.code : 'deletion.execution-failed',
-    )
+  } catch {
+    deletionError('request-not-verified')
   }
-  redirect(postDeletionRedirect(actor.role) as never)
+  if (captured.kind === 'rejected') deletionError('stale')
+
+  let result: Awaited<
+    ReturnType<
+      ReturnType<
+        typeof getProductionDataPortabilityDestructiveMutationPort
+      >['deleteSubject']
+    >
+  >
+  try {
+    result = await getProductionDataPortabilityDestructiveMutationPort().deleteSubject(
+      captured.command,
+    )
+  } catch {
+    deletionError('execution-failed')
+  }
+
+  switch (result.kind) {
+    case 'deleted':
+      return redirect(noticeUrl(postDeletionPath(result.actorRole), result) as never)
+    case 'outcome-unknown':
+      if (result.actorRole === 'member') {
+        return redirect(noticeUrl('/sign-in', result) as never)
+      }
+      return redirect(noticeUrl('/settings/delete-account', result) as never)
+    case 'confirmation-rejected':
+      return deletionError(result.kind)
+    case 'reauthentication-failed':
+      return deletionError(result.kind)
+    case 'reauthentication-locked':
+      return deletionError(result.kind)
+    case 'plan-invalid':
+      return deletionError(result.kind)
+    case 'plan-changed':
+      return deletionError(result.kind)
+    case 'stale':
+      return deletionError(result.kind)
+    case 'unavailable':
+      return deletionError(result.kind)
+    case 'reauthentication-incomplete':
+      return deletionError(result.kind)
+  }
+  return unreachableResult(result)
 }
 
-function postDeletionRedirect(role: 'owner' | 'member'): string {
-  return role === 'owner' ? '/settings?training-data-deleted=1' : '/sign-in?deleted=1'
+function postDeletionPath(role: 'owner' | 'member'): string {
+  return role === 'owner' ? '/settings' : '/sign-in'
 }

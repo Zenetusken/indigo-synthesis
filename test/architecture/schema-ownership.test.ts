@@ -57,7 +57,9 @@ const NON_MODULE_WRITE_ALLOWLIST: readonly {
 ]
 
 function operatorAllows(table: string, op: WriteOp): boolean {
-  if (op === 'delete') return operator.allow.delete === '*'
+  if (op === 'delete') {
+    return (operator.allow.delete as readonly string[]).includes(table)
+  }
   if (op === 'update') return (operator.allow.update as readonly string[]).includes(table)
   return (operator.allow.insert as readonly string[]).includes(table)
 }

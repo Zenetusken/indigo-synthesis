@@ -5,10 +5,7 @@ import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
 } from '@/composition/identity-bootstrap-mutations'
-import {
-  createInstanceResetPlan,
-  executeInstanceReset,
-} from '@/modules/data-portability/application/deletion'
+import { createInstanceResetPlan } from '@/modules/data-portability/application/deletion'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import {
   CredentialLifecycleUnavailableError,
@@ -18,6 +15,7 @@ import {
   withSubmittedEmailCredentialLifecycleLocks,
 } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   issueMemberReset,
   redeemMemberReset,
@@ -37,6 +35,7 @@ import {
   user,
   webRecoveryRateLimitBuckets,
 } from '@/platform/db/schema'
+import { submitInstanceResetThroughProductionPort } from '../support/destructive-mutation'
 
 const ownerPassword = 'instance-fence-owner-password'
 const memberPassword = 'instance-fence-member-password'
@@ -49,6 +48,7 @@ const requestContext = {
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let owner: AuthenticatedActor
 let member: { readonly id: string; readonly email: string }
+let ownerSessionToken: string
 
 type CapturedOutcome<T> =
   | { readonly status: 'fulfilled'; readonly value: T }
@@ -66,6 +66,20 @@ function captureOutcome<T>(promise: Promise<T>): Promise<CapturedOutcome<T>> {
   return promise.then(
     (value) => ({ status: 'fulfilled', value }),
     (error: unknown) => ({ status: 'rejected', error }),
+  )
+}
+
+async function authRequest(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const origin = getServerConfig().appOrigin
+  return createScopedIdentityMutationGateway(getDb()).signInEmail(
+    new Request(`${origin}/api/auth${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify(body),
+    }),
   )
 }
 
@@ -100,6 +114,15 @@ beforeAll(async () => {
     code: bootstrap.code,
   })
   owner = { ...createdOwner, userId: createdOwner.id, role: 'owner' }
+  const signIn = await authRequest('/sign-in/email', {
+    email: owner.email,
+    password: ownerPassword,
+  })
+  const signInBody = (await signIn.json()) as { readonly token?: string }
+  if (!signIn.ok || !signInBody.token) {
+    throw new Error('Could not create the reset-fence owner session.')
+  }
+  ownerSessionToken = signInBody.token
   member = await createLocalUserAsOwner(owner, {
     name: 'Instance Fence Member',
     email: 'instance-fence-member@example.test',
@@ -251,7 +274,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
     const plan = await createInstanceResetPlan(owner)
     const rowLocker = new Client({ connectionString: getServerConfig().databaseUrl })
     await rowLocker.connect()
-    let reset: Promise<void> | undefined
+    let reset: ReturnType<typeof submitInstanceResetThroughProductionPort> | undefined
     let redemption:
       | Promise<{
           value: Awaited<ReturnType<typeof redeemMemberReset>> | null
@@ -271,13 +294,10 @@ describe.sequential('instance reset credential lifecycle fence', () => {
         [owner.userId],
       )
 
-      reset = executeInstanceReset({
-        actor: owner,
-        planId: plan.id,
-        planDigest: plan.digest,
+      reset = submitInstanceResetThroughProductionPort({
+        sessionToken: ownerSessionToken,
+        plan,
         password: ownerPassword,
-        typedConfirmation: 'RESET',
-        acknowledged: true,
       })
       await waitForDatabaseCondition(
         'instance reset to reach owner credential lock',
@@ -316,7 +336,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
       )
 
       await rowLocker.query('COMMIT')
-      await reset
+      await expect(reset).resolves.toEqual({ kind: 'reset', warning: null })
       const redemptionOutcome = await redemption
       expect(redemptionOutcome.value).toBeNull()
       expect(redemptionOutcome.error).toBeInstanceOf(CredentialLifecycleUnavailableError)

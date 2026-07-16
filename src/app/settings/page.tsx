@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
+import { verifySubjectDeletionNoticeReceipt } from '@/modules/data-portability/server/destructive-notice'
 import {
   issueLocalUserCreationFormEnvelope,
   issueMemberResetIssuanceFormEnvelope,
@@ -18,11 +19,20 @@ import styles from './settings.module.css'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Settings' }
 
-export default async function SettingsPage() {
+type SettingsSearchParams = {
+  notice?: string
+}
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<SettingsSearchParams>
+} = {}) {
   const actor = await requireUiActor()
-  const [profile, localUsers] = await Promise.all([
+  const [profile, localUsers, query] = await Promise.all([
     getAthleteProfile(actor.userId),
     actor.role === 'owner' ? listLocalUsersAsOwner(actor) : Promise.resolve([]),
+    searchParams ?? Promise.resolve<SettingsSearchParams>({}),
   ])
   const formIssuedAt = new Date()
   const localUserCreationForm =
@@ -55,6 +65,13 @@ export default async function SettingsPage() {
     }
     return envelope
   }
+  const deletionNotice = verifySubjectDeletionNoticeReceipt(query.notice)
+  const confirmedOwnerDeletion =
+    actor.role === 'owner' &&
+    deletionNotice?.kind === 'deleted' &&
+    deletionNotice.actorRole === 'owner'
+      ? deletionNotice
+      : null
 
   return (
     <ProductFrame
@@ -67,6 +84,16 @@ export default async function SettingsPage() {
           title="Your instance and data."
           description="Account, export, and deletion controls remain local to this installation."
         />
+
+        {confirmedOwnerDeletion ? (
+          <div className={styles.success} role="status">
+            Your training data was deleted. Your owner account and this installation
+            remain available.
+            {confirmedOwnerDeletion.warning === 'cleanup-failed'
+              ? ' Database cleanup reported a warning after commit; do not repeat the deletion.'
+              : null}
+          </div>
+        ) : null}
 
         <section className={styles.section}>
           <h2>Account</h2>

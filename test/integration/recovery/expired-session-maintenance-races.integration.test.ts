@@ -8,14 +8,12 @@ import {
 import { issueOwnerRecovery } from '@/composition/identity-host-recovery-mutations'
 import { getProductionIdentityRecoveryMutationPort } from '@/composition/identity-recovery-mutations'
 import { cleanupExpiredSessions } from '@/composition/identity-session-maintenance'
-import {
-  createInstanceResetPlan,
-  executeInstanceReset,
-} from '@/modules/data-portability/application/deletion'
+import { createInstanceResetPlan } from '@/modules/data-portability/application/deletion'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { issueOwnerRecoveryRedemptionActionBinding } from '@/modules/identity/infrastructure/action-binding'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   captureOwnerRecoveryRedemptionMutationCommand,
   type OwnerRecoveryRedemptionMutationCommand,
@@ -34,6 +32,7 @@ import {
   user,
   verification,
 } from '@/platform/db/schema'
+import { submitInstanceResetThroughProductionPort } from '../support/destructive-mutation'
 
 vi.mock('next/headers', () => ({
   headers: async () =>
@@ -146,6 +145,26 @@ async function insertExpiredSession(id: string, userId: string): Promise<void> {
       createdAt: now,
       updatedAt: now,
     })
+}
+
+async function signInOwnerForReset(): Promise<string> {
+  const origin = getServerConfig().appOrigin
+  const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+    new Request(`${origin}/api/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ email: ownerEmail, password: currentOwnerPassword }),
+    }),
+  )
+  const body = (await response.json()) as { readonly token?: string }
+  if (!response.ok || !body.token) {
+    throw new Error('Could not create the maintenance-race reset session.')
+  }
+  await getDb()
+    .update(session)
+    .set({ expiresAt: new Date('2091-01-01T00:00:00.000Z') })
+    .where(eq(session.token, body.token))
+  return body.token
 }
 
 async function recoveryCommand(input: {
@@ -404,12 +423,19 @@ describe.sequential('expired-session maintenance concurrency', () => {
   it('makes a queued reset refresh its exact plan after maintenance wins', async () => {
     const sessionId = 'maintenance-race/reset/maintenance-first'
     await insertExpiredSession(sessionId, memberUserId)
+    const resetSessionToken = await signInOwnerForReset()
     const plan = await createInstanceResetPlan(owner)
     const locker = await rowLocker()
     let maintenance:
       | Promise<CapturedOutcome<Awaited<ReturnType<typeof cleanupExpiredSessions>>>>
       | undefined
-    let reset: Promise<CapturedOutcome<void>> | undefined
+    let reset:
+      | Promise<
+          CapturedOutcome<
+            Awaited<ReturnType<typeof submitInstanceResetThroughProductionPort>>
+          >
+        >
+      | undefined
 
     try {
       await locker.client.query('SELECT id FROM "session" WHERE id = $1 FOR UPDATE', [
@@ -425,13 +451,10 @@ describe.sequential('expired-session maintenance concurrency', () => {
       })
 
       reset = captureOutcome(
-        executeInstanceReset({
-          actor: owner,
-          planId: plan.id,
-          planDigest: plan.digest,
+        submitInstanceResetThroughProductionPort({
+          sessionToken: resetSessionToken,
+          plan,
           password: currentOwnerPassword,
-          typedConfirmation: 'RESET',
-          acknowledged: true,
         }),
       )
       await waitForBlockingEdge({
@@ -446,9 +469,9 @@ describe.sequential('expired-session maintenance concurrency', () => {
         status: 'fulfilled',
         value: { status: 'complete', deletedCount: 1, nextCursor: null },
       })
-      await expect(reset).resolves.toMatchObject({
-        status: 'rejected',
-        error: { code: 'deletion.plan-changed' },
+      await expect(reset).resolves.toEqual({
+        status: 'fulfilled',
+        value: { kind: 'plan-changed' },
       })
     } finally {
       await locker.client.query('ROLLBACK').catch(() => undefined)
@@ -468,12 +491,19 @@ describe.sequential('expired-session maintenance concurrency', () => {
   it('rejects a stale maintenance capture after instance reset wins', async () => {
     const sessionId = 'maintenance-race/reset/reset-first'
     await insertExpiredSession(sessionId, owner.userId)
+    const resetSessionToken = await signInOwnerForReset()
     const plan = await createInstanceResetPlan(owner)
     const locker = await rowLocker()
     let maintenance:
       | Promise<CapturedOutcome<Awaited<ReturnType<typeof cleanupExpiredSessions>>>>
       | undefined
-    let reset: Promise<CapturedOutcome<void>> | undefined
+    let reset:
+      | Promise<
+          CapturedOutcome<
+            Awaited<ReturnType<typeof submitInstanceResetThroughProductionPort>>
+          >
+        >
+      | undefined
 
     try {
       await locker.client.query(
@@ -481,18 +511,15 @@ describe.sequential('expired-session maintenance concurrency', () => {
         [owner.userId],
       )
       reset = captureOutcome(
-        executeInstanceReset({
-          actor: owner,
-          planId: plan.id,
-          planDigest: plan.digest,
+        submitInstanceResetThroughProductionPort({
+          sessionToken: resetSessionToken,
+          plan,
           password: currentOwnerPassword,
-          typedConfirmation: 'RESET',
-          acknowledged: true,
         }),
       )
       await waitForBlockingEdge({
         description: 'instance reset to reach the raw credential lock',
-        waitingApplication: 'indigo-synthesis:ordinary',
+        waitingApplication: 'indigo-synthesis:control',
         blockerPid: locker.pid,
       })
 
@@ -507,7 +534,10 @@ describe.sequential('expired-session maintenance concurrency', () => {
       })
       await locker.client.query('COMMIT')
 
-      await expect(reset).resolves.toEqual({ status: 'fulfilled', value: undefined })
+      await expect(reset).resolves.toEqual({
+        status: 'fulfilled',
+        value: { kind: 'reset', warning: null },
+      })
       await expect(maintenance).resolves.toMatchObject({
         status: 'rejected',
         error: { code: 'expired-session-maintenance.stale' },

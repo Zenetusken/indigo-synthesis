@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark } from '@/components'
+import { verifyInstanceResetNoticeReceipt } from '@/modules/data-portability/server/destructive-notice'
 import { getBootstrapPageInstallation } from '@/modules/identity/server/bootstrap'
 import { BootstrapForm } from '@/modules/identity/ui/bootstrap-form'
 import styles from '../auth-layout.module.css'
@@ -12,12 +13,13 @@ export const metadata: Metadata = { title: 'Claim this instance' }
 export default async function BootstrapPage({
   searchParams,
 }: {
-  searchParams: Promise<{ reset?: string }>
+  searchParams: Promise<{ notice?: string }>
 }) {
   const installation = await getBootstrapPageInstallation()
   if (installation.kind === 'closed') redirect('/sign-in')
 
   const query = await searchParams
+  const resetNotice = verifyInstanceResetNoticeReceipt(query.notice)
 
   return (
     <main className={styles.page}>
@@ -27,9 +29,20 @@ export default async function BootstrapPage({
           Indigo Synthesis
         </Link>
 
-        {query.reset === 'complete' ? (
+        {resetNotice?.kind === 'reset' ? (
           <p className={styles.notice} role="status">
             Instance reset. Create a new owner to begin again.
+            {resetNotice.warning === 'cleanup-failed'
+              ? ' Database cleanup reported a warning after commit; do not repeat the reset.'
+              : null}
+          </p>
+        ) : null}
+
+        {resetNotice?.kind === 'outcome-unknown' ? (
+          <p className={styles.notice} role="status">
+            This installation is currently open. The earlier reset response could not
+            confirm its outcome; do not repeat the reset. Create a new owner to begin
+            again.
           </p>
         ) : null}
 

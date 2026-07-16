@@ -2,57 +2,12 @@ import { and, eq, gt, sql } from 'drizzle-orm'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import { assertOwner } from '@/modules/identity/application/actor'
 import {
-  withCredentialLifecycleLock,
-  withExclusiveCredentialLifecycleFence,
-} from '@/modules/identity/infrastructure/credential-lifecycle-lock'
-import {
   type CanonicalValue,
   canonicalSha256,
 } from '@/modules/methodology/domain/canonical'
 import { getDb } from '@/platform/db/client'
-import {
-  account,
-  adjustmentDecisionInvalidations,
-  adjustmentDecisions,
-  athleteEquipment,
-  athleteProfiles,
-  athleteTrainingDays,
-  auditEvents,
-  contentReleaseRevocations,
-  deletionPlans,
-  deletionTombstones,
-  destructiveReauthenticationStates,
-  exercisePrescriptions,
-  futureLoadExplanationCache,
-  installationState,
-  memberResetStates,
-  performedSetCorrections,
-  performedSets,
-  plannedWorkouts,
-  programRevisionInvalidations,
-  programRevisionLineage,
-  programRevisions,
-  programs,
-  safetyHoldResolutions,
-  safetyHolds,
-  session,
-  sessionExercises,
-  sessionFeedback,
-  sessionFeedbackCorrections,
-  setPrescriptions,
-  strengthBaselines,
-  trainingCommandReceipts,
-  trainingFactCorrections,
-  user,
-  verification,
-  webRecoveryRateLimitBuckets,
-  workoutSessions,
-} from '@/platform/db/schema'
+import { deletionPlans } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
-import {
-  type DestructiveReauthenticationPurpose,
-  verifyDestructiveReauthentication,
-} from './destructive-reauthentication'
 import { exportSchemaVersion } from './export'
 
 export type InstanceResetCounts = {
@@ -152,60 +107,12 @@ export class DeletionError extends Error {
   }
 }
 
-async function withDestructiveReauthentication<T>(input: {
-  readonly actor: AuthenticatedActor
-  readonly purpose: DestructiveReauthenticationPurpose
-  readonly password: string
-  readonly command: () => Promise<T>
-}): Promise<T> {
-  const command = async () => {
-    const outcome = await verifyDestructiveReauthentication({
-      userId: input.actor.userId,
-      purpose: input.purpose,
-      password: input.password,
-    })
-    if (outcome.status !== 'succeeded') {
-      // A denied attempt appends security audit evidence, so the exact preview is no
-      // longer current. Remove it now; the error page can immediately offer a fresh
-      // preview instead of trapping the actor behind an inevitably stale digest.
-      await getDb()
-        .delete(deletionPlans)
-        .where(
-          and(
-            eq(deletionPlans.userId, input.actor.userId),
-            eq(
-              deletionPlans.scope,
-              input.purpose === 'instance-reset' ? 'instance-reset' : 'trainee-data',
-            ),
-          ),
-        )
-    }
-    if (outcome.status === 'locked') {
-      throw new DeletionError(
-        'deletion.reauthentication-locked',
-        'Too many password attempts. Try again after the lockout expires.',
-      )
-    }
-    if (outcome.status === 'failed') {
-      throw new DeletionError(
-        'deletion.reauthentication-failed',
-        'Password was not accepted.',
-      )
-    }
-    return input.command()
-  }
-
-  return input.purpose === 'instance-reset'
-    ? withExclusiveCredentialLifecycleFence(command)
-    : withCredentialLifecycleLock(input.actor.userId, command)
-}
-
-type Executable = {
+type DeletionPlanExecutable = {
   execute: ReturnType<typeof getDb>['execute']
 }
 
-async function countInstanceRows(
-  database: Executable,
+export async function countInstanceRows(
+  database: DeletionPlanExecutable,
   actorUserId: string,
 ): Promise<InstanceResetCounts> {
   const result = await database.execute<InstanceResetCounts>(sql`
@@ -218,7 +125,10 @@ async function countInstanceRows(
       (SELECT count(*)::int
         FROM destructive_reauthentication_state drs
         JOIN account dra ON dra.id = drs.account_id
-        WHERE dra.user_id <> ${actorUserId}) AS "destructiveReauthenticationStates",
+        WHERE NOT (
+          dra.user_id = ${actorUserId}
+          AND drs.purpose = 'instance-reset'
+        )) AS "destructiveReauthenticationStates",
       (SELECT count(*)::int FROM member_reset_state) AS "memberResetStates",
       (SELECT count(*)::int
         FROM web_recovery_rate_limit_bucket) AS "webRecoveryRateLimitBuckets",
@@ -257,8 +167,8 @@ async function countInstanceRows(
   return counts
 }
 
-async function countSubjectRows(
-  database: Executable,
+export async function countSubjectRows(
+  database: DeletionPlanExecutable,
   userId: string,
   email: string,
   preserveIdentity: boolean,
@@ -348,7 +258,7 @@ async function countSubjectRows(
   return counts
 }
 
-function digestPlan(input: {
+export function digestInstanceResetPlan(input: {
   readonly planId: string
   readonly actorUserId: string
   readonly scope: 'instance-reset'
@@ -359,7 +269,7 @@ function digestPlan(input: {
   return canonicalSha256(input as unknown as CanonicalValue)
 }
 
-function digestSubjectPlan(input: {
+export function digestSubjectDeletionPlan(input: {
   readonly planId: string
   readonly actorUserId: string
   readonly scope: 'trainee-data'
@@ -399,7 +309,7 @@ export async function createInstanceResetPlan(
       })
 
       const counts = await countInstanceRows(transaction, actor.userId)
-      const digest = digestPlan({
+      const digest = digestInstanceResetPlan({
         planId: id,
         actorUserId: actor.userId,
         scope: 'instance-reset',
@@ -472,7 +382,7 @@ export async function createSubjectDeletionPlan(
         actor.email,
         actor.role === 'owner',
       )
-      const digest = digestSubjectPlan({
+      const digest = digestSubjectDeletionPlan({
         planId: id,
         actorUserId: actor.userId,
         scope: 'trainee-data',
@@ -511,364 +421,4 @@ export async function getActiveSubjectDeletionPlan(
     expiresAt: plan.expiresAt,
     counts: plan.rowCounts as SubjectDeletionCounts,
   }
-}
-
-export async function executeSubjectDeletion(input: {
-  readonly actor: AuthenticatedActor
-  readonly planId: string
-  readonly planDigest: string
-  readonly password: string
-  readonly typedConfirmation: string
-  readonly acknowledged: boolean
-}): Promise<void> {
-  if (!input.acknowledged || input.typedConfirmation !== 'DELETE') {
-    throw new DeletionError(
-      'deletion.confirmation-invalid',
-      'Acknowledge the consequences and type DELETE exactly.',
-    )
-  }
-
-  await withDestructiveReauthentication({
-    actor: input.actor,
-    purpose: 'trainee-data-deletion',
-    password: input.password,
-    command: () =>
-      getDb().transaction(
-        async (transaction) => {
-          await transaction.execute(sql`SET LOCAL indigo.deletion_mode = 'trainee-data'`)
-
-          if (input.actor.role === 'owner') {
-            const [installation] = await transaction
-              .select({ ownerUserId: installationState.ownerUserId })
-              .from(installationState)
-              .where(eq(installationState.singleton, 1))
-              .for('update')
-              .limit(1)
-            if (installation?.ownerUserId !== input.actor.userId) {
-              throw new DeletionError(
-                'deletion.owner-changed',
-                'Instance ownership changed.',
-              )
-            }
-          }
-
-          const [plan] = await transaction
-            .select()
-            .from(deletionPlans)
-            .where(
-              and(
-                eq(deletionPlans.id, input.planId),
-                eq(deletionPlans.userId, input.actor.userId),
-                eq(deletionPlans.scope, 'trainee-data'),
-              ),
-            )
-            .for('update')
-            .limit(1)
-          if (
-            !plan ||
-            plan.consumedAt ||
-            plan.expiresAt <= new Date() ||
-            plan.planDigest !== input.planDigest
-          ) {
-            throw new DeletionError(
-              'deletion.plan-invalid',
-              'The deletion preview expired or no longer matches.',
-            )
-          }
-
-          const currentCounts = await countSubjectRows(
-            transaction,
-            input.actor.userId,
-            input.actor.email,
-            input.actor.role === 'owner',
-          )
-          const currentDigest = digestSubjectPlan({
-            planId: plan.id,
-            actorUserId: input.actor.userId,
-            scope: 'trainee-data',
-            schemaVersion: exportSchemaVersion,
-            counts: currentCounts,
-            expiresAt: plan.expiresAt.toISOString(),
-          })
-          if (currentDigest !== plan.planDigest) {
-            throw new DeletionError(
-              'deletion.plan-changed',
-              'Subject data changed after preview. Generate a new preview.',
-            )
-          }
-
-          const completedAt = new Date()
-          const tombstoneId = newUuidV7()
-          const completionDigest = canonicalSha256({
-            eventId: tombstoneId,
-            scope: 'trainee-data',
-            schemaVersion: exportSchemaVersion,
-            completedAt: completedAt.toISOString(),
-            counts: currentCounts,
-          } as unknown as CanonicalValue)
-
-          await transaction.execute(sql`
-        DELETE FROM adjustment_decision_invalidation
-        WHERE correction_id IN (
-          SELECT id FROM training_fact_correction
-          WHERE user_id = ${input.actor.userId}
-        )
-      `)
-          await transaction.execute(sql`
-        DELETE FROM program_revision_invalidation
-        WHERE correction_id IN (
-          SELECT id FROM training_fact_correction
-          WHERE user_id = ${input.actor.userId}
-        )
-      `)
-          await transaction
-            .delete(sessionFeedbackCorrections)
-            .where(eq(sessionFeedbackCorrections.userId, input.actor.userId))
-          await transaction
-            .delete(performedSetCorrections)
-            .where(eq(performedSetCorrections.userId, input.actor.userId))
-          await transaction
-            .delete(trainingFactCorrections)
-            .where(eq(trainingFactCorrections.userId, input.actor.userId))
-
-          await transaction
-            .delete(futureLoadExplanationCache)
-            .where(eq(futureLoadExplanationCache.userId, input.actor.userId))
-          await transaction
-            .delete(trainingCommandReceipts)
-            .where(eq(trainingCommandReceipts.userId, input.actor.userId))
-          await transaction.execute(sql`
-        DELETE FROM program_revision_lineage
-        WHERE revision_id IN (
-          SELECT pr.id
-          FROM program_revision pr
-          JOIN program p ON p.id = pr.program_id
-          WHERE p.user_id = ${input.actor.userId}
-        )
-      `)
-          await transaction
-            .delete(safetyHoldResolutions)
-            .where(eq(safetyHoldResolutions.userId, input.actor.userId))
-          await transaction
-            .delete(safetyHolds)
-            .where(eq(safetyHolds.userId, input.actor.userId))
-          await transaction
-            .delete(workoutSessions)
-            .where(eq(workoutSessions.userId, input.actor.userId))
-          await transaction
-            .delete(programs)
-            .where(eq(programs.userId, input.actor.userId))
-          await transaction
-            .delete(strengthBaselines)
-            .where(eq(strengthBaselines.userId, input.actor.userId))
-          await transaction
-            .delete(athleteEquipment)
-            .where(eq(athleteEquipment.userId, input.actor.userId))
-          await transaction
-            .delete(athleteTrainingDays)
-            .where(eq(athleteTrainingDays.userId, input.actor.userId))
-          await transaction
-            .delete(athleteProfiles)
-            .where(eq(athleteProfiles.userId, input.actor.userId))
-          await transaction
-            .delete(auditEvents)
-            .where(eq(auditEvents.subjectUserId, input.actor.userId))
-          await transaction
-            .delete(memberResetStates)
-            .where(eq(memberResetStates.targetUserId, input.actor.userId))
-          if (input.actor.role === 'owner') {
-            // H4: trainee-data deletion is independent from installation ownership. The
-            // owner credential and authenticated sessions remain usable so the same local
-            // administrator can immediately rebuild their training profile.
-            await transaction
-              .delete(deletionPlans)
-              .where(eq(deletionPlans.userId, input.actor.userId))
-          } else {
-            const recoveryIdentifier = `indigo:owner-recovery:${input.actor.userId}`
-            const memberResetIdentifier = `indigo:member-reset:${input.actor.userId}`
-            await transaction.delete(verification).where(
-              sql`${verification.identifier} = ${input.actor.email}
-              OR ${verification.identifier} = ${recoveryIdentifier}
-              OR ${verification.identifier} = ${memberResetIdentifier}`,
-            )
-            await transaction
-              .delete(session)
-              .where(eq(session.userId, input.actor.userId))
-            await transaction
-              .delete(account)
-              .where(eq(account.userId, input.actor.userId))
-            await transaction.delete(user).where(eq(user.id, input.actor.userId))
-          }
-
-          await transaction.insert(deletionTombstones).values({
-            id: tombstoneId,
-            actorClass: input.actor.role === 'owner' ? 'owner' : 'trainee',
-            scope: 'trainee-data',
-            schemaVersion: exportSchemaVersion,
-            rowCounts: currentCounts,
-            completionDigest,
-            createdAt: completedAt,
-          })
-        },
-        { isolationLevel: 'serializable' },
-      ),
-  })
-}
-
-export async function executeInstanceReset(input: {
-  readonly actor: AuthenticatedActor
-  readonly planId: string
-  readonly planDigest: string
-  readonly password: string
-  readonly typedConfirmation: string
-  readonly acknowledged: boolean
-}): Promise<void> {
-  assertOwner(input.actor)
-  if (!input.acknowledged || input.typedConfirmation !== 'RESET') {
-    throw new DeletionError(
-      'deletion.confirmation-invalid',
-      'Acknowledge the consequences and type RESET exactly.',
-    )
-  }
-
-  await withDestructiveReauthentication({
-    actor: input.actor,
-    purpose: 'instance-reset',
-    password: input.password,
-    command: () =>
-      getDb().transaction(
-        async (transaction) => {
-          await transaction.execute(
-            sql`SET LOCAL indigo.deletion_mode = 'instance-reset'`,
-          )
-          const [installation] = await transaction
-            .select({ ownerUserId: installationState.ownerUserId })
-            .from(installationState)
-            .where(eq(installationState.singleton, 1))
-            .for('update')
-            .limit(1)
-          if (installation?.ownerUserId !== input.actor.userId) {
-            throw new DeletionError(
-              'deletion.owner-changed',
-              'Instance ownership changed.',
-            )
-          }
-
-          const [plan] = await transaction
-            .select()
-            .from(deletionPlans)
-            .where(
-              and(
-                eq(deletionPlans.id, input.planId),
-                eq(deletionPlans.userId, input.actor.userId),
-                eq(deletionPlans.scope, 'instance-reset'),
-              ),
-            )
-            .for('update')
-            .limit(1)
-          if (
-            !plan ||
-            plan.consumedAt ||
-            plan.expiresAt <= new Date() ||
-            plan.planDigest !== input.planDigest
-          ) {
-            throw new DeletionError(
-              'deletion.plan-invalid',
-              'The reset preview expired or no longer matches.',
-            )
-          }
-
-          const currentCounts = await countInstanceRows(transaction, input.actor.userId)
-          const currentDigest = digestPlan({
-            planId: plan.id,
-            actorUserId: input.actor.userId,
-            scope: 'instance-reset',
-            schemaVersion: exportSchemaVersion,
-            counts: currentCounts,
-            expiresAt: plan.expiresAt.toISOString(),
-          })
-          if (currentDigest !== plan.planDigest) {
-            throw new DeletionError(
-              'deletion.plan-changed',
-              'Instance data changed after preview. Generate a new preview.',
-            )
-          }
-
-          const completedAt = new Date()
-          const tombstoneId = newUuidV7()
-          const completionDigest = canonicalSha256({
-            eventId: tombstoneId,
-            scope: 'instance-reset',
-            schemaVersion: exportSchemaVersion,
-            completedAt: completedAt.toISOString(),
-            counts: currentCounts,
-          } as unknown as CanonicalValue)
-
-          const rotatedInstallation = await transaction
-            .update(installationState)
-            .set({
-              ownerUserId: null,
-              bootstrapClosedAt: null,
-              productMutationEpoch: sql`gen_random_uuid()`,
-              updatedAt: completedAt,
-            })
-            .where(eq(installationState.singleton, 1))
-            .returning({ singleton: installationState.singleton })
-          if (rotatedInstallation.length !== 1) {
-            throw new DeletionError(
-              'deletion.installation-state-invalid',
-              'The installation state could not be rotated exactly once.',
-            )
-          }
-
-          // Product modules first, in referential order. Identity is deliberately last.
-          await transaction.delete(adjustmentDecisionInvalidations)
-          await transaction.delete(programRevisionInvalidations)
-          await transaction.delete(sessionFeedbackCorrections)
-          await transaction.delete(performedSetCorrections)
-          await transaction.delete(trainingFactCorrections)
-          await transaction.delete(futureLoadExplanationCache)
-          await transaction.delete(trainingCommandReceipts)
-          await transaction.delete(programRevisionLineage)
-          await transaction.delete(safetyHoldResolutions)
-          await transaction.delete(safetyHolds)
-          await transaction.delete(workoutSessions)
-          await transaction.delete(programs)
-          await transaction.delete(adjustmentDecisions)
-          await transaction.delete(performedSets)
-          await transaction.delete(sessionExercises)
-          await transaction.delete(sessionFeedback)
-          await transaction.delete(setPrescriptions)
-          await transaction.delete(exercisePrescriptions)
-          await transaction.delete(plannedWorkouts)
-          await transaction.delete(programRevisions)
-          await transaction.delete(strengthBaselines)
-          await transaction.delete(athleteEquipment)
-          await transaction.delete(athleteTrainingDays)
-          await transaction.delete(athleteProfiles)
-          await transaction.delete(contentReleaseRevocations)
-          await transaction.delete(auditEvents)
-          await transaction.delete(deletionPlans)
-
-          await transaction.delete(destructiveReauthenticationStates)
-          await transaction.delete(memberResetStates)
-          await transaction.delete(webRecoveryRateLimitBuckets)
-          await transaction.delete(verification)
-          await transaction.delete(session)
-          await transaction.delete(account)
-          await transaction.delete(user)
-
-          await transaction.insert(deletionTombstones).values({
-            id: tombstoneId,
-            actorClass: 'owner',
-            scope: 'instance-reset',
-            schemaVersion: exportSchemaVersion,
-            rowCounts: currentCounts,
-            completionDigest,
-            createdAt: completedAt,
-          })
-        },
-        { isolationLevel: 'serializable' },
-      ),
-  })
 }

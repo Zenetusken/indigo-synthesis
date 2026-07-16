@@ -242,6 +242,11 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/modules/identity/infrastructure/action-binding.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    ['verifyInstanceResetActionBinding', 'verifyTraineeDataDeletionActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
     'src/composition/identity-recovery-mutations.ts',
     [
       'verifyMemberResetRedemptionActionBinding',
@@ -253,8 +258,10 @@ const identityAuthPolicies = policy([
     'src/modules/identity/server/actor.ts',
     [
       'issueCheckedSignOutActionBinding',
+      'issueInstanceResetActionBinding',
       'issueLocalUserCreateActionBinding',
       'issueMemberResetIssueActionBinding',
+      'issueTraineeDataDeletionActionBinding',
     ],
   ],
   [
@@ -336,6 +343,39 @@ const identityAuthPolicies = policy([
     'src/modules/identity/infrastructure/credential-administration-mutation.ts',
     'src/modules/identity/infrastructure/scoped-credential-administration.ts',
     ['localUserCreationMutationScope', 'memberResetIssuanceMutationScope'],
+  ],
+  [
+    'src/modules/identity/infrastructure/destructive-mutation.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    [
+      'IdentityDestructiveMutationAuthorityUnavailableError',
+      'IdentityDestructiveMutationCaptureInvariantError',
+      'IdentityDestructiveMutationCaptureStaleError',
+      'captureInstanceResetMutation',
+      'captureTraineeDataDeletionMutation',
+      'instanceResetMutationCaptureView',
+      'recheckInstanceResetMutation',
+      'recheckTraineeDataDeletionMutation',
+      'traineeDataDeletionMutationCaptureView',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/destructive-mutation.ts',
+    'src/modules/identity/infrastructure/scoped-credential-reauthentication.ts',
+    [
+      'instanceResetMutationReauthenticationScope',
+      'traineeDataDeletionMutationReauthenticationScope',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/destructive-mutation.ts',
+    'src/modules/identity/server/destructive-command.ts',
+    [
+      'instanceResetMutationCommandView',
+      'issueInstanceResetMutationCommand',
+      'issueTraineeDataDeletionMutationCommand',
+      'traineeDataDeletionMutationCommandView',
+    ],
   ],
   [
     'src/modules/identity/infrastructure/recovery-mutation.ts',
@@ -428,6 +468,14 @@ const identityAuthPolicies = policy([
     ],
   ],
   [
+    'src/modules/identity/infrastructure/scoped-credential-reauthentication.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    [
+      'createScopedInstanceResetReauthenticationGateway',
+      'createScopedSubjectDeletionReauthenticationGateway',
+    ],
+  ],
+  [
     'src/modules/identity/infrastructure/scoped-browser-recovery.ts',
     'src/composition/identity-recovery-mutations.ts',
     [
@@ -465,6 +513,11 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
+    'src/platform/application-coordination/scoped-drizzle.ts',
     'src/composition/identity-recovery-mutations.ts',
     ['createScopedDrizzleDatabase'],
   ],
@@ -491,6 +544,11 @@ const identityAuthPolicies = policy([
   [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-credential-administration.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
@@ -547,6 +605,21 @@ const identityAuthPolicies = policy([
     ['localUserCreationMutationCommandView', 'memberResetIssuanceMutationCommandView'],
   ],
   [
+    'src/modules/identity/server/destructive-command.ts',
+    'src/app/settings/delete-account/actions.ts',
+    ['captureTraineeDataDeletionMutationCommand'],
+  ],
+  [
+    'src/modules/identity/server/destructive-command.ts',
+    'src/app/settings/delete/actions.ts',
+    ['captureInstanceResetMutationCommand'],
+  ],
+  [
+    'src/modules/identity/server/destructive-command.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    ['instanceResetCommandView', 'traineeDataDeletionCommandView'],
+  ],
+  [
     'src/modules/identity/server/recovery-page.ts',
     'src/app/reset/page.tsx',
     ['getMemberResetPageInstallation'],
@@ -587,6 +660,11 @@ const identityAuthPolicies = policy([
   [
     'src/modules/identity/infrastructure/auth.ts',
     'src/modules/identity/server/credential-administration-command.ts',
+    ['verifyIdentitySessionCookie'],
+  ],
+  [
+    'src/modules/identity/infrastructure/auth.ts',
+    'src/modules/identity/server/destructive-command.ts',
     ['verifyIdentitySessionCookie'],
   ],
   [
@@ -678,6 +756,71 @@ const identityAuthPolicies = policy([
     'src/composition/identity-session-maintenance.ts',
     'scripts/identity/cleanup-expired-sessions.ts',
     ['cleanupExpiredSessionsFromHostCli'],
+  ],
+  [
+    'src/modules/data-portability/infrastructure/scoped-destructive-adapter.ts',
+    'src/composition/data-portability-destructive-mutations.ts',
+    [
+      'createScopedInstanceResetAttemptGateway',
+      'createScopedInstanceResetGateway',
+      'createScopedSubjectDeletionAttemptGateway',
+      'createScopedSubjectDeletionGateway',
+    ],
+  ],
+  [
+    'src/composition/data-portability-destructive-mutations.ts',
+    'src/app/settings/delete-account/actions.ts',
+    ['getProductionDataPortabilityDestructiveMutationPort'],
+  ],
+  [
+    'src/composition/data-portability-destructive-mutations.ts',
+    'src/app/settings/delete/actions.ts',
+    ['getProductionDataPortabilityDestructiveMutationPort'],
+  ],
+  [
+    'src/modules/data-portability/infrastructure/destructive-notice-receipt.ts',
+    'src/modules/data-portability/server/destructive-notice.ts',
+    [
+      'issueInstanceResetNoticeReceipt',
+      'issueSubjectDeletionNoticeReceipt',
+      'verifyInstanceResetNoticeReceipt',
+      'verifySubjectDeletionNoticeReceipt',
+    ],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/settings/delete-account/actions.ts',
+    ['issueSubjectDeletionNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/settings/delete/actions.ts',
+    ['issueInstanceResetNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/settings/delete-account/page.tsx',
+    ['verifySubjectDeletionNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/settings/delete/page.tsx',
+    ['verifyInstanceResetNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/settings/page.tsx',
+    ['verifySubjectDeletionNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/sign-in/page.tsx',
+    ['verifyInstanceResetNoticeReceipt', 'verifySubjectDeletionNoticeReceipt'],
+  ],
+  [
+    'src/modules/data-portability/server/destructive-notice.ts',
+    'src/app/bootstrap/page.tsx',
+    ['verifyInstanceResetNoticeReceipt'],
   ],
   [
     'src/modules/identity/recovery/owner-recovery-contract.ts',
@@ -814,6 +957,46 @@ describe('Identity authentication cutover boundaries', () => {
     expect(exactRuntimeImportViolations(synthetic, identityAuthPolicies)).toContain(
       'scripts/identity/rogue-recovery.ts: unauthorized broad import -> src/modules/identity/infrastructure/scoped-browser-recovery.ts',
     )
+  })
+
+  it('seals destructive command issuance, ingress, and scoped reauthentication', () => {
+    const rogue = resolve(process.cwd(), 'scripts/identity/rogue-destructive.ts')
+    for (const [source, expected] of [
+      [
+        "import { issueTraineeDataDeletionMutationCommand } from '@/modules/identity/infrastructure/destructive-mutation'\nvoid issueTraineeDataDeletionMutationCommand\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/identity/infrastructure/destructive-mutation.ts',
+      ],
+      [
+        "import { captureTraineeDataDeletionMutationCommand } from '@/modules/identity/server/destructive-command'\nvoid captureTraineeDataDeletionMutationCommand\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/identity/server/destructive-command.ts',
+      ],
+      [
+        "import { createScopedSubjectDeletionReauthenticationGateway } from '@/modules/identity/infrastructure/scoped-credential-reauthentication'\nvoid createScopedSubjectDeletionReauthenticationGateway\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/identity/infrastructure/scoped-credential-reauthentication.ts',
+      ],
+      [
+        "import { createScopedSubjectDeletionGateway } from '@/modules/data-portability/infrastructure/scoped-destructive-adapter'\nvoid createScopedSubjectDeletionGateway\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/data-portability/infrastructure/scoped-destructive-adapter.ts',
+      ],
+      [
+        "import { getProductionDataPortabilityDestructiveMutationPort } from '@/composition/data-portability-destructive-mutations'\nvoid getProductionDataPortabilityDestructiveMutationPort\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/composition/data-portability-destructive-mutations.ts',
+      ],
+      [
+        "import { issueSubjectDeletionNoticeReceipt } from '@/modules/data-portability/infrastructure/destructive-notice-receipt'\nvoid issueSubjectDeletionNoticeReceipt\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/data-portability/infrastructure/destructive-notice-receipt.ts',
+      ],
+      [
+        "import { issueSubjectDeletionNoticeReceipt } from '@/modules/data-portability/server/destructive-notice'\nvoid issueSubjectDeletionNoticeReceipt\n",
+        'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/data-portability/server/destructive-notice.ts',
+      ],
+    ] as const) {
+      const synthetic = new Map(productionFiles)
+      synthetic.set(rogue, source)
+      expect(exactRuntimeImportViolations(synthetic, identityAuthPolicies)).toContain(
+        expected,
+      )
+    }
   })
 
   it('keeps settings credential administration off every retired live mutation path', () => {

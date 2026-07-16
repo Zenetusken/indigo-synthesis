@@ -13,6 +13,7 @@ const pageMocks = vi.hoisted(() => ({
   listLocalUsers: vi.fn(),
   redirect: vi.fn(),
   requireUiActor: vi.fn(),
+  verifyDeletionNotice: vi.fn(),
 }))
 
 vi.mock('next/link', () => ({
@@ -27,6 +28,9 @@ vi.mock('@/components', () => ({
 }))
 vi.mock('@/modules/athletes/application/profile', () => ({
   getAthleteProfile: pageMocks.getAthleteProfile,
+}))
+vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
+  verifySubjectDeletionNoticeReceipt: pageMocks.verifyDeletionNotice,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   issueLocalUserCreationFormEnvelope: pageMocks.issueLocalForm,
@@ -86,6 +90,7 @@ describe('settings credential-administration form envelopes', () => {
       authenticatedActionEnvelope,
     })
     pageMocks.getAthleteProfile.mockResolvedValue(null)
+    pageMocks.verifyDeletionNotice.mockReturnValue(null)
     pageMocks.listLocalUsers.mockResolvedValue([
       {
         id: 'owner-id',
@@ -161,5 +166,48 @@ describe('settings credential-administration form envelopes', () => {
     await expect(SettingsPage()).rejects.toBe(redirectSignal)
     expect(pageMocks.redirect).toHaveBeenCalledWith('/sign-in')
     expect(pageMocks.issueMemberForm).not.toHaveBeenCalled()
+  })
+
+  it('confirms owner training-data deletion and warns against repeating a committed cleanup failure', async () => {
+    pageMocks.verifyDeletionNotice.mockReturnValueOnce({
+      kind: 'deleted',
+      actorRole: 'owner',
+      warning: 'cleanup-failed',
+    })
+    render(
+      await SettingsPage({
+        searchParams: Promise.resolve({ notice: 'signed-owner-success' }),
+      }),
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Your training data was deleted. Your owner account and this installation remain available.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('do not repeat the deletion')
+  })
+
+  it('never renders owner deletion-success copy to a member', async () => {
+    pageMocks.verifyDeletionNotice.mockReturnValueOnce({
+      kind: 'deleted',
+      actorRole: 'owner',
+      warning: null,
+    })
+    pageMocks.requireUiActor.mockResolvedValueOnce({
+      userId: 'member-id',
+      email: 'member@example.test',
+      name: 'Member',
+      role: 'member',
+      checkedSignOutActionBinding: 'opaque-member-sign-out-binding',
+      authenticatedActionEnvelope,
+    })
+
+    render(
+      await SettingsPage({
+        searchParams: Promise.resolve({ notice: 'signed-owner-success' }),
+      }),
+    )
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(pageMocks.listLocalUsers).not.toHaveBeenCalled()
   })
 })

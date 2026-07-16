@@ -8,9 +8,6 @@ import { saveAthleteProfile } from '@/modules/athletes/application/profile'
 import {
   createInstanceResetPlan,
   createSubjectDeletionPlan,
-  type DeletionError,
-  executeInstanceReset,
-  executeSubjectDeletion,
 } from '@/modules/data-portability/application/deletion'
 import { createDataExport } from '@/modules/data-portability/application/export'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
@@ -29,6 +26,7 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import { assertDatabaseReady } from '@/platform/db/preflight'
 import {
+  account,
   adjustmentDecisionInvalidations,
   adjustmentDecisions,
   athleteEquipment,
@@ -37,6 +35,7 @@ import {
   auditEvents,
   contentReleaseRevocations,
   deletionTombstones,
+  destructiveReauthenticationStates,
   exercisePrescriptions,
   futureLoadExplanationCache,
   installationState,
@@ -62,6 +61,10 @@ import {
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
+import {
+  submitInstanceResetThroughProductionPort,
+  submitSubjectDeletionThroughProductionPort,
+} from '../support/destructive-mutation'
 
 const ownerPassword = 'portability-owner-password'
 const otherUserPassword = 'portability-member-password'
@@ -1278,6 +1281,14 @@ describe('subject export and exact instance reset', () => {
       email: otherUser.email,
       role: 'member',
     }
+    const memberSignIn = await authRequest('/sign-in/email', {
+      email: memberActor.email,
+      password: otherUserPassword,
+    })
+    const memberSignInBody = (await memberSignIn.json()) as { token?: string }
+    if (!memberSignIn.ok || !memberSignInBody.token) {
+      throw new Error('Could not create the member deletion session.')
+    }
     await saveAthleteProfile(memberActor.userId, {
       units: 'metric',
       timezone: 'UTC',
@@ -1343,13 +1354,16 @@ describe('subject export and exact instance reset', () => {
       auditActorReferencesRedacted: 1,
       deletionPlans: 1,
     })
-    await executeSubjectDeletion({
-      actor: memberActor,
-      planId: plan.id,
-      planDigest: plan.digest,
-      password: otherUserPassword,
-      typedConfirmation: 'DELETE',
-      acknowledged: true,
+    await expect(
+      submitSubjectDeletionThroughProductionPort({
+        sessionToken: memberSignInBody.token,
+        plan,
+        password: otherUserPassword,
+      }),
+    ).resolves.toEqual({
+      kind: 'deleted',
+      actorRole: 'member',
+      warning: null,
     })
 
     const [deletedMember] = await getDb()
@@ -1503,36 +1517,48 @@ describe('subject export and exact instance reset', () => {
         expiresAt: new Date('2026-07-12T12:00:00.000Z'),
       })
     await expect(
-      executeInstanceReset({
-        actor,
-        planId: stalePlan.id,
-        planDigest: stalePlan.digest,
+      submitInstanceResetThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan: stalePlan,
         password: ownerPassword,
-        typedConfirmation: 'RESET',
-        acknowledged: true,
       }),
-    ).rejects.toMatchObject({
-      code: 'deletion.plan-changed',
-    } satisfies Partial<DeletionError>)
+    ).resolves.toEqual({ kind: 'plan-changed' })
 
     const plan = await createInstanceResetPlan(actor)
     expect(plan.counts.authVerifications).toBe(2)
     expect(plan.counts.deletionPlans).toBe(1)
     await expect(
-      executeInstanceReset({
-        actor,
-        planId: plan.id,
-        planDigest: plan.digest,
+      submitInstanceResetThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan,
         password: 'incorrect-password',
-        typedConfirmation: 'RESET',
-        acknowledged: true,
       }),
-    ).rejects.toMatchObject({
-      code: 'deletion.reauthentication-failed',
-    } satisfies Partial<DeletionError>)
+    ).resolves.toEqual({ kind: 'reauthentication-failed' })
+
+    await expect(
+      submitSubjectDeletionThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan: {
+          id: 'missing-owner-trainee-data-plan',
+          digest: 'missing-owner-trainee-data-digest',
+          expiresAt: new Date(Date.now() + 10 * 60 * 1_000),
+        },
+        password: 'incorrect-password',
+      }),
+    ).resolves.toEqual({ kind: 'reauthentication-failed' })
+    const ownerReauthenticationPurposes = await getDb()
+      .select({ purpose: destructiveReauthenticationStates.purpose })
+      .from(destructiveReauthenticationStates)
+      .innerJoin(account, eq(account.id, destructiveReauthenticationStates.accountId))
+      .where(eq(account.userId, actor.userId))
+    expect(ownerReauthenticationPurposes.map(({ purpose }) => purpose).sort()).toEqual([
+      'instance-reset',
+      'trainee-data-deletion',
+    ])
 
     const retryPlan = await createInstanceResetPlan(actor)
-    expect(retryPlan.counts.auditEvents).toBe(plan.counts.auditEvents + 1)
+    expect(retryPlan.counts.auditEvents).toBe(plan.counts.auditEvents + 2)
+    expect(retryPlan.counts.destructiveReauthenticationStates).toBe(1)
     const [installationBeforeReset] = await getDb()
       .select({ productMutationEpoch: installationState.productMutationEpoch })
       .from(installationState)
@@ -1552,13 +1578,10 @@ describe('subject export and exact instance reset', () => {
       FOR EACH STATEMENT EXECUTE FUNCTION indigo_test_fail_reset_after_epoch();
     `)
     await expect(
-      executeInstanceReset({
-        actor,
-        planId: retryPlan.id,
-        planDigest: retryPlan.digest,
+      submitInstanceResetThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan: retryPlan,
         password: ownerPassword,
-        typedConfirmation: 'RESET',
-        acknowledged: true,
       }),
     ).rejects.toMatchObject({
       cause: { message: 'injected post-epoch reset failure' },
@@ -1569,19 +1592,26 @@ describe('subject export and exact instance reset', () => {
     expect(installationAfterRollback?.productMutationEpoch).toBe(
       installationBeforeReset.productMutationEpoch,
     )
+    const remainingReauthenticationPurposes = await getDb()
+      .select({ purpose: destructiveReauthenticationStates.purpose })
+      .from(destructiveReauthenticationStates)
+      .innerJoin(account, eq(account.id, destructiveReauthenticationStates.accountId))
+      .where(eq(account.userId, actor.userId))
+    expect(remainingReauthenticationPurposes).toEqual([
+      { purpose: 'trainee-data-deletion' },
+    ])
     await getDb().execute(sql`
       DROP TRIGGER indigo_test_fail_reset_after_epoch ON program;
       DROP FUNCTION indigo_test_fail_reset_after_epoch();
     `)
 
-    await executeInstanceReset({
-      actor,
-      planId: retryPlan.id,
-      planDigest: retryPlan.digest,
-      password: ownerPassword,
-      typedConfirmation: 'RESET',
-      acknowledged: true,
-    })
+    await expect(
+      submitInstanceResetThroughProductionPort({
+        sessionToken: bootstrapToken,
+        plan: retryPlan,
+        password: ownerPassword,
+      }),
+    ).resolves.toEqual({ kind: 'reset', warning: null })
 
     const remaining = await getDb().execute<{ liveRows: number }>(sql`
       SELECT (
@@ -1638,7 +1668,10 @@ describe('subject export and exact instance reset', () => {
     expect(tombstone).toMatchObject({
       actorClass: 'owner',
       scope: 'instance-reset',
-      rowCounts: retryPlan.counts,
+      rowCounts: {
+        ...retryPlan.counts,
+        destructiveReauthenticationStates: 1,
+      },
     })
     expect(tombstone?.completionDigest).toBe(
       canonicalSha256({
