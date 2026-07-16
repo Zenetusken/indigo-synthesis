@@ -12,7 +12,7 @@
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '../../src/modules/identity/bootstrap/owner-bootstrap'
+} from '../../src/composition/identity-bootstrap-mutations'
 import { resetAuthForTests } from '../../src/modules/identity/infrastructure/auth'
 import { getFutureLoadFactBundlesForSession } from '../../src/modules/training/application/future-load-fact-bundle'
 import {
@@ -22,7 +22,7 @@ import {
   startWorkout,
 } from '../../src/modules/training/application/workouts'
 import { resetServerConfigForTests } from '../../src/platform/config/server'
-import { closeDb } from '../../src/platform/db/client'
+import { closeDb, getPool } from '../../src/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     resetAuthForTests()
     await closeDb()
     await migrateDatabase()
-    await assertDatabaseReady()
+    await assertDatabaseReady(getPool())
     await resetProductData()
 
     const bootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })

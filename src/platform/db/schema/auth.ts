@@ -41,7 +41,10 @@ export const session = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
   },
-  (table) => [index('session_user_id_idx').on(table.userId)],
+  (table) => [
+    index('session_user_id_idx').on(table.userId),
+    index('session_expires_at_id_idx').on(table.expiresAt, sql`${table.id} COLLATE "C"`),
+  ],
 )
 
 export const account = pgTable(

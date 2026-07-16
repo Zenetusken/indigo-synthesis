@@ -20,8 +20,16 @@ export async function getInstallationStatus(): Promise<InstallationStatus> {
     .where(eq(installationState.singleton, 1))
     .limit(1)
 
-  if (!state?.ownerUserId || !state.closedAt) {
+  if (!state) {
+    throw new Error('Installation state is missing. Run the current database migrations.')
+  }
+
+  if (!state.ownerUserId && !state.closedAt) {
     return { kind: 'open' }
+  }
+
+  if (!state.ownerUserId || !state.closedAt) {
+    throw new Error('Installation state owner lifecycle is inconsistent.')
   }
 
   return {

@@ -50,13 +50,9 @@ export class LocalUserCredentialError extends Error {
   }
 }
 
-export async function createLocalUser(
-  actor: AuthenticatedActor,
+export function validateLocalUserInput(
   input: CreateLocalUserInput,
-  creator: LocalUserCreator,
-): Promise<LocalUser> {
-  assertOwner(actor)
-
+): ValidatedLocalUserInput {
   const parsed = localUserInputSchema.safeParse(input)
 
   if (!parsed.success) {
@@ -65,7 +61,16 @@ export async function createLocalUser(
     )
   }
 
-  return creator.create(actor.userId, parsed.data)
+  return parsed.data
+}
+
+export async function createLocalUser(
+  actor: AuthenticatedActor,
+  input: CreateLocalUserInput,
+  creator: LocalUserCreator,
+): Promise<LocalUser> {
+  assertOwner(actor)
+  return creator.create(actor.userId, validateLocalUserInput(input))
 }
 
 export async function listLocalUsers(

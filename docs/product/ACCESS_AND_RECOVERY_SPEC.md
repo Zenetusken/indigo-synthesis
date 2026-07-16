@@ -432,13 +432,37 @@ malformed trusted forwarding data in network mode) remains the existing pre-cred
   lock and guesses never consume the code. CLI owner redemption bypasses all web buckets
   and remains the guaranteed owner escape.
 
-  Dedicated advisory-lock connections are capped at **4** independently of the normal
-  application pool. Submitted-email and trusted account-scoped work each may queue at most
-  **64** waiters; overflow fails through the surface's canonical rejection without
-  allocating another connection, bucket, or audit row. Trusted account-scoped work
-  (including host recovery redemption when exercised in-process) has priority when a slot
-  is released, so a submitted-email queue cannot stand ahead of it. The production
-  host-local recovery command runs in a separate process with its own bounded pool.
+  **Part B connection-topology amendment (accepted and live since Stage 3):**
+  `INDIGO_DATABASE_POOL_MAX` is an integer from **6 through 64**, defaults to **10**, and
+  is the one installation-wide `poolMax`. Ordinary page/UoW/Better Auth read work receives
+  `poolMax - 4` connections
+  (minimum 2) with a FIFO queue of 128; two connections are reserved for credential/recovery/reset/
+  bootstrap control leases; one priority-admitted capture connection resolves the pre-wait
+  installation/owner boundary; and one installation-wide slot is reserved for a separate host/
+  operator process. Application pool maxima therefore sum to `poolMax - 1`, and preflight validates
+  the PostgreSQL role allowance against the full budget. Stage 3 adds no runtime database-health
+  endpoint or reserved health lane: the existing startup database preflight is a serialized host
+  one-shot using the external slot, and any later accepted in-process diagnostic must use bounded
+  ordinary admission or amend this contract explicitly.
+
+  The capture lane and two-connection control pool each have separate submitted-email and
+  trusted queues capped at **64** waiters. Overflow fails through the surface's canonical
+  rejection without allocating another connection, bucket, or audit row. Trusted account-
+  scoped work has strict priority after current work; FIFO is preserved within a priority,
+  so submitted-email floods cannot stand ahead of authenticated recovery/reset/bootstrap.
+  Lease-bearing work reuses its control client and never re-enters the ordinary pool. The
+  production host bootstrap/recovery/preflight/migration/maintenance commands acquire one
+  shared host `flock`, open exactly one client against the reserved external slot, never
+  instantiate an application pool, and release it on every exit. Production backup,
+  restore, and authority invalidation acquire that same lock and use no parallel database
+  jobs; they may open multiple sequential CLI connections but hold at most one at a time.
+  A separate-process saturation test proves runtime plus one true one-shot host command
+  never exceed `poolMax`.
+
+  This amendment supersedes only the original four-client/separate-CLI-pool allocation;
+  the already shipped H-DoS admission, priority, uniformity, and durable bucket semantics
+  remain binding. The retained J7–J9 network-denied evidence predates this cutover and is
+  not evidence for the live amended topology.
   Configuration validation happens before a slot is reserved. Each shared-fence request
   captures the claimed owner before waiting and requires the same non-null claim after it
   enters, so a queued pre-reset request cannot write into an open or newly re-bootstrapped
@@ -627,8 +651,9 @@ enforced in tests, plus instance-local audit data.
   target-state/FK cleanup, TTL and 30 s reissue behavior through injected timestamps,
   fixed-window reset/non-extension, exact member-reset and web-bucket HMAC namespaces,
   real-or-dummy malformed/unknown credential paths, bounded 64-row cleanup, owner-target
-  rejection, bounded/priority-aware lifecycle connection admission, owner
-  reauthentication for issue/create, deterministic
+  rejection, bounded/priority-aware capture/control/ordinary admission, exact installation-wide
+  `poolMax` accounting, separate-process host-CLI-under-saturation proof, owner reauthentication for
+  issue/create, deterministic
   email/owner/target lock ordering, create/sign-in and redeem/sign-in races, credential
   replacement, all-session revocation, exact-one audit cardinality with nullable
   unresolved IDs, CLI bypass, and subject/instance deletion counts. The existing

@@ -3,9 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
 import { resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb } from '@/platform/db/client'
+import { closeDb, getDb, getPool } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -73,7 +73,7 @@ afterAll(async () => {
 
 describe.sequential('access-recovery persistence contract', () => {
   it('applies the complete migration ledger and passes the concrete preflight', async () => {
-    const report = await assertDatabaseReady()
+    const report = await assertDatabaseReady(getPool())
 
     expect(report.committedMigrationCount).toBe(expectedMigrationCount)
     expect(report.appliedCommittedMigrationCount).toBe(expectedMigrationCount)
@@ -225,15 +225,64 @@ describe.sequential('access-recovery persistence contract', () => {
       sql.raw('DROP INDEX web_recovery_rate_limit_bucket_updated_idx'),
     )
     try {
-      const report = await inspectDatabase()
+      const report = await inspectDatabase(getPool())
       expect(report.accessRecoveryPersistencePresent).toBe(false)
-      await expect(assertDatabaseReady()).rejects.toThrow(
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
         /access-recovery state, rate-limit, constraint, or index contract is absent/,
       )
     } finally {
       await getDb().execute(
         sql.raw(
           'CREATE INDEX web_recovery_rate_limit_bucket_updated_idx ON web_recovery_rate_limit_bucket (updated_at, scope, bucket_key)',
+        ),
+      )
+    }
+  })
+
+  it('fails preflight when the expired-session maintenance seek index is missing', async () => {
+    await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+    try {
+      const report = await inspectDatabase(getPool())
+      expect(report.accessRecoveryPersistencePresent).toBe(false)
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
+        /access-recovery state, rate-limit, constraint, or index contract is absent/,
+      )
+    } finally {
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C")',
+        ),
+      )
+    }
+  })
+
+  it('fails preflight for the wrong maintenance index ordering or access method', async () => {
+    await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+    await getDb().execute(
+      sql.raw(
+        'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C" DESC)',
+      ),
+    )
+    try {
+      const report = await inspectDatabase(getPool())
+      expect(report.accessRecoveryPersistencePresent).toBe(false)
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
+        /access-recovery state, rate-limit, constraint, or index contract is absent/,
+      )
+
+      await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" USING brin (expires_at, id COLLATE "C")',
+        ),
+      )
+      const wrongMethodReport = await inspectDatabase(getPool())
+      expect(wrongMethodReport.accessRecoveryPersistencePresent).toBe(false)
+    } finally {
+      await getDb().execute(sql.raw('DROP INDEX IF EXISTS session_expires_at_id_idx'))
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C")',
         ),
       )
     }

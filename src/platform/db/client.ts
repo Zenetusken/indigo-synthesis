@@ -1,33 +1,27 @@
-import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres'
-import { Pool } from 'pg'
-import { getServerConfig } from '@/platform/config/server'
-import * as schema from './schema'
+import type {
+  Database,
+  DatabaseTransaction,
+  OrdinaryDatabaseClient,
+  OrdinaryDatabasePool,
+} from './database-runtime'
+import { closeDatabaseRuntime, getDatabaseRuntime } from './runtime-registry'
 
-export type Database = NodePgDatabase<typeof schema>
-export type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0]
-
-const globalDatabase = globalThis as typeof globalThis & {
-  indigoPool?: Pool
-  indigoDb?: Database
+export type {
+  Database,
+  DatabaseTransaction,
+  OrdinaryDatabaseClient,
+  OrdinaryDatabasePool,
 }
 
-export function getPool(): Pool {
-  globalDatabase.indigoPool ??= new Pool({
-    connectionString: getServerConfig().databaseUrl,
-    max: 10,
-    application_name: 'indigo-synthesis',
-  })
-
-  return globalDatabase.indigoPool
+/** Compatibility boundary for ordinary Drizzle and node-postgres callers. */
+export function getPool(): OrdinaryDatabasePool {
+  return getDatabaseRuntime().ordinaryPoolForCompatibility()
 }
 
 export function getDb(): Database {
-  globalDatabase.indigoDb ??= drizzle(getPool(), { schema })
-  return globalDatabase.indigoDb
+  return getDatabaseRuntime().ordinaryDatabase()
 }
 
-export async function closeDb(): Promise<void> {
-  await globalDatabase.indigoPool?.end()
-  globalDatabase.indigoPool = undefined
-  globalDatabase.indigoDb = undefined
+export function closeDb(): Promise<void> {
+  return closeDatabaseRuntime()
 }

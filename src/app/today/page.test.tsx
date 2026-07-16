@@ -10,7 +10,7 @@ import TodayPage from './page'
 const pageMocks = vi.hoisted(() => ({
   getAthleteProfile: vi.fn(),
   getTodayState: vi.fn(),
-  requireActor: vi.fn(),
+  requireUiActor: vi.fn(),
 }))
 
 vi.mock('next/link', () => ({
@@ -30,7 +30,7 @@ vi.mock('@/modules/athletes/application/profile', () => ({
   getAthleteProfile: pageMocks.getAthleteProfile,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
-  requireActor: pageMocks.requireActor,
+  requireUiActor: pageMocks.requireUiActor,
 }))
 vi.mock('@/modules/training/application/workouts', async (importOriginal) => {
   const original =
@@ -59,7 +59,10 @@ async function renderHold(resolutionAvailability: HoldResolutionAvailability) {
 describe('Today safety-hold state', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    pageMocks.requireActor.mockResolvedValue({ userId: 'owner-id' })
+    pageMocks.requireUiActor.mockResolvedValue({
+      userId: 'owner-id',
+      checkedSignOutActionBinding: 'opaque-sign-out-binding',
+    })
     pageMocks.getAthleteProfile.mockResolvedValue({
       profile: { timezone: 'UTC', units: 'metric' },
     })

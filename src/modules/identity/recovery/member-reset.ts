@@ -1,8 +1,7 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { hashPassword } from 'better-auth/crypto'
 import { and, eq, sql } from 'drizzle-orm'
 import type { AuthenticatedActor } from '@/modules/identity/application/actor'
-import { getServerConfig } from '@/platform/config/server'
 import { getDb } from '@/platform/db/client'
 import {
   account,
@@ -30,9 +29,12 @@ import {
   normalizeRecoveryEmail,
   publicRecoveryFailure,
 } from './recovery-policy'
+import {
+  memberResetIdentifier,
+  memberResetStoredValue,
+  memberResetStoredValueMatches,
+} from './recovery-preparation'
 
-const memberResetIdentifierPrefix = 'indigo:member-reset:'
-const memberResetValueVersion = 'member-reset-v1'
 const memberResetCodePrefix = 'indigo_m1_'
 const minimumTtlMinutes = 5
 const maximumTtlMinutes = 60
@@ -85,41 +87,8 @@ function passwordIsValid(password: string): boolean {
   return password.length >= 12 && password.length <= 128 && !password.includes('\0')
 }
 
-function memberResetIdentifier(targetUserId: string): string {
-  return `${memberResetIdentifierPrefix}${targetUserId}`
-}
-
 function unresolvedMemberLookupId(normalizedEmail: string): string {
   return `indigo:unresolved-member:${credentialEmailLockDigest(normalizedEmail)}`
-}
-
-function memberResetDigest(code: string): Buffer {
-  return createHmac('sha256', getServerConfig().authSecret)
-    .update(`${memberResetValueVersion}\0${code}`, 'utf8')
-    .digest()
-}
-
-function dummyCredentialDigest(): Buffer {
-  return createHmac('sha256', getServerConfig().authSecret)
-    .update('credential-dummy-v1\0', 'utf8')
-    .digest()
-}
-
-function storedMemberResetValue(code: string): string {
-  return `${memberResetValueVersion}:${memberResetDigest(code).toString('hex')}`
-}
-
-function codeMatchesStoredValue(code: string, storedValue: string | null): boolean {
-  const prefix = `${memberResetValueVersion}:`
-  const expectedHex = storedValue?.startsWith(prefix)
-    ? storedValue.slice(prefix.length)
-    : ''
-  const hasValidExpectedDigest = /^[0-9a-f]{64}$/.test(expectedHex)
-  const expected = hasValidExpectedDigest
-    ? Buffer.from(expectedHex, 'hex')
-    : dummyCredentialDigest()
-  const matches = timingSafeEqual(memberResetDigest(code), expected)
-  return hasValidExpectedDigest && matches
 }
 
 async function appendMemberResetAudit(
@@ -334,7 +303,7 @@ export async function issueMemberReset(input: {
           await transaction.insert(verification).values({
             id: resetId,
             identifier,
-            value: storedMemberResetValue(code),
+            value: memberResetStoredValue(code),
             expiresAt,
             createdAt: now,
             updatedAt: now,
@@ -495,7 +464,10 @@ export async function redeemMemberReset(input: {
             return publicRecoveryFailure
           }
 
-          const codeMatches = codeMatchesStoredValue(input.code, pending?.value ?? null)
+          const codeMatches = memberResetStoredValueMatches(
+            input.code,
+            pending?.value ?? null,
+          )
           const codeIsLive = pending !== undefined && pending.expiresAt > now
           const mayRedeem =
             target !== undefined &&

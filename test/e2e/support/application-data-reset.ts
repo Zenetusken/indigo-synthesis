@@ -1,9 +1,10 @@
 /**
  * Referentially safe clear order for the disposable E2E database.
  *
- * Keep this aligned with executeInstanceReset: application-owned rows are removed
- * before identity, while E2E additionally removes the installation singleton and
- * prior non-identifying tombstones to restore a genuinely clean bootstrap state.
+ * Keep this aligned with the scoped destructive adapter's instance reset:
+ * application-owned rows are removed before identity, while E2E additionally removes
+ * the installation singleton and prior non-identifying tombstones to restore a
+ * genuinely clean bootstrap state.
  */
 export const e2eApplicationDataResetTableOrder = [
   'installation_state',

@@ -2,9 +2,15 @@ import type { Metadata, Route } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark, Disclosure } from '@/components'
-import { getInstallationStatus } from '@/modules/identity/application/installation'
+import {
+  verifyInstanceResetNoticeReceipt,
+  verifyInstanceResetNoticeReceiptForActor,
+  verifySubjectDeletionNoticeReceipt,
+  verifySubjectDeletionNoticeReceiptForActor,
+} from '@/modules/data-portability/server/destructive-notice'
 import { workoutSignInReturnTo } from '@/modules/identity/application/sign-in-return'
 import { getActor } from '@/modules/identity/server/actor'
+import { getSignInPageInstallation } from '@/modules/identity/server/sign-in-page'
 import { SignInForm } from '@/modules/identity/ui/sign-in-form'
 import { getServerConfig } from '@/platform/config/server'
 import styles from '../auth-layout.module.css'
@@ -21,19 +27,54 @@ export default async function SignInPage({
   searchParams: Promise<{
     claimed?: string
     created?: string
-    deleted?: string
     expired?: string
+    notice?: string
     recovered?: string
     returnTo?: string
     reset?: string
     signedOut?: string
   }>
 }) {
-  const installation = await getInstallationStatus()
-  if (installation.kind === 'open') redirect('/bootstrap')
   const query = await searchParams
+  const subjectDeletionNotice = verifySubjectDeletionNoticeReceipt(query.notice)
+  const instanceResetNotice = verifyInstanceResetNoticeReceipt(query.notice)
+  const installation = await getSignInPageInstallation()
+  if (installation.kind === 'open') {
+    redirect(
+      instanceResetNotice
+        ? (`/bootstrap?notice=${encodeURIComponent(query.notice ?? '')}` as Route)
+        : '/bootstrap',
+    )
+  }
   const returnTo = workoutSignInReturnTo(query.returnTo)
-  if (await getActor()) redirect((returnTo ?? '/') as Route)
+  const actor = await getActor()
+  if (actor) {
+    const subjectDeletionNoticeForActor = verifySubjectDeletionNoticeReceiptForActor(
+      query.notice,
+      actor.userId,
+    )
+    const instanceResetNoticeForActor = verifyInstanceResetNoticeReceiptForActor(
+      query.notice,
+      actor.userId,
+    )
+    if (
+      subjectDeletionNoticeForActor?.kind === 'outcome-unknown' &&
+      subjectDeletionNoticeForActor.actorRole === actor.role
+    ) {
+      redirect(
+        `/settings/delete-account?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
+      )
+    }
+    if (
+      instanceResetNoticeForActor?.kind === 'outcome-unknown' &&
+      actor.role === 'owner'
+    ) {
+      redirect(
+        `/settings/delete?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
+      )
+    }
+    redirect((returnTo ?? '/') as Route)
+  }
 
   const contentModeLabel =
     getServerConfig().contentMode === 'development'
@@ -62,9 +103,28 @@ export default async function SignInPage({
           </p>
         ) : null}
 
-        {query.deleted === '1' ? (
+        {subjectDeletionNotice?.kind === 'deleted' &&
+        subjectDeletionNotice.actorRole === 'member' ? (
           <p className={styles.notice} role="status">
             Local account and subject-scoped training data deleted.
+            {subjectDeletionNotice.warning === 'cleanup-failed'
+              ? ' Database cleanup reported a warning after commit; do not repeat the deletion.'
+              : null}
+          </p>
+        ) : null}
+
+        {subjectDeletionNotice?.kind === 'outcome-unknown' &&
+        subjectDeletionNotice.actorRole === 'member' ? (
+          <p className={styles.notice} role="status">
+            Account deletion could not be confirmed. Do not resubmit it; sign in to check
+            whether the account still exists.
+          </p>
+        ) : null}
+
+        {instanceResetNotice?.kind === 'outcome-unknown' ? (
+          <p className={styles.notice} role="status">
+            Instance reset could not be confirmed. Do not resubmit it; sign in to check
+            whether this installation is still claimed.
           </p>
         ) : null}
 
@@ -80,6 +140,12 @@ export default async function SignInPage({
           </p>
         ) : null}
 
+        {query.signedOut === '1' ? (
+          <p className={styles.notice} role="status">
+            Signed out from this local account.
+          </p>
+        ) : null}
+
         {query.expired === '1' && returnTo ? (
           <p className={styles.notice} role="status">
             Your session ended. Sign in again to resume your saved workout.
@@ -91,7 +157,10 @@ export default async function SignInPage({
           <p>Sign in with the local account stored on this instance.</p>
         </header>
 
-        <SignInForm returnTo={returnTo ?? undefined} />
+        <SignInForm
+          actionBinding={installation.actionBinding}
+          returnTo={returnTo ?? undefined}
+        />
 
         <Disclosure className={styles.recoveryDisclosure} summary="Can't sign in?">
           <div className={styles.recoveryOptions}>

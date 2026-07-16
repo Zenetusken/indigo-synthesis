@@ -2,12 +2,20 @@
 
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
+import {
+  type CheckedSignOutActionBinding,
+  checkedSignOutActionBindingHeader,
+} from '../application/action-binding'
 import { authClient } from './auth-client'
 import styles from './identity-forms.module.css'
 
 const interruptedSignOutMessage = 'Sign-out did not complete. Try again.'
 
-export function SignOutButton() {
+export function SignOutButton({
+  actionBinding,
+}: {
+  readonly actionBinding: CheckedSignOutActionBinding
+}) {
   const router = useRouter()
   const errorRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -22,7 +30,16 @@ export function SignOutButton() {
     setError(null)
 
     try {
-      const result = await authClient.signOut()
+      const result = await authClient.signOut({
+        fetchOptions: {
+          headers: { [checkedSignOutActionBindingHeader]: actionBinding },
+        },
+      })
+      if (result.error?.status === 401) {
+        router.push('/sign-in')
+        router.refresh()
+        return
+      }
       if (result.error || result.data?.success !== true) {
         setError(interruptedSignOutMessage)
         return

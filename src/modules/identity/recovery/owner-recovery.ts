@@ -1,7 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { hashPassword } from 'better-auth/crypto'
 import { and, eq } from 'drizzle-orm'
-import { getServerConfig } from '@/platform/config/server'
 import { getDb } from '@/platform/db/client'
 import {
   account,
@@ -22,34 +21,24 @@ import {
   isWebRecoveryAttemptThrottled,
 } from '../infrastructure/web-recovery-rate-limit'
 import { credentialAuditContext, type WebCredentialContext } from './credential-context'
+import {
+  type IssuedOwnerRecovery,
+  OwnerRecoveryError,
+  type RedeemedOwnerRecovery,
+} from './owner-recovery-contract'
 import { normalizeRecoveryEmail, publicRecoveryFailure } from './recovery-policy'
+import {
+  ownerRecoveryIdentifier,
+  ownerRecoveryStoredValue,
+  ownerRecoveryStoredValueMatches,
+} from './recovery-preparation'
 
-const recoveryIdentifierPrefix = 'indigo:owner-recovery:'
-const recoveryValueVersion = 'owner-recovery-v1'
 const minimumTtlMinutes = 5
 const maximumTtlMinutes = 60
 const invalidPasswordHashInput = 'indigo-invalid-owner-recovery-password'
 
-export class OwnerRecoveryError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message)
-    this.name = 'OwnerRecoveryError'
-  }
-}
-
-export type IssuedOwnerRecovery = {
-  readonly recoveryId: string
-  readonly code: string
-  readonly expiresAt: Date
-}
-
-export type RedeemedOwnerRecovery = {
-  readonly ownerUserId: string
-  readonly revokedSessionCount: number
-}
+export type { IssuedOwnerRecovery, RedeemedOwnerRecovery }
+export { OwnerRecoveryError }
 
 export type RedeemOwnerRecoveryWebResult =
   | ({ readonly kind: 'redeemed' } & RedeemedOwnerRecovery)
@@ -86,41 +75,6 @@ function validateNewPassword(password: string): void {
       'The new password must contain 12 to 128 characters.',
     )
   }
-}
-
-function recoveryIdentifier(ownerUserId: string): string {
-  return `${recoveryIdentifierPrefix}${ownerUserId}`
-}
-
-function recoveryDigest(code: string): string {
-  return createHmac('sha256', getServerConfig().authSecret)
-    .update(`${recoveryValueVersion}\0${code}`, 'utf8')
-    .digest('hex')
-}
-
-function storedRecoveryValue(code: string): string {
-  return `${recoveryValueVersion}:${recoveryDigest(code)}`
-}
-
-function dummyCredentialDigest(): string {
-  return createHmac('sha256', getServerConfig().authSecret)
-    .update('credential-dummy-v1\0', 'utf8')
-    .digest('hex')
-}
-
-function codeMatchesStoredValue(code: string, storedValue: string): boolean {
-  const expectedPrefix = `${recoveryValueVersion}:`
-  const candidateHex = storedValue.startsWith(expectedPrefix)
-    ? storedValue.slice(expectedPrefix.length)
-    : ''
-  const hasValidExpectedDigest = /^[0-9a-f]{64}$/.test(candidateHex)
-  const expectedHex = hasValidExpectedDigest ? candidateHex : dummyCredentialDigest()
-  const actualHex = recoveryDigest(code)
-  const matches = timingSafeEqual(
-    Buffer.from(actualHex, 'hex'),
-    Buffer.from(expectedHex, 'hex'),
-  )
-  return hasValidExpectedDigest && matches
 }
 
 async function lockAndResolveOwner(
@@ -211,7 +165,7 @@ export async function issueOwnerRecovery(input: {
       getDb().transaction(
         async (transaction) => {
           const owner = await lockAndResolveOwner(transaction, ownerEmail)
-          const identifier = recoveryIdentifier(owner.id)
+          const identifier = ownerRecoveryIdentifier(owner.id)
           const recoveryId = newUuidV7()
 
           await transaction
@@ -220,7 +174,7 @@ export async function issueOwnerRecovery(input: {
           await transaction.insert(verification).values({
             id: recoveryId,
             identifier,
-            value: storedRecoveryValue(code),
+            value: ownerRecoveryStoredValue(code),
             expiresAt,
             createdAt: now,
             updatedAt: now,
@@ -281,7 +235,7 @@ export async function redeemOwnerRecovery(input: {
       getDb().transaction(
         async (transaction) => {
           const owner = await lockAndResolveOwner(transaction, ownerEmail)
-          const identifier = recoveryIdentifier(owner.id)
+          const identifier = ownerRecoveryIdentifier(owner.id)
           const [pending] = await transaction
             .select()
             .from(verification)
@@ -295,7 +249,7 @@ export async function redeemOwnerRecovery(input: {
             await transaction.delete(verification).where(eq(verification.id, pending.id))
             return { status: 'invalid' as const }
           }
-          if (!codeMatchesStoredValue(input.code, pending.value)) {
+          if (!ownerRecoveryStoredValueMatches(input.code, pending.value)) {
             return { status: 'invalid' as const }
           }
 
@@ -441,7 +395,7 @@ export async function redeemOwnerRecoveryWeb(input: {
             ? await transaction
                 .select()
                 .from(verification)
-                .where(eq(verification.identifier, recoveryIdentifier(owner.id)))
+                .where(eq(verification.identifier, ownerRecoveryIdentifier(owner.id)))
                 .for('update')
                 .limit(1)
             : []
@@ -456,7 +410,10 @@ export async function redeemOwnerRecoveryWeb(input: {
                 .limit(1)
             : []
 
-          const codeMatches = codeMatchesStoredValue(input.code, pending?.value ?? '')
+          const codeMatches = ownerRecoveryStoredValueMatches(
+            input.code,
+            pending?.value ?? '',
+          )
           const codeIsLive = pending !== undefined && pending.expiresAt > now
           if (
             ownerMatches &&

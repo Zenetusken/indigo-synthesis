@@ -11,7 +11,7 @@ import {
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { formatCalendarDate } from '@/modules/athletes/domain/time'
 import { formatLoad } from '@/modules/athletes/domain/units'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireUiActor } from '@/modules/identity/server/actor'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getTodayState } from '@/modules/training/application/workouts'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
@@ -51,7 +51,7 @@ export default async function TodayPage({
 }: {
   searchParams: Promise<{ error?: string; notice?: string }>
 }) {
-  const actor = await requireActor()
+  const actor = await requireUiActor()
   const profile = await getAthleteProfile(actor.userId)
   if (!profile) redirect('/setup')
 
@@ -68,7 +68,10 @@ export default async function TodayPage({
       : null
 
   return (
-    <ProductFrame current="today" accountActions={<SignOutButton />}>
+    <ProductFrame
+      current="today"
+      accountActions={<SignOutButton actionBinding={actor.checkedSignOutActionBinding} />}
+    >
       <div className={styles.content}>
         <PageHeading
           eyebrow="Today"

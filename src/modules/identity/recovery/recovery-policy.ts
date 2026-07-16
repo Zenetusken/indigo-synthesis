@@ -12,8 +12,8 @@ export const publicRecoveryFailure = {
   message: 'The email, code, or password was not accepted.',
 } as const
 
-export function normalizeRecoveryEmail(email: string): string {
-  const normalized = email.trim().toLowerCase()
+export function normalizeRecoveryEmail(email: unknown): string {
+  const normalized = typeof email === 'string' ? email.trim().toLowerCase() : ''
   return normalized.length >= 1 && normalized.length <= 320 ? normalized : 'invalid-email'
 }
 

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, pgTable, smallint, text, timestamp } from 'drizzle-orm/pg-core'
+import { check, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 import { user } from './auth'
 
 export const installationState = pgTable(
@@ -13,6 +13,7 @@ export const installationState = pgTable(
       withTimezone: true,
       mode: 'date',
     }),
+    productMutationEpoch: uuid('product_mutation_epoch').defaultRandom().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),

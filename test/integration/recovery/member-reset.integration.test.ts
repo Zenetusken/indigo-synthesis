@@ -1,17 +1,28 @@
 import { createHmac } from 'node:crypto'
 import { and, count, eq, sql } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { AuthenticatedActor } from '@/modules/identity/application/actor'
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+} from '@/composition/identity-bootstrap-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
+import type { AuthenticatedActor } from '@/modules/identity/application/actor'
+import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import {
   createLocalUserAsOwner,
   createLocalUserWithOwnerReauthentication,
 } from '@/modules/identity/infrastructure/local-users'
+import {
+  captureMemberResetRedemption,
+  recheckMemberResetRedemption,
+} from '@/modules/identity/infrastructure/recovery-mutation'
+import { createScopedMemberResetRedemptionMutationGateway } from '@/modules/identity/infrastructure/scoped-browser-recovery'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   admitWebRecoveryAttempt,
   isWebRecoveryAttemptThrottled,
@@ -21,9 +32,21 @@ import {
   type MemberResetError,
   redeemMemberReset,
 } from '@/modules/identity/recovery/member-reset'
+import {
+  memberResetCodeIdentity,
+  parseMemberResetRedemptionInput,
+} from '@/modules/identity/recovery/recovery-preparation'
 import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from '@/modules/identity/server/auth-mutation-port'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
+import {
+  withSubmittedEmailCredentialCapture,
+  withSubmittedEmailCredentialControl,
+} from '@/platform/db/credential-connections'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -31,6 +54,7 @@ import {
 import { migrateDatabase } from '@/platform/db/migrate'
 import {
   auditEvents,
+  installationState,
   memberResetStates,
   session,
   user,
@@ -69,7 +93,7 @@ async function waitForBlockedCredentialLock(): Promise<void> {
       )::integer AS waiting
       FROM pg_stat_activity
       WHERE datname = current_database()
-        AND application_name = 'indigo-credential-lifecycle'
+        AND application_name = 'indigo-synthesis:control'
     `)
     if (Number(result.rows[0]?.waiting ?? 0) >= 1) return
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -87,7 +111,39 @@ function createSignInRequest(email: string, password: string): Request {
 }
 
 async function signIn(email: string, password: string): Promise<Response> {
-  return handleAuthPost(createSignInRequest(email, password))
+  const request = createSignInRequest(email, password)
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!installation) throw new Error('Sign-in installation fixture is missing.')
+  request.headers.set(
+    identityActionBindingHeader,
+    issueEmailSignInActionBinding({ expectedEpoch: installation.epoch }),
+  )
+  return handleAuthPost(request, getProductionIdentityAuthMutationPort())
+}
+
+function serializedProviderPort(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) => {
+      const { credentialEmail, providerRequest } = emailSignInMutationCommandView(command)
+      return withSubmittedEmailCredentialLifecycleLocks({
+        email: credentialEmail,
+        resolveAccountUserIds: async () => {
+          const records = await getDb()
+            .select({ id: user.id })
+            .from(user)
+            .where(sql`lower(${user.email}) = ${credentialEmail}`)
+          return records.map(({ id }) => id)
+        },
+        callback: () => handler(providerRequest),
+      })
+    },
+    checkedSignOut: ({ request }) => handler(request),
+  }
 }
 
 function normalizedQueryText(query: unknown): string {
@@ -240,11 +296,11 @@ describe.sequential('owner-mediated member credential reset', () => {
     const releaseSignIn = deferred<void>()
     const signInProbe = handleAuthRequest(
       createSignInRequest(createdEmail, 'reauthenticated-user-password'),
-      async () => {
+      serializedProviderPort(async () => {
         signInEntered.resolve(undefined)
         await releaseSignIn.promise
         return Response.json({ rejected: true }, { status: 401 })
-      },
+      }),
     )
     await signInEntered.promise
 
@@ -595,9 +651,11 @@ describe.sequential('owner-mediated member credential reset', () => {
     const releaseSignIn = deferred<void>()
     const signInPromise = handleAuthRequest(
       createSignInRequest(member.email, originalMemberPassword),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignIn.promise
           return response
@@ -605,7 +663,7 @@ describe.sequential('owner-mediated member credential reset', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
     const secondSession = await signInHandled.promise
     expect(firstSession.status).toBe(200)
@@ -676,5 +734,162 @@ describe.sequential('owner-mediated member credential reset', () => {
     expect(serialized).not.toContain(originalMemberPassword)
     expect(serialized).not.toContain(replacementMemberPassword)
     expect(serialized).not.toContain(requestContext.clientAddress)
+  })
+
+  it('clears the active reset FK before consuming its verification in the scoped gateway', async () => {
+    const scopedMember = await createLocalUserAsOwner(owner, {
+      name: 'Scoped FK Member',
+      email: 'scoped-fk-member@example.test',
+      password: 'scoped-fk-original-password',
+    })
+    const issuedAt = new Date('2026-07-15T16:00:00.000Z')
+    const issued = await issueMemberReset({
+      actor: owner,
+      targetUserId: scopedMember.id,
+      currentPassword: ownerPassword,
+      requestContext,
+      now: issuedAt,
+    })
+    const commandEnteredAt = new Date(issuedAt.getTime() + 1)
+    const parsed = parseMemberResetRedemptionInput({
+      email: scopedMember.email,
+      code: issued.code,
+      newPassword: 'scoped-fk-replacement-password',
+    })
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const capture = await withSubmittedEmailCredentialCapture((query) =>
+      captureMemberResetRedemption(query, {
+        normalizedEmail: parsed.normalizedEmail,
+        codeIdentity: memberResetCodeIdentity(parsed.submittedCode),
+        commandEnteredAt,
+      }),
+    )
+
+    const outcome = await withSubmittedEmailCredentialControl(async (connection) => {
+      await connection.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+      try {
+        const recheck = await recheckMemberResetRedemption(connection, capture)
+        if (recheck.status === 'stale') {
+          throw new Error(`Unexpected scoped recovery drift: ${recheck.reason}`)
+        }
+        const gateway = createScopedMemberResetRedemptionMutationGateway(
+          drizzle(connection as never),
+          capture,
+        )
+        const result = await gateway.redeem({
+          parsed,
+          commandEnteredAt,
+          requestContext,
+        })
+        await connection.query('COMMIT')
+        return result
+      } catch (error) {
+        await connection.query('ROLLBACK').catch(() => undefined)
+        throw error
+      }
+    })
+
+    expect(outcome).toMatchObject({
+      kind: 'redeemed',
+      targetUserId: scopedMember.id,
+    })
+    const [state] = await getDb()
+      .select({ activeVerificationId: memberResetStates.activeVerificationId })
+      .from(memberResetStates)
+      .where(eq(memberResetStates.targetUserId, scopedMember.id))
+    const [pending] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, issued.resetId))
+    expect(state?.activeVerificationId).toBeNull()
+    expect(pending).toBeUndefined()
+    expect((await signIn(scopedMember.email, 'scoped-fk-original-password')).ok).toBe(
+      false,
+    )
+    expect(
+      (await signIn(scopedMember.email, 'scoped-fk-replacement-password')).status,
+    ).toBe(200)
+  })
+
+  it('atomically clears and consumes an expired scoped reset without replacing the password', async () => {
+    const expiredMember = await createLocalUserAsOwner(owner, {
+      name: 'Scoped Expired Member',
+      email: 'scoped-expired-member@example.test',
+      password: 'scoped-expired-original-password',
+    })
+    const issuedAt = new Date('2026-07-15T17:00:00.000Z')
+    const issued = await issueMemberReset({
+      actor: owner,
+      targetUserId: expiredMember.id,
+      currentPassword: ownerPassword,
+      requestContext,
+      now: issuedAt,
+    })
+    const commandEnteredAt = new Date(issued.expiresAt.getTime())
+    const parsed = parseMemberResetRedemptionInput({
+      email: expiredMember.email,
+      code: issued.code,
+      newPassword: 'scoped-expired-replacement-password',
+    })
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    const capture = await withSubmittedEmailCredentialCapture((query) =>
+      captureMemberResetRedemption(query, {
+        normalizedEmail: parsed.normalizedEmail,
+        codeIdentity: memberResetCodeIdentity(parsed.submittedCode),
+        commandEnteredAt,
+      }),
+    )
+
+    const outcome = await withSubmittedEmailCredentialControl(async (connection) => {
+      await connection.query('BEGIN ISOLATION LEVEL SERIALIZABLE')
+      try {
+        const recheck = await recheckMemberResetRedemption(connection, capture)
+        if (recheck.status === 'stale') {
+          throw new Error(`Unexpected scoped recovery drift: ${recheck.reason}`)
+        }
+        const gateway = createScopedMemberResetRedemptionMutationGateway(
+          drizzle(connection as never),
+          capture,
+        )
+        const result = await gateway.redeem({
+          parsed,
+          commandEnteredAt,
+          requestContext,
+        })
+        await connection.query('COMMIT')
+        return result
+      } catch (error) {
+        await connection.query('ROLLBACK').catch(() => undefined)
+        throw error
+      }
+    })
+
+    expect(outcome).toEqual({ kind: 'rejected', persistence: 'committed' })
+    const [state] = await getDb()
+      .select({
+        activeVerificationId: memberResetStates.activeVerificationId,
+        failedAttempts: memberResetStates.failedAttempts,
+        lastAttemptAt: memberResetStates.lastAttemptAt,
+        retryAfter: memberResetStates.retryAfter,
+      })
+      .from(memberResetStates)
+      .where(eq(memberResetStates.targetUserId, expiredMember.id))
+    const [pending] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, issued.resetId))
+    expect(state).toEqual({
+      activeVerificationId: null,
+      failedAttempts: 0,
+      lastAttemptAt: null,
+      retryAfter: null,
+    })
+    expect(pending).toBeUndefined()
+    expect(
+      (await signIn(expiredMember.email, 'scoped-expired-original-password')).status,
+    ).toBe(200)
+    expect(
+      (await signIn(expiredMember.email, 'scoped-expired-replacement-password')).ok,
+    ).toBe(false)
   })
 })

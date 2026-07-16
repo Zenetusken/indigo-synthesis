@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test'
-import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import {
   type ExecutablePrescriptionProjection,
   executablePrescriptionHash,
@@ -13,6 +12,7 @@ import {
   databaseClient,
   expectNoHorizontalOverflow,
   generateAndActivate,
+  issueE2eOwnerBootstrap,
   e2eOwner as owner,
   todayIso,
 } from './support/journey'
@@ -257,7 +257,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
       }[]
     }[]
   }
-  expect(archive.manifest.schemaVersion).toBe('1.5.0-development')
+  expect(archive.manifest.schemaVersion).toBe('1.6.0-development')
   expect(archive.manifest.omissions.length).toBeGreaterThan(0)
   expect(archive.programs).toHaveLength(1)
   expect(archive.programs[0]?.revisions).toHaveLength(2)
@@ -325,7 +325,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     .check()
   await page.getByRole('button', { name: 'Reset instance' }).click()
 
-  await expect(page).toHaveURL(/\/bootstrap\?reset=complete/)
+  await expect(page).toHaveURL(/\/bootstrap\?notice=dpnr2\.instance-reset\.reset\.none\./)
   await expect(
     page.getByText('Instance reset. Create a new owner to begin again.'),
   ).toBeVisible()
@@ -382,12 +382,19 @@ test('owner deletes only trainee data and keeps installation login continuity', 
   await page.getByLabel('I understand that my training data cannot be recovered.').check()
   await page.getByRole('button', { name: 'Delete my training data' }).click()
 
-  await expect(page).toHaveURL(/\/settings\?training-data-deleted=1/)
+  await expect(page).toHaveURL(
+    /\/settings\?notice=dpnr2\.subject-deletion\.deleted\.owner\./,
+  )
   await expect(
     page.getByRole('heading', { name: 'Your instance and data.' }),
   ).toBeVisible()
   await expect(page.getByText(owner.email).first()).toBeVisible()
   await expect(page.getByText('retained-browser-member@example.test')).toBeVisible()
+  await expect(
+    page.getByText(
+      'Your training data was deleted. Your owner account and this installation remain available.',
+    ),
+  ).toBeVisible()
 
   const client = await databaseClient()
   try {
@@ -858,7 +865,9 @@ test('a second local user cannot read the owner workout or export', async ({ pag
   await page.getByLabel('Type DELETE').fill('DELETE')
   await page.getByLabel('I understand that my local account cannot be recovered.').check()
   await page.getByRole('button', { name: 'Delete my account' }).click()
-  await expect(page).toHaveURL(/\/sign-in\?deleted=1/)
+  await expect(page).toHaveURL(
+    /\/sign-in\?notice=dpnr2\.subject-deletion\.deleted\.member\./,
+  )
   await expect(
     page.getByText('Local account and subject-scoped training data deleted.'),
   ).toBeVisible()
@@ -1043,7 +1052,7 @@ test('the core workout reflows and remains keyboard-operable on mobile', async (
   await page.emulateMedia({ reducedMotion: 'reduce' })
 
   const titles = new Set<string>()
-  const mobileBootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const mobileBootstrap = await issueE2eOwnerBootstrap()
   await closeDb()
 
   await page.goto('/')

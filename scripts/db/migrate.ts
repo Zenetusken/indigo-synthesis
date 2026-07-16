@@ -1,9 +1,4 @@
-import { closeDb } from '../../src/platform/db/client'
-import { migrateDatabase } from '../../src/platform/db/migrate'
+import { migrateDatabaseFromHostCli } from '../../src/platform/db/host-migrate'
 
-try {
-  await migrateDatabase()
-  process.stdout.write('Database migrations are current.\n')
-} finally {
-  await closeDb()
-}
+await migrateDatabaseFromHostCli()
+process.stdout.write('Database migrations are current.\n')

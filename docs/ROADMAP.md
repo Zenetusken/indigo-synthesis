@@ -12,8 +12,9 @@ That fixture is visibly unreviewed and configuration rejects it in production.
 
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
 reviewed content and golden examples, independent WCAG/screen-reader and physical-device
-review, schema/table-ownership enforcement, and independent product/security/privacy
-review. The committed 19-test tree has retained outbound-network-denied proof; that proof
+review, completion of accepted schema-ownership Part B (the Part A write fence shipped in #9),
+and independent product/security/privacy review. The committed 19-test tree has current
+[outbound-network-denied proof](operations/evidence/2026-07-16-outbound-network-blocked.md); that proof
 must be rerun after relevant code or default-suite changes. Targeted automated
 accessibility/mobile checks already pass; they are not a conformance claim. Current
 traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
@@ -46,10 +47,22 @@ Implemented checkpoint:
 Gate status: the baseline J7–J9 engineering slice and its specified hardening are
 implemented. The complete 19-test default Playwright selection, including all four new
 access/recovery cases, passed from committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c` with outbound network denied. The separately
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6` with outbound network denied. The separately
 named Account security follow-on—session management plus a security-events view and
 sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
 for independent security/privacy review.
+
+Calibration Part B Stage 3 is complete through `6117fbe`. Its bounded
+ordinary/control/trusted-capture/external-host allocation is live, configured by
+`INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64), with no unused runtime-health lane.
+Migration, observational startup preflight, bootstrap, recovery, and maintenance share
+the serialized external slot and never construct application pools. Data Portability subject
+export and protected destructive execution now use scoped temporary Stage 3 UoW adapters with
+transactional Identity rechecks; actor-bound result notices preserve truthful UI outcomes across
+redirects. The ownership scanner and cumulative review gates are green, and the current
+network-denied record exercises this topology. Stage 4 calibration/loadability persistence is next;
+public owner ports, operator retirement, peer-read/private-import guards, and O6 remain later Part B
+work.
 
 ## Gate 0 — Product truth
 
@@ -92,10 +105,11 @@ Gate:
 - all checks green.
 
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
-configuration validation, local assets, and executable module-boundary guards are
-implemented. A no-default-route namespace runner has passed the complete 19-test tree
-from a clean product commit; schema/table-ownership enforcement remains open release
-work.
+configuration validation, local assets, executable module-boundary guards, and the Part A
+schema write-authority fence are implemented. A no-default-route namespace runner has passed the
+complete 19-test tree from a clean product commit. The shared Stage 3 `UnitOfWork` is live; accepted
+Part B public owner ports, co-write/operator retirement, read/private-import boundaries, and O6
+convergence remain open release work.
 
 ## Phase 2 — First vertical slice
 
@@ -141,7 +155,9 @@ Only after Phase 2:
 - PR definitions and source sets;
 - mathematically defined volume;
 - schedule-aware weekly adherence;
-- trainee entry and review of audited completed-set corrections;
+- broad/open-ended trainee review, bulk editing, and management of audited completed-set
+  corrections (the calibration arc's exact-source one-set recovery is the narrower prerequisite,
+  not this Phase 3 experience);
 - program revision history and comparison; and
 - clearer explanation/source inspection (optional host-local grounded prose per
   [ADR 0006](architecture/adr/0006-optional-local-grounded-language.md), only after the
@@ -156,9 +172,11 @@ Gate:
 
 Checkpoint: the append-only completed-set correction ledger/projection, completion-feedback
 entry, recursive decision/revision invalidation, factual History correction provenance,
-and optional host-local History explanations are implemented. Trainee completed-set
-correction entry, exercise-specific aggregates, e1RM/PR/volume/adherence definitions, and
-program comparison remain open, so Phase 3 is not closed.
+and optional host-local History explanations are implemented. The accepted calibration engineering
+roadmap plans—but has not yet shipped—the narrow source-linked one-set History editor required to
+recover an exact invalid/incorrect calibration fact in Stage 8. Broad/open-ended or bulk correction
+management, exercise-specific aggregates, e1RM/PR/volume/adherence definitions, and program
+comparison remain Phase 3 work, so Phase 3 is not closed.
 
 ## Phase 4 — Small private beta
 
@@ -182,11 +200,15 @@ Success measures:
 - explanation comprehension; and
 - successful export/restore.
 
-Checkpoint: a guarded PostgreSQL logical backup/restore runbook and disposable-instance
-drill are implemented and exercised, including restored preflight and append-only trigger
-proof. Phase 4 still requires the second-person cold install, encrypted off-host
-retention/restore exercise, deployment-specific secret custody, and any future media
-boundary; repository-local technical proof cannot stand in for those operator checks.
+Checkpoint: a guarded PostgreSQL logical backup/restore runbook and test-only
+disposable-instance drill are implemented and exercised, including restored preflight
+and append-only trigger proof. The latest
+[retained drill](operations/evidence/2026-07-16-backup-restore-drill.md) covers all 19
+committed migrations at the serialized preflight/migration checkpoint. It proves restore
+invariants, not the production one-shot topology. Phase 4 still requires the
+second-person cold install, encrypted off-host retention/restore exercise,
+deployment-specific secret custody, and any future media boundary; repository-local
+technical proof cannot stand in for those operator checks.
 
 Screen time, notification opens, points, and social engagement are not success measures.
 

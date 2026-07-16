@@ -1,8 +1,14 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { requireActor } from '@/modules/identity/server/actor'
+import { verifySubjectDeletionNoticeReceiptForActor } from '@/modules/data-portability/server/destructive-notice'
+import {
+  issueLocalUserCreationFormEnvelope,
+  issueMemberResetIssuanceFormEnvelope,
+  requireUiActor,
+} from '@/modules/identity/server/actor'
 import { listLocalUsersAsOwner } from '@/modules/identity/server/local-users'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { pluralize } from '@/platform/format/plural'
@@ -13,21 +19,84 @@ import styles from './settings.module.css'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Settings' }
 
-export default async function SettingsPage() {
-  const actor = await requireActor()
-  const [profile, localUsers] = await Promise.all([
+type SettingsSearchParams = {
+  notice?: string
+}
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<SettingsSearchParams>
+}) {
+  const actor = await requireUiActor()
+  const [profile, localUsers, query] = await Promise.all([
     getAthleteProfile(actor.userId),
     actor.role === 'owner' ? listLocalUsersAsOwner(actor) : Promise.resolve([]),
+    searchParams ?? Promise.resolve<SettingsSearchParams>({}),
   ])
+  const formIssuedAt = new Date()
+  const localUserCreationForm =
+    actor.role === 'owner'
+      ? issueLocalUserCreationFormEnvelope(
+          actor.authenticatedActionEnvelope,
+          formIssuedAt,
+        )
+      : null
+  if (actor.role === 'owner' && !localUserCreationForm) redirect('/sign-in')
+  const memberResetForms = new Map(
+    actor.role === 'owner'
+      ? localUsers
+          .filter((localUser) => localUser.id !== actor.userId)
+          .map((localUser) => {
+            const envelope = issueMemberResetIssuanceFormEnvelope(
+              actor.authenticatedActionEnvelope,
+              localUser.id,
+              formIssuedAt,
+            )
+            if (!envelope) redirect('/sign-in')
+            return [localUser.id, envelope] as const
+          })
+      : [],
+  )
+  const memberResetFormFor = (targetUserId: string) => {
+    const envelope = memberResetForms.get(targetUserId)
+    if (!envelope) {
+      throw new TypeError('A rendered member reset target has no action envelope.')
+    }
+    return envelope
+  }
+  const deletionNotice = verifySubjectDeletionNoticeReceiptForActor(
+    query.notice,
+    actor.userId,
+  )
+  const confirmedOwnerDeletion =
+    actor.role === 'owner' &&
+    deletionNotice?.kind === 'deleted' &&
+    deletionNotice.actorRole === 'owner'
+      ? deletionNotice
+      : null
 
   return (
-    <ProductFrame current="settings" accountActions={<SignOutButton />}>
+    <ProductFrame
+      current="settings"
+      accountActions={<SignOutButton actionBinding={actor.checkedSignOutActionBinding} />}
+    >
       <div className={styles.content}>
         <PageHeading
           eyebrow="Settings"
           title="Your instance and data."
           description="Account, export, and deletion controls remain local to this installation."
         />
+
+        {confirmedOwnerDeletion ? (
+          <div className={styles.success} role="status">
+            Your training data was deleted. Your owner account and this installation
+            remain available.
+            {confirmedOwnerDeletion.warning === 'cleanup-failed'
+              ? ' Database cleanup reported a warning after commit; do not repeat the deletion.'
+              : null}
+          </div>
+        ) : null}
 
         <section className={styles.section}>
           <h2>Account</h2>
@@ -72,8 +141,8 @@ export default async function SettingsPage() {
                     </div>
                     {localUser.id !== actor.userId ? (
                       <MemberResetForm
-                        targetUserId={localUser.id}
                         targetName={localUser.name}
+                        {...memberResetFormFor(localUser.id)}
                       />
                     ) : null}
                   </li>
@@ -82,7 +151,7 @@ export default async function SettingsPage() {
             ) : (
               <p>No additional local users yet.</p>
             )}
-            <LocalUserForm />
+            {localUserCreationForm ? <LocalUserForm {...localUserCreationForm} /> : null}
           </section>
         ) : null}
 

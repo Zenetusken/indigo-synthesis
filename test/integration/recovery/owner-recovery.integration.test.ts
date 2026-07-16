@@ -5,18 +5,28 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { and, count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { getProductionIdentityAuthMutationPort } from '@/composition/identity-auth-mutations'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
-import { getAuth, resetAuthForTests } from '@/modules/identity/infrastructure/auth'
-import { admitWebRecoveryAttempt } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
+} from '@/composition/identity-bootstrap-mutations'
 import {
   issueOwnerRecovery,
   redeemOwnerRecovery,
-  redeemOwnerRecoveryWeb,
-} from '@/modules/identity/recovery/owner-recovery'
+} from '@/composition/identity-host-recovery-mutations'
+import { identityActionBindingHeader } from '@/modules/identity/application/action-binding'
+import { issueEmailSignInActionBinding } from '@/modules/identity/infrastructure/action-binding'
+import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
+import { withSubmittedEmailCredentialLifecycleLocks } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
+import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
+import { admitWebRecoveryAttempt } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
+import { redeemOwnerRecoveryWeb } from '@/modules/identity/recovery/owner-recovery'
 import { handleAuthPost, handleAuthRequest } from '@/modules/identity/server/auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from '@/modules/identity/server/auth-mutation-port'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb, getDb } from '@/platform/db/client'
 import {
@@ -25,12 +35,15 @@ import {
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
 import {
+  account,
   auditEvents,
+  installationState,
   session,
   user,
   verification,
   webRecoveryRateLimitBuckets,
 } from '@/platform/db/schema'
+import { newUuidV7 } from '@/platform/ids/uuid-v7'
 
 const execFile = promisify(execFileCallback)
 const owner = {
@@ -44,6 +57,10 @@ const owner = {
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let ownerUserId: string
 let secretsDirectory: string
+let sentinelCredentialId: string
+let sentinelCredentialPassword: string | null
+let sentinelSessionId: string
+let sentinelVerificationId: string
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -64,7 +81,10 @@ async function waitForBlockedCredentialLock(): Promise<void> {
       )::integer AS waiting
       FROM pg_stat_activity
       WHERE datname = current_database()
-        AND application_name = 'indigo-credential-lifecycle'
+        AND application_name IN (
+          'indigo-synthesis:control',
+          'indigo-synthesis:external-host'
+        )
     `)
     if (Number(result.rows[0]?.waiting ?? 0) >= 1) return
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -76,7 +96,39 @@ async function authRequest(
   path: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
-  return handleAuthPost(createAuthRequest(path, body))
+  const request = createAuthRequest(path, body)
+  const [installation] = await getDb()
+    .select({ epoch: installationState.productMutationEpoch })
+    .from(installationState)
+    .where(eq(installationState.singleton, 1))
+  if (!installation) throw new Error('Sign-in installation fixture is missing.')
+  request.headers.set(
+    identityActionBindingHeader,
+    issueEmailSignInActionBinding({ expectedEpoch: installation.epoch }),
+  )
+  return handleAuthPost(request, getProductionIdentityAuthMutationPort())
+}
+
+function serializedProviderPort(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) => {
+      const { credentialEmail, providerRequest } = emailSignInMutationCommandView(command)
+      return withSubmittedEmailCredentialLifecycleLocks({
+        email: credentialEmail,
+        resolveAccountUserIds: async () => {
+          const records = await getDb()
+            .select({ id: user.id })
+            .from(user)
+            .where(sql`lower(${user.email}) = ${credentialEmail}`)
+          return records.map(({ id }) => id)
+        },
+        callback: () => handler(providerRequest),
+      })
+    },
+    checkedSignOut: ({ request }) => handler(request),
+  }
 }
 
 function createAuthRequest(path: string, body: Record<string, unknown>): Request {
@@ -90,12 +142,24 @@ function createAuthRequest(path: string, body: Record<string, unknown>): Request
 
 async function runRecoveryCli(arguments_: readonly string[]) {
   return execFile(
-    process.execPath,
-    ['--import', 'tsx', 'scripts/identity/recover-owner.ts', ...arguments_],
+    'bash',
+    [
+      'scripts/run-external-host-command.sh',
+      'scripts/identity/recover-owner.ts',
+      ...arguments_,
+    ],
     {
       cwd: process.cwd(),
       env: process.env,
     },
+  )
+}
+
+async function runRecoveryCliWithoutWrapper(arguments_: readonly string[]) {
+  return execFile(
+    process.execPath,
+    ['--import', 'tsx', 'scripts/identity/recover-owner.ts', ...arguments_],
+    { cwd: process.cwd(), env: process.env },
   )
 }
 
@@ -120,11 +184,56 @@ beforeAll(async () => {
   })
   ownerUserId = createdOwner.id
 
+  const sentinelMember = await createLocalUserAsOwner(
+    {
+      userId: ownerUserId,
+      email: owner.email,
+      name: owner.name,
+      role: 'owner',
+    },
+    {
+      name: 'Recovery Sentinel',
+      email: 'recovery-sentinel@example.test',
+      password: 'recovery-sentinel-password',
+    },
+  )
+  const [sentinelCredential] = await getDb()
+    .select({ id: account.id, password: account.password })
+    .from(account)
+    .where(eq(account.userId, sentinelMember.id))
+  if (!sentinelCredential) throw new Error('Sentinel credential fixture is missing.')
+  sentinelCredentialId = sentinelCredential.id
+  sentinelCredentialPassword = sentinelCredential.password
+  sentinelSessionId = newUuidV7()
+  sentinelVerificationId = newUuidV7()
+  const sentinelNow = new Date()
+  await getDb()
+    .insert(session)
+    .values({
+      id: sentinelSessionId,
+      token: `sentinel-${sentinelSessionId}`,
+      userId: sentinelMember.id,
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      createdAt: sentinelNow,
+      updatedAt: sentinelNow,
+    })
+  await getDb()
+    .insert(verification)
+    .values({
+      id: sentinelVerificationId,
+      identifier: `indigo:unrelated:${sentinelMember.id}`,
+      value: 'unrelated-verification-value',
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      createdAt: sentinelNow,
+      updatedAt: sentinelNow,
+    })
+
   secretsDirectory = await mkdtemp(join(tmpdir(), 'indigo-owner-recovery-'))
   await chmod(secretsDirectory, 0o700)
 })
 
 beforeEach(async () => {
+  resetAuthForTests()
   await getDb().delete(webRecoveryRateLimitBuckets)
 })
 
@@ -138,6 +247,96 @@ afterAll(async () => {
 })
 
 describe('host-local owner recovery', () => {
+  it('refuses direct CLI invocation that bypasses the common external-host lock', async () => {
+    const codeFile = join(secretsDirectory, 'unguarded-owner-recovery-code')
+    const [before] = await getDb().select({ value: count() }).from(verification)
+
+    await expect(
+      runRecoveryCliWithoutWrapper([
+        'issue',
+        '--owner-email',
+        owner.email,
+        '--code-file',
+        codeFile,
+        '--ttl-minutes',
+        '15',
+      ]),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining('run-external-host-command.sh'),
+    })
+
+    await expect(stat(codeFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    const [after] = await getDb().select({ value: count() }).from(verification)
+    expect(after?.value).toBe(before?.value)
+  })
+
+  it('reports a committed CLI denial without consuming or printing secrets', async () => {
+    const issued = await issueOwnerRecovery({
+      ownerEmail: owner.email,
+      ttlMinutes: 15,
+    })
+    const wrongCode = `${issued.code}-wrong`
+    const codeFile = join(secretsDirectory, 'rejected-owner-recovery-code')
+    const passwordFile = join(secretsDirectory, 'rejected-owner-recovery-password')
+    await Promise.all([
+      writeFile(codeFile, `${wrongCode}\n`, { mode: 0o600 }),
+      writeFile(passwordFile, `${owner.recoveredPassword}\n`, { mode: 0o600 }),
+    ])
+
+    let rejection: unknown
+    try {
+      await runRecoveryCli([
+        'redeem',
+        '--owner-email',
+        owner.email,
+        '--code-file',
+        codeFile,
+        '--password-file',
+        passwordFile,
+      ])
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toMatchObject({
+      code: 1,
+      stdout: '',
+      stderr: expect.stringContaining(
+        'Owner recovery failed (owner-recovery.code-invalid): The recovery code is invalid or expired.',
+      ),
+    })
+    const serialized = JSON.stringify(rejection)
+    expect(serialized).not.toContain(wrongCode)
+    expect(serialized).not.toContain(owner.recoveredPassword)
+    expect((await readFile(codeFile, 'utf8')).trim()).toBe(wrongCode)
+    const [pending] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, issued.recoveryId))
+    expect(pending?.id).toBe(issued.recoveryId)
+    const committedRejections = await getDb()
+      .select({
+        subjectUserId: auditEvents.subjectUserId,
+        entityId: auditEvents.entityId,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.eventType, 'owner-recovery-rejected'),
+          eq(auditEvents.entityId, issued.recoveryId),
+        ),
+      )
+    expect(committedRejections).toEqual([
+      {
+        subjectUserId: ownerUserId,
+        entityId: issued.recoveryId,
+        metadata: { channel: 'host-local-cli', outcome: 'rejected' },
+      },
+    ])
+    await getDb().delete(verification).where(eq(verification.id, issued.recoveryId))
+  })
+
   it('commits one redacted host audit when owner-recovery issuance is rejected', async () => {
     const [before] = await getDb()
       .select({ value: count() })
@@ -243,9 +442,11 @@ describe('host-local owner recovery', () => {
         email: owner.email,
         password: owner.originalPassword,
       }),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignInLock.promise
           return response
@@ -253,7 +454,7 @@ describe('host-local owner recovery', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
     const signInResponse = await signInHandled.promise
     expect(signInResponse.status).toBe(200)
@@ -314,7 +515,7 @@ describe('host-local owner recovery', () => {
       })
       .from(auditEvents)
       .where(eq(auditEvents.eventType, 'owner-recovery-rejected'))
-    expect(pendingCount?.value).toBe(0)
+    expect(pendingCount?.value).toBe(1)
     expect(rejected).toHaveLength(Number(rejectionsBefore?.value ?? 0) + 1)
     expect(rejected.at(-1)).toEqual({
       subjectUserId: ownerUserId,
@@ -345,9 +546,11 @@ describe('host-local owner recovery', () => {
         email: owner.email,
         password: owner.originalPassword,
       }),
-      async (request) => {
+      serializedProviderPort(async (request) => {
         try {
-          const response = await getAuth().handler(request)
+          const response = await createScopedIdentityMutationGateway(getDb()).signInEmail(
+            request,
+          )
           signInHandled.resolve(response)
           await releaseSignInLock.promise
           return response
@@ -355,7 +558,7 @@ describe('host-local owner recovery', () => {
           signInHandled.reject(error)
           throw error
         }
-      },
+      }),
     )
 
     const signInResponse = await signInHandled.promise
@@ -432,6 +635,7 @@ describe('host-local owner recovery', () => {
     const [stored] = await getDb()
       .select({ value: verification.value })
       .from(verification)
+      .where(eq(verification.identifier, `indigo:owner-recovery:${ownerUserId}`))
     expect(stored?.value).not.toContain(code)
 
     await expect(
@@ -471,7 +675,26 @@ describe('host-local owner recovery', () => {
       .where(eq(session.userId, ownerUserId))
     const [pendingAfter] = await getDb().select({ value: count() }).from(verification)
     expect(sessionsAfter?.value).toBe(0)
-    expect(pendingAfter?.value).toBe(0)
+    expect(pendingAfter?.value).toBe(1)
+
+    const [sentinelCredentialAfter] = await getDb()
+      .select({ id: account.id, password: account.password })
+      .from(account)
+      .where(eq(account.id, sentinelCredentialId))
+    const [sentinelSessionAfter] = await getDb()
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.id, sentinelSessionId))
+    const [sentinelVerificationAfter] = await getDb()
+      .select({ id: verification.id })
+      .from(verification)
+      .where(eq(verification.id, sentinelVerificationId))
+    expect(sentinelCredentialAfter).toEqual({
+      id: sentinelCredentialId,
+      password: sentinelCredentialPassword,
+    })
+    expect(sentinelSessionAfter?.id).toBe(sentinelSessionId)
+    expect(sentinelVerificationAfter?.id).toBe(sentinelVerificationId)
 
     const originalCredential = await authRequest('/sign-in/email', {
       email: owner.email,

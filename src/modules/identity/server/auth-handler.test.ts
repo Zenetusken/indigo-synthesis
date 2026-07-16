@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetServerConfigForTests } from '@/platform/config/server'
-import { handleAuthRequest } from './auth-handler'
+import { handleAuthGet, handleAuthRequest } from './auth-handler'
+import {
+  emailSignInMutationCommandView,
+  type IdentityAuthMutationPort,
+} from './auth-mutation-port'
 
 const managedEnvironmentKeys = [
   'DATABASE_URL',
@@ -28,6 +32,16 @@ function setEnvironment(nodeEnvironment: 'development' | 'production'): void {
   resetServerConfigForTests()
 }
 
+function mutations(
+  handler: (request: Request) => Promise<Response>,
+): IdentityAuthMutationPort {
+  return {
+    emailSignIn: (command) =>
+      handler(emailSignInMutationCommandView(command).providerRequest),
+    checkedSignOut: ({ request }) => handler(request),
+  }
+}
+
 afterEach(() => {
   for (const key of managedEnvironmentKeys) {
     const value = originalEnvironment[key]
@@ -46,7 +60,7 @@ describe('authentication request trust boundary', () => {
       new Request('https://training.example.test/api/auth/sign-out', {
         method: 'POST',
       }),
-      handler,
+      mutations(handler),
     )
 
     expect(response.status).toBe(400)
@@ -65,7 +79,7 @@ describe('authentication request trust boundary', () => {
       headers: { 'x-forwarded-for': '198.51.100.8, 127.0.0.1' },
     })
 
-    const response = await handleAuthRequest(request, handler)
+    const response = await handleAuthRequest(request, mutations(handler))
 
     expect(await response.text()).toBe('handled')
     expect(handler).toHaveBeenCalledOnce()
@@ -77,10 +91,49 @@ describe('authentication request trust boundary', () => {
 
     const response = await handleAuthRequest(
       new Request('http://127.0.0.1:3000/api/auth/sign-out', { method: 'POST' }),
-      handler,
+      mutations(handler),
     )
 
     expect(await response.text()).toBe('handled')
     expect(handler).toHaveBeenCalledOnce()
+  })
+
+  it('rejects noncanonical and nested routes before a provider seam', async () => {
+    setEnvironment('development')
+    const handler = vi.fn(async () => new Response('handled'))
+
+    for (const path of [
+      '/sign-in/email/',
+      '/sign-out/',
+      '/nested/api/auth/sign-in/email',
+      '/nested/api/auth/sign-out',
+    ]) {
+      const response = await handleAuthRequest(
+        new Request(`http://127.0.0.1:3000/api/auth${path}`, { method: 'POST' }),
+        mutations(handler),
+      )
+      expect(response.status).toBe(404)
+    }
+    for (const path of [
+      '/api/auth/get-session/',
+      '/api/auth/nested/api/auth/get-session',
+    ]) {
+      const getResponse = await handleAuthGet(new Request(`http://127.0.0.1:3000${path}`))
+      expect(getResponse.status).toBe(404)
+    }
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('never routes the canonical GET session path through the mutation dispatcher', async () => {
+    setEnvironment('development')
+    const handler = vi.fn(async () => new Response('mutated'))
+
+    const response = await handleAuthRequest(
+      new Request('http://127.0.0.1:3000/api/auth/get-session'),
+      mutations(handler),
+    )
+
+    expect(response.status).toBe(404)
+    expect(handler).not.toHaveBeenCalled()
   })
 })

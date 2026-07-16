@@ -1,7 +1,15 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveInstanceResetPlan } from '@/modules/data-portability/application/deletion'
-import { requireActor } from '@/modules/identity/server/actor'
+import {
+  type InstanceResetNoticeReceiptPayload,
+  verifyInstanceResetNoticeReceiptForActor,
+} from '@/modules/data-portability/server/destructive-notice'
+import {
+  issueInstanceResetFormEnvelope,
+  requireUiActor,
+} from '@/modules/identity/server/actor'
 import { deletionCategoryLabel } from '../deletion-category-label'
 import { createResetPreviewAction, resetInstanceAction } from './actions'
 import styles from './delete.module.css'
@@ -9,32 +17,68 @@ import styles from './delete.module.css'
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Reset instance' }
 
-const errorMessages: Readonly<Record<string, string>> = {
-  'deletion.confirmation-invalid': 'Acknowledge the consequences and type RESET exactly.',
-  'deletion.reauthentication-failed': 'The current owner password was not accepted.',
-  'deletion.reauthentication-locked':
-    'Too many password attempts. Wait for the lockout to expire before trying again.',
-  'deletion.plan-invalid': 'The preview expired or no longer matches.',
-  'deletion.plan-changed': 'Instance data changed. Generate a fresh preview.',
-  'deletion.owner-changed':
-    'Installation ownership changed. Sign in again before resetting this instance.',
-  'deletion.preview-failed': 'The deletion preview could not be created.',
-  'deletion.execution-failed': 'The instance was not reset. Existing data remains.',
+type InstanceResetNoticeErrorKind = Exclude<
+  InstanceResetNoticeReceiptPayload['kind'],
+  'reset'
+>
+
+const reusablePlanErrors = new Set<InstanceResetNoticeErrorKind>([
+  'confirmation-rejected',
+])
+
+const errorMessages: Readonly<Record<InstanceResetNoticeErrorKind, string>> = {
+  'confirmation-rejected':
+    'Nothing was reset. The confirmation or signed preview form was not accepted. Acknowledge the consequences and type RESET exactly, or generate a fresh preview.',
+  'reauthentication-failed':
+    'The current owner password was not accepted. Nothing was reset; generate a fresh preview before trying again.',
+  'reauthentication-locked':
+    'Too many password attempts. Nothing was reset. Wait for the lockout to expire, then generate a fresh preview.',
+  'plan-invalid':
+    'The preview expired or no longer matches. Nothing was reset; generate a fresh preview.',
+  'plan-changed': 'Instance data changed. Nothing was reset; generate a fresh preview.',
+  stale:
+    'Installation or owner authority changed. Nothing was reset. Reload, sign in again if asked, and generate a fresh preview.',
+  unavailable:
+    'The database could not complete the reset. Nothing was reset; wait, then generate a fresh preview.',
+  'reauthentication-incomplete':
+    'The owner-password check did not complete cleanly. The protected reset did not run. Generate a fresh preview before trying again.',
+  'request-not-verified':
+    'The reset request could not be verified. Nothing was reset; reload and generate a fresh preview.',
+  'outcome-unknown':
+    'The reset outcome could not be confirmed. Do not submit it again until you check whether this installation is still claimed.',
+  'preview-failed': 'The reset preview could not be created.',
+  'execution-failed':
+    'The reset outcome could not be confirmed. Check whether the installation is still claimed before trying again.',
 }
 
 export default async function DeleteSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>
+  searchParams: Promise<{ notice?: string }>
 }) {
-  const actor = await requireActor()
-  const [plan, query] = await Promise.all([
-    getActiveInstanceResetPlan(actor),
-    searchParams,
-  ])
-  const error = query.error
-    ? (errorMessages[query.error] ?? 'The reset command was not applied.')
+  const actor = await requireUiActor()
+  if (actor.role !== 'owner') redirect('/settings')
+  let [plan, query] = await Promise.all([getActiveInstanceResetPlan(actor), searchParams])
+  const notice = verifyInstanceResetNoticeReceiptForActor(query.notice, actor.userId)
+  const errorKind: InstanceResetNoticeErrorKind | null =
+    notice && notice.kind !== 'reset' ? notice.kind : null
+  if (errorKind && !reusablePlanErrors.has(errorKind)) plan = null
+  const formIssuedAt = new Date()
+  const form = plan
+    ? issueInstanceResetFormEnvelope(
+        actor.authenticatedActionEnvelope,
+        plan,
+        formIssuedAt,
+      )
     : null
+  if (plan && !form) {
+    const planExpired =
+      Math.floor(plan.expiresAt.getTime() / 1_000) <=
+      Math.floor(formIssuedAt.getTime() / 1_000)
+    if (!planExpired) redirect('/sign-in')
+    plan = null
+  }
+  const error = errorKind ? errorMessages[errorKind] : null
 
   return (
     <ProductFrame current="settings">
@@ -62,7 +106,7 @@ export default async function DeleteSettingsPage({
           </p>
         </section>
 
-        {!plan ? (
+        {!plan || !form ? (
           <form action={createResetPreviewAction}>
             <SubmitButton variant="secondary" pendingLabel="Generating preview…">
               Generate exact reset preview
@@ -82,8 +126,9 @@ export default async function DeleteSettingsPage({
             <p>Preview expires {plan.expiresAt.toLocaleString()}.</p>
 
             <form action={resetInstanceAction} className={styles.form}>
-              <input type="hidden" name="planId" value={plan.id} />
-              <input type="hidden" name="planDigest" value={plan.digest} />
+              <input type="hidden" name="planId" value={form.planId} />
+              <input type="hidden" name="planDigest" value={form.planDigest} />
+              <input type="hidden" name="actionBinding" value={form.actionBinding} />
               <label>
                 <span>Current owner password</span>
                 <input
@@ -111,6 +156,12 @@ export default async function DeleteSettingsPage({
               </label>
               <SubmitButton variant="danger" pendingLabel="Resetting…">
                 Reset instance
+              </SubmitButton>
+            </form>
+
+            <form action={createResetPreviewAction}>
+              <SubmitButton variant="secondary" pendingLabel="Refreshing preview…">
+                Generate fresh preview
               </SubmitButton>
             </form>
           </section>

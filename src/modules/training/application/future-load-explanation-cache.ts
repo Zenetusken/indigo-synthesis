@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { and, eq, ne, sql } from 'drizzle-orm'
 import { type DatabaseTransaction, getDb } from '@/platform/db/client'
 import {
@@ -10,6 +9,7 @@ import {
   workoutSessions,
 } from '@/platform/db/schema'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
+import { sha256 } from '@/shared/canonical-json'
 
 export type CachedFutureLoadExplanation = {
   readonly prose: string
@@ -83,7 +83,7 @@ export type FutureLoadExplanationCacheTestHooks = {
 
 /** PostgreSQL text rejects the NUL separators used by the contract cache identity. */
 export function storageKeyFromExplanationCacheKey(contractCacheKey: string): string {
-  return createHash('sha256').update(contractCacheKey, 'utf8').digest('hex')
+  return sha256(contractCacheKey)
 }
 
 type AuthoritativeState =

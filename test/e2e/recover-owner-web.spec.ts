@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test'
-import { issueOwnerRecovery } from '@/modules/identity/recovery/owner-recovery'
 import { closeDb } from '@/platform/db/client'
 import {
   bindE2eProcessEnv,
@@ -7,6 +6,7 @@ import {
   clearApplicationData,
   databaseClient,
   e2eOwner,
+  issueE2eOwnerRecovery,
 } from './support/journey'
 import { restartE2eApplication } from './support/supervisor-client'
 
@@ -24,10 +24,7 @@ test('redeems J8 on the web, revokes the owner session, and retains redacted evi
 }) => {
   const replacementPassword = 'owner-web-replacement-password'
   await bootstrapAndSignIn(page)
-  const issued = await issueOwnerRecovery({
-    ownerEmail: e2eOwner.email,
-    ttlMinutes: 15,
-  })
+  const issued = await issueE2eOwnerRecovery(e2eOwner.email)
   await closeDb()
 
   const recoveryContext = await browser.newContext()

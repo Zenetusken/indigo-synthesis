@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
 import { formatCalendarDate, formatTimeInTimezone } from '@/modules/athletes/domain/time'
-import { requireActor } from '@/modules/identity/server/actor'
+import { requireUiActor } from '@/modules/identity/server/actor'
 import { SignOutButton } from '@/modules/identity/ui/sign-out-button'
 import { getCompletedSessions } from '@/modules/training/application/workouts'
 import styles from './history.module.css'
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'History' }
 
 export default async function HistoryPage() {
-  const actor = await requireActor()
+  const actor = await requireUiActor()
   const [sessions, profile] = await Promise.all([
     getCompletedSessions(actor.userId),
     getAthleteProfile(actor.userId),
@@ -21,7 +21,10 @@ export default async function HistoryPage() {
   if (!profile) redirect('/setup')
 
   return (
-    <ProductFrame current="history" accountActions={<SignOutButton />}>
+    <ProductFrame
+      current="history"
+      accountActions={<SignOutButton actionBinding={actor.checkedSignOutActionBinding} />}
+    >
       <div className={styles.content}>
         <PageHeading
           eyebrow="History"

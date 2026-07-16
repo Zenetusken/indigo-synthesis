@@ -1,6 +1,6 @@
 # Outbound-network-blocked acceptance
 
-Status: complete for code commit `7c7ea334d4c88d9279abe574031881a23a15f32c`;
+Status: complete for code commit `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`;
 rerun after any product/runtime or default-suite change
 
 The core browser journey must work when the application cannot reach the public network.
@@ -30,10 +30,10 @@ not part of the core acceptance boundary.
 ## Retained evidence at this checkpoint
 
 The complete 19-test default Playwright selection passed from clean committed product
-tree `7c7ea334d4c88d9279abe574031881a23a15f32c`: the namespace had only loopback, no
+tree `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`: the namespace had only loopback, no
 IPv4/IPv6 default route, a public-IP connection failed, PostgreSQL was available only
 through the private bridge, and the boundary was rechecked after the suite. The retained
-[2026-07-13 acceptance record](evidence/2026-07-13-outbound-network-blocked.md) identifies
+[2026-07-16 acceptance record](evidence/2026-07-16-outbound-network-blocked.md) identifies
 the tested commit, environment, command, result, and proof limits.
 
 The recorded commit and complete test selection define which product tree was accepted.

@@ -1,6 +1,10 @@
+import { execFile as execFileCallback } from 'node:child_process'
+import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { expect, type Page } from '@playwright/test'
 import { Client } from 'pg'
-import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
 import { validateLocalE2eResetTarget } from '@/platform/db/e2e-reset-guard'
@@ -12,6 +16,7 @@ import { e2eAdministrationUrlEnvironment } from './reset-target'
 // original admin/target pair immediately before connecting.
 const e2eAdministrationUrl =
   process.env[e2eAdministrationUrlEnvironment] ?? process.env.DATABASE_URL
+const execFile = promisify(execFileCallback)
 
 /**
  * Shared J1–J4 helpers for Playwright journeys.
@@ -61,6 +66,58 @@ export async function databaseClient(): Promise<Client> {
   return client
 }
 
+/** Exercises the guarded production host CLI without loading its Node-only graph in Playwright. */
+export async function issueE2eOwnerBootstrap() {
+  const directory = await mkdtemp(join(tmpdir(), 'indigo-e2e-bootstrap-'))
+  await chmod(directory, 0o700)
+  const codeFile = join(directory, 'owner-bootstrap-code')
+  try {
+    await execFile(
+      'bash',
+      [
+        'scripts/run-external-host-command.sh',
+        'scripts/identity/bootstrap-owner.ts',
+        'issue',
+        '--code-file',
+        codeFile,
+        '--ttl-minutes',
+        '15',
+      ],
+      { cwd: process.cwd(), env: process.env },
+    )
+    return Object.freeze({ code: (await readFile(codeFile, 'utf8')).trim() })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+/** Exercises host-only owner-recovery issuance through the serialized production command. */
+export async function issueE2eOwnerRecovery(ownerEmail: string) {
+  const directory = await mkdtemp(join(tmpdir(), 'indigo-e2e-owner-recovery-'))
+  await chmod(directory, 0o700)
+  const codeFile = join(directory, 'owner-recovery-code')
+  try {
+    await execFile(
+      'bash',
+      [
+        'scripts/run-external-host-command.sh',
+        'scripts/identity/recover-owner.ts',
+        'issue',
+        '--owner-email',
+        ownerEmail,
+        '--code-file',
+        codeFile,
+        '--ttl-minutes',
+        '15',
+      ],
+      { cwd: process.cwd(), env: process.env },
+    )
+    return Object.freeze({ code: (await readFile(codeFile, 'utf8')).trim() })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 export async function clearApplicationData(): Promise<void> {
   validateLocalE2eResetTarget(e2eAdministrationUrl, process.env.E2E_DATABASE_URL)
   const client = await databaseClient()
@@ -77,6 +134,10 @@ export async function clearApplicationData(): Promise<void> {
       // identifier so reserved names such as "user" stay unambiguous.
       await client.query(`DELETE FROM "${tableName}"`)
     }
+    // The installation lifecycle is a mandatory singleton after migration 0017. E2E still
+    // deletes the old row so each journey gets a genuinely new anti-ABA generation, then
+    // recreates the open installation using the schema-owned epoch/timestamp defaults.
+    await client.query('INSERT INTO "installation_state" ("singleton") VALUES (1)')
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)
@@ -90,7 +151,7 @@ export async function bootstrapAndSignIn(
   page: Page,
   options: { readonly verifyClaimGuard?: boolean } = {},
 ): Promise<void> {
-  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const issued = await issueE2eOwnerBootstrap()
   await closeDb()
 
   await page.goto('/')

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useTransition } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton } from '@/components/action-button'
 import type { FutureLoadExplanationResult } from '@/modules/training/application/future-load-explanation'
 import styles from '../history.module.css'
 import { explainFutureLoadDecisionAction } from './actions'
@@ -47,6 +47,7 @@ export function FutureLoadExplanationControl(props: {
   const [latePainReported, setLatePainReported] = useState(false)
   const disabledReason = latePainReported ? 'decision-invalidated' : props.disabledReason
   const disabled = disabledReason !== undefined
+  const activelyExplaining = pending && !disabled
 
   useEffect(() => {
     if (disabled) {
@@ -86,12 +87,12 @@ export function FutureLoadExplanationControl(props: {
       <ActionButton
         type="button"
         variant="secondary"
-        busy={pending}
+        busy={activelyExplaining}
         disabled={disabled}
         onClick={onExplain}
         aria-describedby={`explanation-status-${props.decisionId}`}
       >
-        {pending ? 'Explaining…' : 'Explain in plain language'}
+        {activelyExplaining ? 'Explaining…' : 'Explain in plain language'}
       </ActionButton>
 
       <div

@@ -66,9 +66,17 @@ changing the prescription or session facts, rather than inventing an equivalent.
 
 Requirements:
 
+- Linux with procfs exposing `/proc/self/fd`
+- Bash
+- util-linux `flock` and GNU-compatible `stat -c`
 - Node.js 24 LTS
 - pnpm 10
 - PostgreSQL 18 or newer
+
+Run every Indigo host database command under the same operating-system account. The
+supported migration, preflight, startup-preflight, bootstrap, recovery, and maintenance
+commands share one per-UID host lock; using different UIDs would create different lock
+namespaces.
 
 Create a PostgreSQL database and copy `.env.example` to `.env.local`. Set a unique
 authentication secret of at least 32 characters. For the technical walkthrough, change
@@ -76,6 +84,7 @@ the content mode to `development`:
 
 ```dotenv
 DATABASE_URL=postgresql://indigo:change-me@127.0.0.1:5432/indigo_synthesis
+INDIGO_DATABASE_POOL_MAX=10
 BETTER_AUTH_SECRET=replace-with-a-unique-secret-at-least-32-characters-long
 BETTER_AUTH_URL=http://127.0.0.1:3000
 INDIGO_CONTENT_MODE=development
@@ -94,8 +103,16 @@ pnpm dev
 Open `http://127.0.0.1:3000`. Both `pnpm dev` and `pnpm start` bind only to that
 loopback address; network access belongs behind an operator-managed HTTPS ingress. A
 fresh database presents the one-time owner bootstrap, then setup and the
-development-program walkthrough. `pnpm start` retains the database compatibility
+development-program walkthrough. `pnpm start` retains the serialized one-shot database
 preflight before the production process starts listening.
+
+`INDIGO_DATABASE_POOL_MAX` accepts an integer from 6 through 64 and defaults to 10.
+Application pools use at most one fewer connection than that value; the remaining slot
+belongs to one serialized host command. Migration and preflight construct only that one
+dedicated connection and never instantiate the application pools. Direct invocation of
+their TypeScript entrypoints is unsupported and rejects before connection construction.
+Startup closes the preflight connection and releases the host lock before creating the
+long-lived application runtime.
 
 `INDIGO_CONTENT_MODE=development` is for technical validation only. A production
 process refuses that mode. No reviewed program release ships yet, so the application is
@@ -108,6 +125,7 @@ The normal local gates are:
 
 ```sh
 pnpm check
+pnpm docs:check
 pnpm typecheck
 pnpm test
 pnpm test:integration
@@ -127,8 +145,9 @@ pnpm test:e2e:llm
 RUNS=3 pnpm llm:archive-product-path   # multi-run archive → tmp/llm-runs/
 ```
 
-`pnpm validate` runs static checks, unit/domain tests, and a production-mode build. The
-database-backed suites are intentionally separate because they require PostgreSQL.
+`pnpm validate` runs static checks, documentation link/anchor validation, unit/domain tests, and a
+production-mode build. The database-backed suites are intentionally separate because they require
+PostgreSQL.
 
 Two opt-in operational proofs are also checked in:
 
@@ -137,13 +156,15 @@ pnpm db:backup-restore-drill
 bash scripts/e2e/run-network-denied.sh
 ```
 
-The first creates, wipes, restores, verifies, and removes only a guarded random
-disposable database; the second runs the default browser suite in a Linux namespace with
-no non-loopback interface or default route. Read
+The first is a **test-only acceptance harness**: it creates, wipes, restores, verifies,
+and removes only a guarded random disposable database and may use application-pool test
+composition. It proves restore/schema invariants, not the production one-shot connection
+topology or a real operator's retention practice. The second runs the default browser
+suite in a Linux namespace with no non-loopback interface or default route. Read
 [`docs/operations/BACKUP_RESTORE.md`](docs/operations/BACKUP_RESTORE.md) and
 [`docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md`](docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md)
 before using them. The current committed 19-test isolation proof is retained in
-[`docs/operations/evidence/2026-07-13-outbound-network-blocked.md`](docs/operations/evidence/2026-07-13-outbound-network-blocked.md).
+[`docs/operations/evidence/2026-07-16-outbound-network-blocked.md`](docs/operations/evidence/2026-07-16-outbound-network-blocked.md).
 Neither substitutes for encrypted off-host retention, a second-person cold restore, or
 independent security/accessibility review.
 
@@ -258,6 +279,23 @@ characters. Symbolic links, oversized files, extra lines, and NUL bytes are refu
 TTL must be 5–60 whole minutes. Both redemption channels change the credential, revoke
 existing owner sessions, and record a redacted channel-aware audit event. Successful CLI
 redemption removes the code only if its path still names the opened inode.
+
+## Expired-session maintenance
+
+Expired database session rows can be removed in bounded host-only pages. Start a sweep
+without a cursor:
+
+```sh
+pnpm identity:cleanup-expired-sessions --batch-size 64
+```
+
+If the compact JSON result has `"status":"continue"`, pass its opaque `nextCursor` to
+the next invocation. Advance only after a confirmed successful result; after an ambiguous
+failure, retry the same input cursor. The cursor fixes one sweep cutoff, is bounded but
+contains internal session-row metadata, and must stay out of public logs. This command
+has no UI. Read the complete
+[expired-session maintenance runbook](docs/operations/EXPIRED_SESSION_MAINTENANCE.md)
+before scheduling it.
 
 ## Repository map
 

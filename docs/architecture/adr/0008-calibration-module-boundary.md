@@ -3,7 +3,8 @@
 - Status: **accepted** (2026-07-15, maintainer) — approved as Stage 2 of the
   [development roadmap](../DEVELOPMENT_ROADMAP.md): the calibration boundary and the commitment
   to build the `UnitOfWork` are greenlit. The reviewed methodology numbers remain a Gate 0
-  deliverable and are not decided here.
+  deliverable and are not decided here. The accepted record below is preserved; its live-contract
+  details are superseded where stated by [ADR 0009](0009-calibration-live-contract.md).
 - Date: 2026-07-14 (boundary inverted after two adversarial-review rounds — see Alternatives)
 - Relates to: [ADR 0001 modular monolith](0001-modular-monolith.md) (the `UnitOfWork`),
   [ADR 0003 deterministic methodology](0003-deterministic-methodology.md),
@@ -30,7 +31,7 @@ correction path — not part of that debt). Retiring it properly is a multi-modu
 which requires the `UnitOfWork` [ADR 0001](0001-modular-monolith.md) describes and that has
 been deferred.
 
-## Decision (proposed)
+## Decision (accepted 2026-07-15; amended by ADR 0009)
 
 Introduce a `calibration` module that is a **deterministic engine plus derived state, invoked
 by training** — not the owner of the decision — and **build the `UnitOfWork`** the completion
@@ -52,11 +53,13 @@ write requires.
    at Gate 0. The adaptive *paradigm* is an owner product-direction choice, Gate-0-revisable.
 5. The LLM **explains** each decision and never makes one
    ([ADR 0006](0006-optional-local-grounded-language.md)); journeys work with it off.
-6. On completion, a `src/application/workflows/` workflow opens a **`UnitOfWork`**: training
-   records the decision and writes its own `program_revision_lineage`, a **Programs write
-   port** persists the revision + prescriptions, the **calibration port** updates e1RM state,
-   and the **athletes owner path** raises `safety_hold` when signaled — one transaction,
-   atomic. `training` stops writing the prescription cluster; nothing reaches across tables.
+6. On completion, a `src/composition/` workflow opens a **`UnitOfWork`** through the neutral
+   contracts in `src/application/coordination/` and PostgreSQL implementation in
+   `src/platform/application-coordination/`: training records the decision and writes its own
+   `program_revision_lineage`, a **Programs write port** persists the revision + prescriptions,
+   the **calibration port** updates e1RM state, and the **athletes owner path** raises
+   `safety_hold` when signaled — one transaction, atomic. `training` stops writing the prescription
+   cluster; nothing reaches across tables.
 
 ## Consequences
 

@@ -2,17 +2,23 @@
 
 Modules are business boundaries inside one application. They are not services.
 
+Part B target shape, now backed by the live Stage 3 coordination substrate:
+
 ```text
-identity      athletes      exercises      methodology
-    \            |             |              /
-     \-----------+-------------+-------------/
-                              |
-                           programs
-                              |
-                           training
-                           /      \
-                     progress   data portability
+Composition / UnitOfWork
+  ├─ identity/account: identity
+  ├─ initial plan: identity lifecycle fence -> athletes + exercises + methodology + calibration -> programs
+  ├─ train/learn: identity lifecycle fence -> athletes + exercises + training + calibration + programs
+  ├─ history: training -> progress (target extraction)
+  └─ subject controls: module ports -> data portability
 ```
+
+Under that target, every subject workflow captures Identity epoch/generation before queueing and acquires its session-
+level locks before `BEGIN`. Identity's transactional epoch/actor/session/role check is always the
+first authoritative product check. Ordinary workflows next check subject generation before owner
+reads. Root setup alone may ask Athletes to classify the exact setup receipt first: replay must match
+its current stored result generation, and a new command still passes Identity's generation gate
+before any owner mutation.
 
 Rules:
 
@@ -20,10 +26,11 @@ Rules:
 - Application code owns use cases, authorization, transactions, and ports.
 - Infrastructure implements ports.
 - UI calls application APIs.
-- Public module APIs and a shared workflow unit of work remain the target boundary.
+- The shared workflow `UnitOfWork` is live; complete public module APIs remain the target boundary.
 - The current vertical slice still contains documented direct Drizzle coordination in
-  Programs/Training and Data Portability; architecture tests enforce the narrower live
-  dependency rules while that debt is resolved.
+  Programs/Training. Data Portability now enters export and protected destructive execution through
+  scoped temporary UoW adapters, but those adapters retain cross-owner breadth until public owner
+  ports land. Architecture tests enforce the exact live boundary while that debt is resolved.
 - Do not create a folder or abstraction before its first accepted use case.
 
 Current executable areas include:
@@ -38,3 +45,6 @@ Current executable areas include:
   slice described in `docs/MVP_STATUS.md`
 
 Exercises and Progress remain target modules rather than full live catalogs/read models.
+Calibration is also an accepted target module, sequenced by
+`docs/architecture/DEVELOPMENT_ROADMAP.md`; no executable Calibration module exists at this
+checkpoint.

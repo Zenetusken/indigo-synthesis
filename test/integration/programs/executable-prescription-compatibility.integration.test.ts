@@ -17,7 +17,7 @@ import {
   verifyExecutablePrescriptionIntegrity,
 } from '@/modules/programs/domain/executable-prescription'
 import { resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb } from '@/platform/db/client'
+import { closeDb, getDb, getPool } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -502,7 +502,7 @@ describe('program-ordinal migration ledger provenance', () => {
         [programOrdinalMigrationCreatedAt],
       )
       expect(ledger.rows).toEqual([{ hash: canonicalProgramOrdinalMigrationHash }])
-      await expect(assertDatabaseReady()).resolves.toMatchObject({
+      await expect(assertDatabaseReady(getPool())).resolves.toMatchObject({
         appliedMigrationCount: expectedMigrationCount,
         migrationLedgerCanonical: true,
       })
@@ -513,7 +513,7 @@ describe('program-ordinal migration ledger provenance', () => {
          WHERE created_at = $2`,
         ['0'.repeat(64), programOrdinalMigrationCreatedAt],
       )
-      await expect(assertDatabaseReady()).rejects.toThrow(
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
         'program-ordinal migration ledger provenance is not canonical',
       )
     })
@@ -534,7 +534,7 @@ describe('program-ordinal migration ledger provenance', () => {
         [programOrdinalMigrationCreatedAt],
       )
       expect(after.rows).toEqual(before.rows)
-      await expect(assertDatabaseReady()).resolves.toMatchObject({
+      await expect(assertDatabaseReady(getPool())).resolves.toMatchObject({
         appliedMigrationCount: expectedMigrationCount,
         migrationLedgerCanonical: true,
       })

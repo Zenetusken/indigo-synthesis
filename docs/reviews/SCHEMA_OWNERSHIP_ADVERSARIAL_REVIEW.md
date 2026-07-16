@@ -1,7 +1,9 @@
 # Schema ownership arc — adversarial swarm review
 
-Status: **findings accepted; spec/ADR revision applied** — Part A implementation and
-Part B maintainer decision still open (blocker 4 not closed)  
+Status: **historical review; findings accepted and applied** — superseded operationally by
+Part A shipment in #9 and the maintainer's proper-boundary Part B decision in #12. Blocker 4
+remains open only for Part B implementation plus O6 convergence; see the active
+[development roadmap](../architecture/DEVELOPMENT_ROADMAP.md).
 Source: six parallel adversarial reviewers on branch `feat/schema-ownership-spec`  
 Review id: `d9a005ec`  
 Date: 2026-07-14  
@@ -57,8 +59,9 @@ Lenses:
    (currentWriters / write fence framing) still applied for H6.
 
 **Revision applied:** see current `SCHEMA_OWNERSHIP_SPEC.md` and ADR 0007 on this branch.
-**Still open:** implement Part A code (`ownership.ts` + scanner test); Part B decision;
-blocker 4 closeout.
+**At review time, still open:** implement Part A code (`ownership.ts` + scanner test); Part B
+decision; blocker 4 closeout. Part A and the decision subsequently landed; only Part B
+implementation plus O6 remains open now.
 
 ---
 

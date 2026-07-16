@@ -13,6 +13,12 @@ Core product operation requires only:
 2. one PostgreSQL database; and
 3. one writable data directory if local media uploads are enabled.
 
+Those are the only application authorities. The supported host-command surface also
+requires Linux procfs (`/proc/self/fd`), Bash, util-linux `flock`, and GNU-compatible
+`stat -c` so migration, preflight, bootstrap, recovery, and maintenance can inherit one
+verified nonblocking lock. All such commands run under the same Unix UID; the tools and
+lock are host prerequisites, not additional services or data authorities.
+
 No other service is authoritative or mandatory.
 
 The optional grounded-language path is outside that core topology. When explicitly
@@ -51,7 +57,7 @@ access blocked. Source guards and browser request observation cover the normal s
 checked-in Linux namespace runner additionally removes every non-loopback interface and
 default route while exposing PostgreSQL through a private Unix-socket bridge. The complete
 19-test default tree passed from clean committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c`; the retained record identifies the exact
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`; the retained record identifies the exact
 environment and proof limits. Any later product/runtime or default-suite change requires
 a new run.
 
@@ -82,6 +88,8 @@ diagnostic only. Inference must never become required for J1–J6. See
 The current required configuration is:
 
 - database URL;
+- total single-instance database connection budget (`INDIGO_DATABASE_POOL_MAX`, default
+  10, accepted range 6–64);
 - application origin;
 - authentication secret.
 
@@ -101,13 +109,25 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 17 current committed migration
-hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
-enforcement, current snapshot/revision and correction/invalidation structures,
-append-only content-release revocations, the access/recovery persistence and HMAC-keyed
-admission contract, the explanation-cache contract, and all 28 required enabled
-trigger/table/function bindings. `pnpm start` runs this preflight before starting the
-production server. Both
+The connection budget is partitioned into ordinary `poolMax - 4`, credential-control 2,
+credential-capture 1, and external-host 1. Application pools therefore total
+`poolMax - 1`; there is no unused health lane. The external slot is a serialized,
+dedicated client rather than a pool, and an in-process owner lease enforces one such
+client per wrapped command.
+
+`pnpm db:preflight` uses only that external-host client, normalizes its search path to
+`pg_catalog, public`, and verifies PostgreSQL 18 or newer, all 19 current committed
+migration hashes including the exact canonical 0004 program-ordinal provenance,
+owner-bootstrap enforcement, current snapshot/revision and correction/invalidation
+structures, append-only content-release revocations, the access/recovery persistence and
+HMAC-keyed admission contract, the explanation-cache contract, and all 28 required
+enabled trigger/table/function bindings. It also requires the authenticated
+`session_user` role's `rolconnlimit` to be `-1` or at least `poolMax`. That role check
+does not attest global `max_connections`, currently free capacity, or multi-instance
+capacity.
+
+`pnpm start` runs this observational preflight and closes its dedicated connection and
+host-lock scope before starting the application pools and production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.
@@ -141,6 +161,10 @@ Development content is never a production fallback: a production process rejects
 - Session reads disable cookie caching. Core credential auth exposes no bearer, JWT, or
   refresh-token path to browser JavaScript, so database session revocation takes effect
   on the next request.
+- Bounded expired-session retention is a host-only command, not a browser feature. Each
+  sweep fixes its cutoff inside an opaque continuation cursor and runs one page at a time
+  through the common serialized external-host wrapper. See the
+  [operator runbook](../operations/EXPIRED_SESSION_MAINTENANCE.md).
 - The current slice has no SMTP/self-service email reset, public signup, role mutation,
   standalone session-management UI, or security-events view.
 
@@ -154,9 +178,11 @@ The complete backup boundary is:
 Export is a product feature, not a database-admin substitute. It includes a schema
 version and enough provenance to interpret programs, sessions, and recommendations.
 
-Deletion is an explicit destruction exception to immutable history. The current Data
-Portability workflow directly deletes or redacts scoped personal records in referential
-order inside one serializable transaction; Identity is last. Subject deletion retains a
+Deletion is an explicit destruction exception to immutable history. The current Data Portability
+composition captures authority before queueing, rechecks Identity first, and deletes or redacts
+scoped personal records in referential order through its exact temporary adapter inside one
+serializable `UnitOfWork`; Identity is last. Preview creation/current-plan reads remain direct until
+public owner ports land. Subject deletion retains a
 non-personal completion tombstone. Instance reset also retains the cleared singleton
 installation record and any earlier non-personal tombstones, then appends its own
 tombstone. Tombstones contain only event metadata, aggregate row counts, schema version,
@@ -166,6 +192,14 @@ logical archive, full schema wipe/restore, exact marker recovery, append-only tr
 behavior, and startup preflight. Operators still own encryption, off-host retention,
 runtime-secret custody, deployment-specific restore practice, recovery objectives, and
 any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
+
+The production backup, restore, and destructive post-restore authority-invalidation
+procedures hold the same per-UID host lock as every other external-host database command
+and use no parallel database jobs. Each procedure therefore owns at most one database
+connection while application host commands are excluded. The repository drill is a
+test-only disposable-database harness: it may use application-pool helpers and proves
+restore invariants, not the production one-shot topology or an operator's retention
+practice.
 
 ## Privacy and telemetry
 
@@ -180,6 +214,10 @@ any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
 The first supported core topology is one application instance and one PostgreSQL
 instance. An explicitly enabled local-language path may add the non-authoritative
 loopback inference process described above.
+The connection allocation and authenticated-role allowance are a single-instance budget,
+not a cluster-wide reservation. Operators must account separately for PostgreSQL
+administration, backup, monitoring, other applications, and any unsupported additional
+Indigo instance when sizing `max_connections` and role limits.
 Multi-instance cache coordination, HA databases, replicas, failover, and multi-region
 operation are not implicit requirements.
 
@@ -205,9 +243,9 @@ only the application, PostgreSQL, and optional media directory are available.
 
 `scripts/e2e/run-network-denied.sh` supplies that runtime boundary and passed the complete
 19-test default tree from committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c`. See the
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`. See the
 [acceptance runbook](../operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md) and
-[retained evidence](../operations/evidence/2026-07-13-outbound-network-blocked.md), plus
+[retained evidence](../operations/evidence/2026-07-16-outbound-network-blocked.md), plus
 [MVP status](../MVP_STATUS.md). Independent methodology, security/privacy, WCAG,
 physical-device, cold-install, HTTPS-ingress, and off-host-retention gates remain
 separate.

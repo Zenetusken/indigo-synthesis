@@ -1,10 +1,12 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { getTableName, isTable } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import * as databaseSchema from '@/platform/db/schema'
+import nextConfig from '../../next.config'
 import { e2eApplicationDataResetTableOrder } from '../e2e/support/application-data-reset'
 import {
   defaultE2eSuiteSelection,
@@ -14,6 +16,10 @@ import {
 const projectRoot = process.cwd()
 
 describe('clean-clone operator contract', () => {
+  it('never serializes server-action credentials into development logs', () => {
+    expect(nextConfig.logging).toMatchObject({ serverFunctions: false })
+  })
+
   it('pins integration tests to the test runtime and development fixture', () => {
     const manifest = JSON.parse(
       readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
@@ -149,7 +155,7 @@ describe('clean-clone operator contract', () => {
         'E2E_DATABASE_URL database must match indigo_<name>_e2e',
       )
     }
-  })
+  }, 15_000)
 
   it('keeps every application table in the production-aligned E2E clear order', () => {
     const schemaTables = Object.values(databaseSchema)
@@ -161,18 +167,26 @@ describe('clean-clone operator contract', () => {
     expect(new Set(e2eTables).size).toBe(e2eTables.length)
     expect([...e2eTables].sort()).toEqual(schemaTables)
 
-    const deletionSource = readFileSync(
-      resolve(projectRoot, 'src/modules/data-portability/application/deletion.ts'),
+    const destructiveAdapterSource = readFileSync(
+      resolve(
+        projectRoot,
+        'src/modules/data-portability/infrastructure/scoped-destructive-adapter.ts',
+      ),
       'utf8',
     )
-    const instanceResetStart = deletionSource.indexOf(
-      'export async function executeInstanceReset',
+    const instanceResetStart = destructiveAdapterSource.indexOf(
+      'async function executeInstanceReset',
     )
     expect(instanceResetStart).toBeGreaterThan(-1)
+    const instanceResetEnd = destructiveAdapterSource.indexOf(
+      'export function createScopedSubjectDeletionAttemptGateway',
+      instanceResetStart,
+    )
+    expect(instanceResetEnd).toBeGreaterThan(instanceResetStart)
     const productionTableExports = [
-      ...deletionSource
-        .slice(instanceResetStart)
-        .matchAll(/await transaction\s*\.delete\((\w+)\)/g),
+      ...destructiveAdapterSource
+        .slice(instanceResetStart, instanceResetEnd)
+        .matchAll(/await database\.delete\((\w+)\)/g),
     ].map((match) => match[1])
     const tableNameByExport = new Map<string, string>()
     for (const [exportName, table] of Object.entries(databaseSchema)) {
@@ -193,14 +207,21 @@ describe('clean-clone operator contract', () => {
       ...productionTables,
       'deletion_tombstone',
     ])
+    const e2eResetSource = readFileSync(
+      resolve(projectRoot, 'test/e2e/support/journey.ts'),
+      'utf8',
+    )
+    expect(e2eResetSource).toContain(
+      `INSERT INTO "installation_state" ("singleton") VALUES (1)`,
+    )
 
     const restartReplay = readFileSync(
       resolve(projectRoot, 'test/e2e/restart-replay.spec.ts'),
       'utf8',
     )
     expect(restartReplay).not.toContain('TRUNCATE TABLE')
-    expect(restartReplay).toContain(
-      "import { clearApplicationData } from './support/journey'",
+    expect(restartReplay).toMatch(
+      /import\s*{[^}]*\bclearApplicationData\b[^}]*}\s*from\s*['"]\.\/support\/journey['"]/,
     )
   })
 
@@ -231,4 +252,172 @@ describe('clean-clone operator contract', () => {
     expect(liveConfig).toContain("INDIGO_LLM_TIMEOUT_MS: '3000'")
     expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
+
+  it('pins the complete production external-host command census', async () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    const commandNames = [
+      'owner:bootstrap',
+      'owner:recover',
+      'identity:cleanup-expired-sessions',
+      'db:migrate',
+      'db:preflight',
+      'start',
+    ] as const
+    const externalHostCommands = Object.fromEntries(
+      commandNames.map((name) => [name, manifest.scripts?.[name]]),
+    )
+    expect(externalHostCommands).toEqual({
+      'owner:bootstrap':
+        'bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts',
+      'owner:recover':
+        'bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts',
+      'identity:cleanup-expired-sessions':
+        'bash scripts/run-external-host-command.sh scripts/identity/cleanup-expired-sessions.ts',
+      'db:migrate': 'bash scripts/run-external-host-command.sh scripts/db/migrate.ts',
+      'db:preflight': 'bash scripts/run-external-host-command.sh scripts/db/preflight.ts',
+      start:
+        'NODE_ENV=production pnpm db:preflight && NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1',
+    })
+
+    const wrapperConsumers = Object.entries(manifest.scripts ?? {})
+      .filter(([, command]) => command.includes('scripts/run-external-host-command.sh'))
+      .map(([name]) => name)
+      .sort()
+    expect(wrapperConsumers).toEqual([
+      'db:migrate',
+      'db:preflight',
+      'identity:cleanup-expired-sessions',
+      'owner:bootstrap',
+      'owner:recover',
+    ])
+
+    const productionDatabaseEntrypointConsumers = Object.entries(manifest.scripts ?? {})
+      .filter(
+        ([name, command]) =>
+          name !== 'db:backup-restore-drill' &&
+          /scripts\/(?:db|identity)\/[^ ]+\.ts(?: |$)/.test(command),
+      )
+      .map(([name]) => name)
+      .sort()
+    expect(productionDatabaseEntrypointConsumers).toEqual(wrapperConsumers)
+
+    const maintenanceEntrypoint = resolve(
+      projectRoot,
+      'scripts/identity/cleanup-expired-sessions.ts',
+    )
+    const directEnvironment = { ...process.env }
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_HELD
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_FD
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_PATH
+
+    const sensitiveCursor = 'do-not-reflect-this-cursor'
+    const invalidMaintenance = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        maintenanceEntrypoint,
+        '--batch-size',
+        '65',
+        '--cursor',
+        sensitiveCursor,
+      ],
+      { cwd: projectRoot, encoding: 'utf8', env: directEnvironment },
+    )
+    expect(invalidMaintenance.status).toBe(1)
+    expect(invalidMaintenance.stdout).toBe('')
+    expect(invalidMaintenance.stderr).toContain(
+      'Invalid expired-session maintenance arguments.',
+    )
+    expect(invalidMaintenance.stderr).not.toContain(sensitiveCursor)
+
+    const directMaintenance = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', maintenanceEntrypoint, '--batch-size', '1'],
+      { cwd: projectRoot, encoding: 'utf8', env: directEnvironment },
+    )
+    expect(directMaintenance.status).toBe(1)
+    expect(directMaintenance.stdout).toBe('')
+    expect(directMaintenance.stderr).toContain('run-external-host-command.sh')
+
+    const directory = mkdtempSync(join(tmpdir(), 'indigo-external-host-lock-'))
+    const firstMarker = join(directory, 'first-entrypoint-ran')
+    const secondMarker = join(directory, 'second-entrypoint-ran')
+    const wrapper = resolve(projectRoot, 'scripts/run-external-host-command.sh')
+    const fixture = resolve(
+      projectRoot,
+      'test/architecture/fixtures/external-host-lock-entrypoint.ts',
+    )
+    const first = spawn('bash', [wrapper, fixture, firstMarker, 'hold'], {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let firstStderr = ''
+    first.stderr.setEncoding('utf8')
+    first.stderr.on('data', (chunk: string) => {
+      firstStderr += chunk
+    })
+
+    try {
+      await new Promise<void>((resolveReady, rejectReady) => {
+        let stdout = ''
+        const timeout = setTimeout(() => {
+          rejectReady(
+            new Error(`Timed out waiting for the first host wrapper: ${firstStderr}`),
+          )
+        }, 5_000)
+        const settle = (operation: () => void): void => {
+          clearTimeout(timeout)
+          first.stdout.removeAllListeners('data')
+          first.removeAllListeners('exit')
+          operation()
+        }
+        first.stdout.setEncoding('utf8')
+        first.stdout.on('data', (chunk: string) => {
+          stdout += chunk
+          if (stdout.includes('READY\n')) settle(resolveReady)
+        })
+        first.once('exit', (code, signal) => {
+          settle(() => {
+            rejectReady(
+              new Error(
+                `First host wrapper exited before readiness (code=${code}, signal=${signal}): ${firstStderr}`,
+              ),
+            )
+          })
+        })
+      })
+
+      expect(existsSync(firstMarker)).toBe(true)
+      const second = spawnSync('bash', [wrapper, fixture, secondMarker, 'exit'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: process.env,
+      })
+      expect(second.status).toBe(75)
+      expect(`${second.stdout}${second.stderr}`).toContain(
+        'another Indigo host database command is active',
+      )
+      expect(existsSync(secondMarker)).toBe(false)
+    } finally {
+      if (first.exitCode === null && first.signalCode === null) {
+        const exit = new Promise<void>((resolveExit) => {
+          const timeout = setTimeout(() => {
+            first.kill('SIGKILL')
+          }, 5_000)
+          first.once('exit', () => {
+            clearTimeout(timeout)
+            resolveExit()
+          })
+        })
+        first.stdin.end('\n')
+        await exit
+      }
+      rmSync(directory, { force: true, recursive: true })
+    }
+  }, 15_000)
 })

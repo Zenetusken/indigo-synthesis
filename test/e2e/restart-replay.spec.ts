@@ -1,9 +1,8 @@
 import { expect, type Page, type Request, test } from '@playwright/test'
 import { Client } from 'pg'
-import { issueOwnerBootstrap } from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetServerConfigForTests } from '@/platform/config/server'
 import { closeDb } from '@/platform/db/client'
-import { clearApplicationData } from './support/journey'
+import { clearApplicationData, issueE2eOwnerBootstrap } from './support/journey'
 import { restartE2eApplication } from './support/supervisor-client'
 
 process.env.DATABASE_URL = process.env.E2E_DATABASE_URL
@@ -35,7 +34,7 @@ async function databaseClient(): Promise<Client> {
 }
 
 async function bootstrapAndSignIn(page: Page): Promise<void> {
-  const issued = await issueOwnerBootstrap({ ttlMinutes: 15 })
+  const issued = await issueE2eOwnerBootstrap()
   await closeDb()
 
   await page.goto('/')

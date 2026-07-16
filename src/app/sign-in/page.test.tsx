@@ -9,8 +9,12 @@ import SignInPage from './page'
 const pageMocks = vi.hoisted(() => ({
   contentMode: 'development' as 'development' | 'reviewed',
   getActor: vi.fn(),
-  getInstallationStatus: vi.fn(),
+  getSignInPageInstallation: vi.fn(),
   redirect: vi.fn(),
+  verifyResetNotice: vi.fn(),
+  verifyResetNoticeForActor: vi.fn(),
+  verifySubjectNotice: vi.fn(),
+  verifySubjectNoticeForActor: vi.fn(),
 }))
 
 vi.mock('next/link', () => ({
@@ -25,15 +29,27 @@ vi.mock('next/link', () => ({
 vi.mock('next/navigation', () => ({
   redirect: pageMocks.redirect,
 }))
-vi.mock('@/modules/identity/application/installation', () => ({
-  getInstallationStatus: pageMocks.getInstallationStatus,
+vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
+  verifyInstanceResetNoticeReceipt: pageMocks.verifyResetNotice,
+  verifyInstanceResetNoticeReceiptForActor: pageMocks.verifyResetNoticeForActor,
+  verifySubjectDeletionNoticeReceipt: pageMocks.verifySubjectNotice,
+  verifySubjectDeletionNoticeReceiptForActor: pageMocks.verifySubjectNoticeForActor,
+}))
+vi.mock('@/modules/identity/server/sign-in-page', () => ({
+  getSignInPageInstallation: pageMocks.getSignInPageInstallation,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   getActor: pageMocks.getActor,
 }))
 vi.mock('@/modules/identity/ui/sign-in-form', () => ({
-  SignInForm: ({ returnTo }: { returnTo?: string }) => (
-    <form data-return-to={returnTo}>
+  SignInForm: ({
+    actionBinding,
+    returnTo,
+  }: {
+    actionBinding: string
+    returnTo?: string
+  }) => (
+    <form data-action-binding={actionBinding} data-return-to={returnTo}>
       <button type="submit">Sign in</button>
     </form>
   ),
@@ -50,12 +66,15 @@ describe('Sign-in orientation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     pageMocks.contentMode = 'development'
-    pageMocks.getInstallationStatus.mockResolvedValue({
+    pageMocks.getSignInPageInstallation.mockResolvedValue({
       kind: 'closed',
-      ownerUserId: 'owner-id',
-      closedAt: new Date('2026-07-13T12:00:00.000Z'),
+      actionBinding: 'opaque-sign-in-binding',
     })
     pageMocks.getActor.mockResolvedValue(null)
+    pageMocks.verifyResetNotice.mockReturnValue(null)
+    pageMocks.verifyResetNoticeForActor.mockReturnValue(null)
+    pageMocks.verifySubjectNotice.mockReturnValue(null)
+    pageMocks.verifySubjectNoticeForActor.mockReturnValue(null)
   })
 
   afterEach(cleanup)
@@ -71,6 +90,9 @@ describe('Sign-in orientation', () => {
     expect(
       screen.getByRole('link', { name: `Indigo Synthesis ${label}` }),
     ).toHaveAttribute('href', '/')
+    expect(
+      screen.getByRole('button', { name: 'Sign in' }).closest('form'),
+    ).toHaveAttribute('data-action-binding', 'opaque-sign-in-binding')
   })
 
   it('keeps sign-in primary and expands explicit next actions on request', async () => {
@@ -112,6 +134,178 @@ describe('Sign-in orientation', () => {
     await renderSignIn({ [query]: '1' })
 
     expect(screen.getByRole('status')).toHaveTextContent(message)
+  })
+
+  it('confirms a checked sign-out without disclosing session detail', async () => {
+    await renderSignIn({ signedOut: '1' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Signed out from this local account.',
+    )
+    expect(screen.getByRole('status')).not.toHaveTextContent(/session|token|account id/i)
+  })
+
+  it('orients an uncertain member deletion without claiming either outcome', async () => {
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    await renderSignIn({ notice: 'signed-member-unknown' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Account deletion could not be confirmed.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Do not resubmit it')
+  })
+
+  it('returns an authenticated member with uncertain deletion to the checking page', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({ userId: 'member-id', role: 'member' })
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    pageMocks.verifySubjectNoticeForActor.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'signed-member-unknown' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/settings/delete-account?notice=signed-member-unknown',
+    )
+    expect(pageMocks.verifySubjectNoticeForActor).toHaveBeenCalledWith(
+      'signed-member-unknown',
+      'member-id',
+    )
+  })
+
+  it('returns an authenticated owner with uncertain reset to the checking page', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({ userId: 'owner-id', role: 'owner' })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.verifyResetNoticeForActor.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+    })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({ searchParams: Promise.resolve({ notice: 'signed-reset-unknown' }) }),
+    ).rejects.toBe(redirectSignal)
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/settings/delete?notice=signed-reset-unknown',
+    )
+    expect(pageMocks.verifyResetNoticeForActor).toHaveBeenCalledWith(
+      'signed-reset-unknown',
+      'owner-id',
+    )
+  })
+
+  it('does not let one member replay another member receipt into authenticated checking', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({
+      userId: 'different-member-id',
+      role: 'member',
+    })
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'receipt-for-original-member' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.verifySubjectNoticeForActor).toHaveBeenCalledWith(
+      'receipt-for-original-member',
+      'different-member-id',
+    )
+    expect(pageMocks.redirect).toHaveBeenCalledWith('/')
+    expect(pageMocks.redirect).not.toHaveBeenCalledWith(
+      expect.stringContaining('/settings/delete-account'),
+    )
+  })
+
+  it('does not let a replacement owner replay the previous owner reset receipt', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({
+      userId: 'replacement-owner-id',
+      role: 'owner',
+    })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'receipt-for-previous-owner' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.verifyResetNoticeForActor).toHaveBeenCalledWith(
+      'receipt-for-previous-owner',
+      'replacement-owner-id',
+    )
+    expect(pageMocks.redirect).toHaveBeenCalledWith('/')
+    expect(pageMocks.redirect).not.toHaveBeenCalledWith(
+      expect.stringContaining('/settings/delete?'),
+    )
+  })
+
+  it('preserves reset uncertainty when an open installation redirects to bootstrap', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getSignInPageInstallation.mockResolvedValueOnce({ kind: 'open' })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({ searchParams: Promise.resolve({ notice: 'signed-reset-unknown' }) }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.redirect).toHaveBeenCalledWith(
+      '/bootstrap?notice=signed-reset-unknown',
+    )
+    expect(pageMocks.verifyResetNoticeForActor).not.toHaveBeenCalled()
+    expect(pageMocks.verifySubjectNoticeForActor).not.toHaveBeenCalled()
+  })
+
+  it('marks cleanup-after-commit as a warning without weakening deletion success', async () => {
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'deleted',
+      actorRole: 'member',
+      warning: 'cleanup-failed',
+    })
+    await renderSignIn({ notice: 'signed-member-cleanup' })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Local account and subject-scoped training data deleted.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('do not repeat the deletion')
+  })
+
+  it('ignores an invalid receipt instead of inventing a destructive notice', async () => {
+    await renderSignIn({ notice: 'tampered-or-expired' })
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(pageMocks.verifySubjectNotice).toHaveBeenCalledWith('tampered-or-expired')
+    expect(pageMocks.verifyResetNotice).toHaveBeenCalledWith('tampered-or-expired')
   })
 
   it('orients an expired athlete and preserves only the exact saved-workout return', async () => {

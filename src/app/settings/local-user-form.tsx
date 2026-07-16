@@ -1,22 +1,33 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useActionState, useEffect, useRef } from 'react'
-import { ActionButton } from '@/components'
+import { ActionButton } from '@/components/action-button'
+import type { LocalUserCreateActionBinding } from '@/modules/identity/application/action-binding'
 import { createLocalUserAction, type LocalUserActionState } from './actions'
 import styles from './settings.module.css'
 
 const initialLocalUserActionState: LocalUserActionState = {
   errors: [],
   createdEmail: null,
+  stale: false,
 }
 
-export function LocalUserForm() {
+export function LocalUserForm({
+  targetUserId,
+  actionBinding,
+}: {
+  readonly targetUserId: string
+  readonly actionBinding: LocalUserCreateActionBinding
+}) {
   const [state, action, pending] = useActionState(
     createLocalUserAction,
     initialLocalUserActionState,
   )
   const formRef = useRef<HTMLFormElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
+  const handledStaleResponse = useRef<LocalUserActionState | null>(null)
+  const router = useRouter()
   const rejectionA11y =
     state.errors.length > 0
       ? ({
@@ -34,10 +45,18 @@ export function LocalUserForm() {
       const field = form.elements.namedItem(fieldName)
       if (field instanceof HTMLInputElement) field.value = ''
     }
-  }, [state])
+    if (state.stale && handledStaleResponse.current !== state) {
+      handledStaleResponse.current = state
+      router.refresh()
+    } else if (!state.stale) {
+      handledStaleResponse.current = null
+    }
+  }, [router, state])
 
   return (
     <form action={action} className={styles.form} ref={formRef}>
+      <input name="targetUserId" type="hidden" value={targetUserId} />
+      <input name="actionBinding" type="hidden" value={actionBinding} />
       {state.errors.length > 0 ? (
         <div
           className={styles.error}

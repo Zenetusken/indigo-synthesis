@@ -6,8 +6,10 @@ reviewed Drizzle schema/migration ledger. Better Auth schema generation feeds th
 project-owned schema during development; only committed Drizzle SQL is applied in an
 installation. Better Auth runtime migration and production CLI generation are disabled.
 Product use cases normally receive a server-derived authenticated actor ID. The current
-Data Portability deletion/export transaction is the documented cross-table exception and
-directly coordinates Identity rows until public module ports exist.
+Data Portability composition captures Identity export/destructive authority before queueing and
+rechecks actor, role, session, and installation epoch as the first transactional product check.
+Its temporary scoped cross-table adapters remain the documented exception until public module ports
+exist; they do not transfer Identity ownership.
 
 First-owner bootstrap requires a host-issued capability and locks the singleton
 installation plus capability row while it atomically creates the credential, consumes the

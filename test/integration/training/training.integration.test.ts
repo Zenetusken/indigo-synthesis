@@ -1,13 +1,13 @@
 import { count, eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+  createOwnerWithBootstrapCode,
+  issueOwnerBootstrap,
+} from '@/composition/identity-bootstrap-mutations'
+import {
   type AuthenticatedActor,
   deriveIdentityRole,
 } from '@/modules/identity/application/actor'
-import {
-  createOwnerWithBootstrapCode,
-  issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
 import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
@@ -42,7 +42,7 @@ import {
   startWorkout,
 } from '@/modules/training/application/workouts'
 import { resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb } from '@/platform/db/client'
+import { closeDb, getDb, getPool } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -1866,7 +1866,7 @@ describe('training PostgreSQL command boundary', () => {
           code: 'content.development-forbidden-in-production',
         },
       })
-      await expect(assertDatabaseReady()).rejects.toThrow(
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
         'reviewed content mode cannot start with 1 unreviewed program revisions',
       )
 

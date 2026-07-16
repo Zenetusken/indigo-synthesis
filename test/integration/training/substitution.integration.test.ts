@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
 import { resetAuthForTests } from '@/modules/identity/infrastructure/auth'
 import {
   getWorkoutSession,

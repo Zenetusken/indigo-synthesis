@@ -2,32 +2,32 @@ import { count, eq, sql } from 'drizzle-orm'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
-  createInstanceResetPlan,
-  executeInstanceReset,
-} from '@/modules/data-portability/application/deletion'
-import type { AuthenticatedActor } from '@/modules/identity/application/actor'
-import {
   createOwnerWithBootstrapCode,
   issueOwnerBootstrap,
-} from '@/modules/identity/bootstrap/owner-bootstrap'
+} from '@/composition/identity-bootstrap-mutations'
+import { createInstanceResetPlan } from '@/modules/data-portability/application/deletion'
+import type { AuthenticatedActor } from '@/modules/identity/application/actor'
 import {
   CredentialLifecycleUnavailableError,
+  credentialLifecycleConnectionLimit,
   withCredentialLifecycleLock,
   withExclusiveCredentialLifecycleFence,
   withSubmittedEmailCredentialLifecycleLocks,
 } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import { createScopedIdentityMutationGateway } from '@/modules/identity/infrastructure/scoped-mutation-auth'
 import {
   issueMemberReset,
   redeemMemberReset,
 } from '@/modules/identity/recovery/member-reset'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb, getPool } from '@/platform/db/client'
+import { closeDb, getDb } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
 import { migrateDatabase } from '@/platform/db/migrate'
+import { getDatabaseRuntime } from '@/platform/db/runtime-registry'
 import {
   auditEvents,
   deletionTombstones,
@@ -35,6 +35,7 @@ import {
   user,
   webRecoveryRateLimitBuckets,
 } from '@/platform/db/schema'
+import { submitInstanceResetThroughProductionPort } from '../support/destructive-mutation'
 
 const ownerPassword = 'instance-fence-owner-password'
 const memberPassword = 'instance-fence-member-password'
@@ -47,6 +48,7 @@ const requestContext = {
 let integrationDatabase: DisposableIntegrationDatabase | undefined
 let owner: AuthenticatedActor
 let member: { readonly id: string; readonly email: string }
+let ownerSessionToken: string
 
 type CapturedOutcome<T> =
   | { readonly status: 'fulfilled'; readonly value: T }
@@ -67,10 +69,17 @@ function captureOutcome<T>(promise: Promise<T>): Promise<CapturedOutcome<T>> {
   )
 }
 
-function isInstallationOwnerCaptureQuery(query: unknown): boolean {
-  return (
-    String(query).replace(/\s+/g, ' ').trim() ===
-    'SELECT owner_user_id FROM installation_state WHERE singleton = 1'
+async function authRequest(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const origin = getServerConfig().appOrigin
+  return createScopedIdentityMutationGateway(getDb()).signInEmail(
+    new Request(`${origin}/api/auth${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify(body),
+    }),
   )
 }
 
@@ -105,6 +114,15 @@ beforeAll(async () => {
     code: bootstrap.code,
   })
   owner = { ...createdOwner, userId: createdOwner.id, role: 'owner' }
+  const signIn = await authRequest('/sign-in/email', {
+    email: owner.email,
+    password: ownerPassword,
+  })
+  const signInBody = (await signIn.json()) as { readonly token?: string }
+  if (!signIn.ok || !signInBody.token) {
+    throw new Error('Could not create the reset-fence owner session.')
+  }
+  ownerSessionToken = signInBody.token
   member = await createLocalUserAsOwner(owner, {
     name: 'Instance Fence Member',
     email: 'instance-fence-member@example.test',
@@ -145,7 +163,9 @@ describe.sequential('instance reset credential lifecycle fence', () => {
 
   it('rejects work submitted before a replacement installation generation', async () => {
     const activeEntered = deferred<void>()
-    const releases = Array.from({ length: 4 }, () => deferred<void>())
+    const releases = Array.from({ length: credentialLifecycleConnectionLimit }, () =>
+      deferred<void>(),
+    )
     let enteredCount = 0
     const active = releases.map((release, index) =>
       withCredentialLifecycleLock(`generation-active-${index}`, async () => {
@@ -160,8 +180,6 @@ describe.sequential('instance reset credential lifecycle fence', () => {
     let staleRequest: Promise<CapturedOutcome<string>> | undefined
     let trustedBlockers: Array<Promise<CapturedOutcome<void>>> | undefined
     let staleCallbackEntered = false
-    const poolQuerySpy = vi.spyOn(getPool(), 'query')
-
     try {
       replacement = captureOutcome(
         withExclusiveCredentialLifecycleFence(async () => {
@@ -191,19 +209,12 @@ describe.sequential('instance reset credential lifecycle fence', () => {
       )
 
       await vi.waitFor(() => {
-        const captureQueries = poolQuerySpy.mock.calls.filter(([query]) =>
-          isInstallationOwnerCaptureQuery(query),
+        const snapshot = getDatabaseRuntime().snapshot()
+        expect(snapshot.pools.capture.admission).toMatchObject({ active: 0, queued: 0 })
+        expect(snapshot.pools.control.admission.queued).toBe(
+          (trustedBlockers?.length ?? 0) + 2,
         )
-        expect(captureQueries).toHaveLength(4)
       })
-      const completedCaptureQueries = poolQuerySpy.mock.calls.flatMap(([query], index) =>
-        isInstallationOwnerCaptureQuery(query)
-          ? [Promise.resolve(poolQuerySpy.mock.results[index]?.value)]
-          : [],
-      )
-      await Promise.all(completedCaptureQueries)
-      await Promise.resolve()
-      poolQuerySpy.mockRestore()
 
       releases[0]?.resolve(undefined)
       await waitForDatabaseCondition(
@@ -213,7 +224,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
             SELECT count(*)::integer AS waiting
             FROM pg_stat_activity
             WHERE datname = current_database()
-              AND application_name = 'indigo-credential-lifecycle'
+              AND application_name = 'indigo-synthesis:control'
               AND wait_event = 'advisory'
           `)
           return Number(result.rows[0]?.waiting ?? 0) >= 1
@@ -239,7 +250,6 @@ describe.sequential('instance reset credential lifecycle fence', () => {
         ),
       ).toBe(true)
     } finally {
-      poolQuerySpy.mockRestore()
       for (const release of releases) release.resolve(undefined)
       await Promise.allSettled(active)
       await Promise.allSettled(
@@ -264,7 +274,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
     const plan = await createInstanceResetPlan(owner)
     const rowLocker = new Client({ connectionString: getServerConfig().databaseUrl })
     await rowLocker.connect()
-    let reset: Promise<void> | undefined
+    let reset: ReturnType<typeof submitInstanceResetThroughProductionPort> | undefined
     let redemption:
       | Promise<{
           value: Awaited<ReturnType<typeof redeemMemberReset>> | null
@@ -284,13 +294,10 @@ describe.sequential('instance reset credential lifecycle fence', () => {
         [owner.userId],
       )
 
-      reset = executeInstanceReset({
-        actor: owner,
-        planId: plan.id,
-        planDigest: plan.digest,
+      reset = submitInstanceResetThroughProductionPort({
+        sessionToken: ownerSessionToken,
+        plan,
         password: ownerPassword,
-        typedConfirmation: 'RESET',
-        acknowledged: true,
       })
       await waitForDatabaseCondition(
         'instance reset to reach owner credential lock',
@@ -321,7 +328,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
           SELECT count(*)::integer AS waiting
           FROM pg_stat_activity
           WHERE datname = current_database()
-            AND application_name = 'indigo-credential-lifecycle'
+            AND application_name = 'indigo-synthesis:control'
             AND wait_event = 'advisory'
         `)
           return Number(result.rows[0]?.waiting ?? 0) >= 1
@@ -329,7 +336,7 @@ describe.sequential('instance reset credential lifecycle fence', () => {
       )
 
       await rowLocker.query('COMMIT')
-      await reset
+      await expect(reset).resolves.toEqual({ kind: 'reset', warning: null })
       const redemptionOutcome = await redemption
       expect(redemptionOutcome.value).toBeNull()
       expect(redemptionOutcome.error).toBeInstanceOf(CredentialLifecycleUnavailableError)

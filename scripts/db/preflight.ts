@@ -1,9 +1,4 @@
-import { closeDb } from '../../src/platform/db/client'
-import { assertDatabaseReady } from '../../src/platform/db/preflight'
+import { assertHostDatabaseReady } from '../../src/platform/db/host-preflight'
 
-try {
-  const result = await assertDatabaseReady()
-  process.stdout.write(`Database ready: ${result.databaseVersion}\n`)
-} finally {
-  await closeDb()
-}
+const result = await assertHostDatabaseReady()
+process.stdout.write(`Database ready: ${result.databaseVersion}\n`)

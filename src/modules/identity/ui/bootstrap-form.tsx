@@ -1,19 +1,40 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState, useTransition } from 'react'
+import type { OwnerBootstrapActionBinding } from '../application/action-binding'
 import { bootstrapOwner, getOwnerBootstrapStatus } from '../server/bootstrap'
 import styles from './identity-forms.module.css'
 
-export function BootstrapForm() {
+export function BootstrapForm({
+  actionBinding,
+}: {
+  readonly actionBinding: OwnerBootstrapActionBinding
+}) {
   const router = useRouter()
   const errorRef = useRef<HTMLDivElement>(null)
+  const reloadRequested = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [reloadMessage, setReloadMessage] = useState<string | null>(null)
+  const [refreshing, startRefresh] = useTransition()
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
+
+  useEffect(() => {
+    if (!reloadRequested.current || refreshing) return
+    reloadRequested.current = false
+    setReloadMessage('Bootstrap reloaded. Try again with the entries still shown.')
+  }, [refreshing])
+
+  function reloadBootstrap(): void {
+    setError(null)
+    setReloadMessage('Refreshing bootstrap…')
+    reloadRequested.current = true
+    startRefresh(() => router.refresh())
+  }
 
   function leaveBootstrap(url: '/sign-in?created=1' | '/sign-in?claimed=1') {
     // Claiming the singleton installation is irreversible. The server action invalidates
@@ -25,6 +46,7 @@ export function BootstrapForm() {
     event.preventDefault()
     setPending(true)
     setError(null)
+    setReloadMessage(null)
 
     const form = new FormData(event.currentTarget)
     const password = String(form.get('password') ?? '')
@@ -42,6 +64,7 @@ export function BootstrapForm() {
         email: String(form.get('email') ?? ''),
         password,
         code: String(form.get('bootstrapCode') ?? ''),
+        actionBinding,
       })
 
       if (result.kind === 'created') {
@@ -53,7 +76,7 @@ export function BootstrapForm() {
         return
       }
       setError(
-        'The account was not created. Check the host-issued code and account fields, then try again.',
+        'The account was not created. The page may have expired; check the host-issued code and account fields, reload bootstrap, then try again.',
       )
     } catch {
       try {
@@ -79,7 +102,16 @@ export function BootstrapForm() {
         <div className={styles.error} ref={errorRef} role="alert" tabIndex={-1}>
           <strong>Owner account not created</strong>
           <span>{error}</span>
+          <button type="button" onClick={reloadBootstrap}>
+            Reload bootstrap
+          </button>
         </div>
+      ) : null}
+
+      {reloadMessage ? (
+        <p role="status" aria-live="polite">
+          {reloadMessage}
+        </p>
       ) : null}
 
       <label>
@@ -130,7 +162,7 @@ export function BootstrapForm() {
         />
       </label>
 
-      <button type="submit" disabled={pending}>
+      <button type="submit" disabled={pending || refreshing}>
         {pending ? 'Creating owner…' : 'Create owner account'}
       </button>
     </form>
