@@ -24,3 +24,32 @@ The live contract has:
   trigger/table/function bindings, and reviewed-mode content eligibility. Extra
   historical ledger rows from a development branch do not false-fail when every current
   hash and concrete invariant still holds.
+
+## Connection topology
+
+`INDIGO_DATABASE_POOL_MAX` is the total supported single-instance connection budget. It
+accepts 6–64 and defaults to 10. The live allocation is exact:
+
+- ordinary application work: `poolMax - 4`;
+- credential control: 2;
+- credential capture: 1; and
+- serialized external-host work: 1.
+
+The three application pools therefore sum to `poolMax - 1`. The external slot is not a
+pool: each supported migration or preflight process constructs one dedicated `pg.Client`
+after inheriting the common nonblocking host lock. It never constructs the ordinary,
+control, or capture pools, and an in-process owner lease prevents a wrapped process from
+opening a second external-host client. The one-shot normalizes `search_path` to
+`pg_catalog, public` before exposing its scoped query surface. Migration, preflight,
+startup preflight, owner bootstrap/recovery, and expired-session maintenance all share
+the same per-UID lock.
+
+Preflight also verifies that `session_user` has `rolconnlimit = -1` (unlimited) or a
+limit at least as large as `INDIGO_DATABASE_POOL_MAX`. This is a role-level allowance,
+not proof of cluster-wide `max_connections`, currently free capacity, or capacity for
+multiple application instances.
+
+`pnpm db:backup-restore-drill` is a test-only disposable-database acceptance harness. It
+may use application-pool test helpers and proves restore/schema invariants; it is not a
+production one-shot topology proof. Production backup/restore follows the shared-lock
+procedure in [`docs/operations/BACKUP_RESTORE.md`](../../../docs/operations/BACKUP_RESTORE.md).

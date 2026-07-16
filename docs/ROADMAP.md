@@ -52,11 +52,15 @@ named Account security follow-on—session management plus a security-events vie
 sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
 for independent security/privacy review.
 
-Accepted calibration Part B Stage 3 amends only the connection allocation: it will replace the live
-normal-pool-plus-four-lifecycle-client topology with one bounded ordinary/control/capture/external-
-host budget configured by `INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64). No unused runtime-
-health lane is reserved; startup preflight uses the serialized external slot. That allocation is
-planned, not part of the retained J7–J9 evidence above.
+Calibration Part B Stage 3 is now in progress. Its bounded
+ordinary/control/trusted-capture/external-host allocation is live, configured by
+`INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64), with no unused runtime-health lane.
+Migration, observational startup preflight, bootstrap, recovery, and maintenance share
+the serialized external slot and never construct application pools. The retained J7–J9
+network-denied record predates that cutover and is not evidence for the new topology.
+Stage 3 remains open until the Data Portability destructive adapter and export
+unit-of-work cutovers, their independent review gates, and the checkpoint certification
+are complete.
 
 ## Gate 0 — Product truth
 
@@ -193,11 +197,15 @@ Success measures:
 - explanation comprehension; and
 - successful export/restore.
 
-Checkpoint: a guarded PostgreSQL logical backup/restore runbook and disposable-instance
-drill are implemented and exercised, including restored preflight and append-only trigger
-proof. Phase 4 still requires the second-person cold install, encrypted off-host
-retention/restore exercise, deployment-specific secret custody, and any future media
-boundary; repository-local technical proof cannot stand in for those operator checks.
+Checkpoint: a guarded PostgreSQL logical backup/restore runbook and test-only
+disposable-instance drill are implemented and exercised, including restored preflight
+and append-only trigger proof. The latest
+[retained drill](operations/evidence/2026-07-16-backup-restore-drill.md) covers all 19
+committed migrations at the serialized preflight/migration checkpoint. It proves restore
+invariants, not the production one-shot topology. Phase 4 still requires the
+second-person cold install, encrypted off-host retention/restore exercise,
+deployment-specific secret custody, and any future media boundary; repository-local
+technical proof cannot stand in for those operator checks.
 
 Screen time, notification opens, points, and social engagement are not success measures.
 

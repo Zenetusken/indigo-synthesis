@@ -7,12 +7,58 @@ const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
 const runbook = readFileSync('docs/operations/BACKUP_RESTORE.md', 'utf8')
 const drill = readFileSync('scripts/db/backup-restore-drill.ts', 'utf8')
 
+const sharedLockAcquisition = `(
+if ! command -v flock >/dev/null 2>&1; then
+  echo "ERROR: flock is required to serialize Indigo host database commands" >&2
+  exit 2
+fi
+source scripts/lib/host-lock.sh
+LOCK_PATH="$(indigo_host_lock_dir)/database-external-host.lock"
+exec 9>"$LOCK_PATH"
+if ! flock -n 9; then
+  echo "ERROR: another Indigo host database command is active ($LOCK_PATH)" >&2
+  exit 75
+fi`
+
 function section(start: string, end: string): string {
   const startIndex = runbook.indexOf(start)
   const endIndex = runbook.indexOf(end, startIndex + start.length)
   expect(startIndex).toBeGreaterThanOrEqual(0)
   expect(endIndex).toBeGreaterThan(startIndex)
   return runbook.slice(startIndex, endIndex)
+}
+
+function occurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1
+}
+
+function expectBoundedSharedLock(
+  procedure: string,
+  firstDatabaseOperation: string,
+  finalLockedOperation: string,
+  releaseMarker: string,
+): void {
+  expect(occurrences(procedure, sharedLockAcquisition)).toBe(1)
+  expect(occurrences(procedure, 'source scripts/lib/host-lock.sh')).toBe(1)
+  expect(
+    occurrences(
+      procedure,
+      'LOCK_PATH="$(indigo_host_lock_dir)/database-external-host.lock"',
+    ),
+  ).toBe(1)
+  expect(occurrences(procedure, 'exec 9>"$LOCK_PATH"')).toBe(1)
+  expect(occurrences(procedure, 'if ! flock -n 9; then')).toBe(1)
+  expect(occurrences(procedure, 'exit 75')).toBe(1)
+  expect(occurrences(procedure, releaseMarker)).toBe(1)
+
+  const lockStart = procedure.indexOf(sharedLockAcquisition)
+  const databaseStart = procedure.indexOf(firstDatabaseOperation)
+  const lockedWorkEnd = procedure.indexOf(finalLockedOperation, databaseStart)
+  const release = procedure.indexOf(`)\n${releaseMarker}`)
+  expect(lockStart).toBeGreaterThanOrEqual(0)
+  expect(lockStart).toBeLessThan(databaseStart)
+  expect(databaseStart).toBeLessThanOrEqual(lockedWorkEnd)
+  expect(lockedWorkEnd).toBeLessThan(release)
 }
 
 describe('backup/restore operator contract', () => {
@@ -31,6 +77,66 @@ describe('backup/restore operator contract', () => {
     expect(drill).toContain('assertBackupRestoreDrillDatabaseName(database.databaseName)')
     expect(drill).toContain('DROP SCHEMA IF EXISTS drizzle CASCADE')
     expect(drill).not.toContain('administrationUrl: process.env.DATABASE_URL')
+  })
+
+  it('serializes every production database procedure on the exact shared host lock', () => {
+    const backupSection = section('## Create a backup', '## Restore without overwriting')
+    const restoreSection = section(
+      '## Restore without overwriting',
+      '## Reconcile the recovery point',
+    )
+    const invalidationSection = section(
+      '## Invalidate restored authority',
+      '## Guarded repository drill',
+    )
+
+    expectBoundedSharedLock(
+      backupSection,
+      'SOURCE_IDENTITY=',
+      'pg_dump \\\n',
+      '# The bounded backup lock scope has exited; file descriptor 9 is closed here.',
+    )
+    expectBoundedSharedLock(
+      restoreSection,
+      'createdb \\\n',
+      '--single-transaction \\\n',
+      '# The bounded restore lock scope has exited; file descriptor 9 is closed here.',
+    )
+    expectBoundedSharedLock(
+      invalidationSection,
+      'CUTOVER_IDENTITY=',
+      '$secure_restore$;\nSQL',
+      '# The authority-invalidation lock scope has exited; file descriptor 9 is closed here.',
+    )
+
+    expect(occurrences(runbook, sharedLockAcquisition)).toBe(3)
+    expect(runbook).toMatch(/same POSIX user that runs Indigo's packaged host commands/)
+    expect(runbook).toMatch(
+      /Do not run a second manual or automated Indigo host database\s+job in parallel\./,
+    )
+    expect(runbook).toMatch(
+      /A different UID has a different lock namespace and therefore is not a\s+safe way to run concurrent work\./,
+    )
+
+    const restoreRelease = restoreSection.indexOf(
+      '# The bounded restore lock scope has exited; file descriptor 9 is closed here.',
+    )
+    const wrappedPreflight = restoreSection.indexOf('\npnpm db:preflight\n')
+    expect(restoreRelease).toBeGreaterThanOrEqual(0)
+    expect(wrappedPreflight).toBeGreaterThan(restoreRelease)
+
+    const invalidationRelease = invalidationSection.indexOf(
+      '# The authority-invalidation lock scope has exited; file descriptor 9 is closed here.',
+    )
+    const wrappedRecoveryIssue = invalidationSection.indexOf(
+      '\npnpm owner:recover issue \\\n',
+    )
+    const wrappedRecoveryRedeem = invalidationSection.indexOf(
+      '\npnpm owner:recover redeem \\\n',
+    )
+    expect(invalidationRelease).toBeGreaterThanOrEqual(0)
+    expect(wrappedRecoveryIssue).toBeGreaterThan(invalidationRelease)
+    expect(wrappedRecoveryRedeem).toBeGreaterThan(wrappedRecoveryIssue)
   })
 
   it('documents backup sensitivity, secure restore cutover, preflight, and media scope', () => {
@@ -125,6 +231,9 @@ describe('backup/restore operator contract', () => {
   })
 
   it('proves the exact opaque installation epoch survives the guarded drill', () => {
+    expect(runbook).toMatch(/test-only, disposable integration proof/)
+    expect(runbook).toMatch(/not a production\s+backup command/)
+    expect(runbook).toMatch(/not prove an\s+operator's encryption/)
     expect(drill).toContain('expectedEpoch = await seedProof')
     expect(drill).toContain('product_mutation_epoch AS "productMutationEpoch"')
     expect(drill).toContain(

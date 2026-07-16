@@ -21,6 +21,16 @@ secrets in a command argument or in this repository.
 Use `pg_dump` and `pg_restore` from the same PostgreSQL major version as the server, or a
 newer supported client. The supported baseline is PostgreSQL 18 or newer.
 
+Run every fenced production procedure below from the repository root in Bash, as the
+same POSIX user that runs Indigo's packaged host commands. Each procedure joins the exact
+same per-UID, non-blocking host-command lock used by migrations, preflight, bootstrap,
+recovery, and maintenance. Do not run a second manual or automated Indigo host database
+job in parallel. A different UID has a different lock namespace and therefore is not a
+safe way to run concurrent work. If the lock is occupied, the procedure prints an error
+and exits with status `75`; wait for the active job to finish rather than bypassing the
+lock. The lock scopes below are deliberately bounded subshells so file descriptor `9` is
+closed before a separately wrapped `pnpm` host command acquires the same lock.
+
 ## Create a backup
 
 For the current database-only boundary, `pg_dump` takes a transactionally consistent
@@ -51,6 +61,19 @@ umask 077
 mkdir -p "$BACKUP_DIRECTORY"
 chmod 700 "$BACKUP_DIRECTORY"
 
+(
+if ! command -v flock >/dev/null 2>&1; then
+  echo "ERROR: flock is required to serialize Indigo host database commands" >&2
+  exit 2
+fi
+source scripts/lib/host-lock.sh
+LOCK_PATH="$(indigo_host_lock_dir)/database-external-host.lock"
+exec 9>"$LOCK_PATH"
+if ! flock -n 9; then
+  echo "ERROR: another Indigo host database command is active ($LOCK_PATH)" >&2
+  exit 75
+fi
+
 SOURCE_IDENTITY="$({
   psql --no-psqlrc \
     --host="$PGHOST" \
@@ -78,6 +101,8 @@ pg_restore --list "$BACKUP_FILE" >"$BACKUP_FILE.list"
   cd "$BACKUP_DIRECTORY"
   sha256sum "$BACKUP_BASENAME" >"$BACKUP_BASENAME.sha256"
 )
+)
+# The bounded backup lock scope has exited; file descriptor 9 is closed here.
 ```
 
 Copy the archive, checksum, and inventory to the protected backup destination. Verify
@@ -104,6 +129,19 @@ set -euo pipefail
 export RESTORE_DATABASE=indigo_synthesis_restore_20260713
 test "$RESTORE_DATABASE" != "$PGDATABASE"
 unset PGPASSWORD PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+
+(
+if ! command -v flock >/dev/null 2>&1; then
+  echo "ERROR: flock is required to serialize Indigo host database commands" >&2
+  exit 2
+fi
+source scripts/lib/host-lock.sh
+LOCK_PATH="$(indigo_host_lock_dir)/database-external-host.lock"
+exec 9>"$LOCK_PATH"
+if ! flock -n 9; then
+  echo "ERROR: another Indigo host database command is active ($LOCK_PATH)" >&2
+  exit 75
+fi
 
 (
   cd "$(dirname "$BACKUP_FILE")"
@@ -155,6 +193,8 @@ pg_restore \
   --no-owner \
   --no-privileges \
   "$BACKUP_FILE"
+)
+# The bounded restore lock scope has exited; file descriptor 9 is closed here.
 ```
 
 `createdb` must fail if the target already exists. Do not add `--clean`, `--if-exists`, or
@@ -168,6 +208,7 @@ values take precedence over `.env.local`; keep the restore credentials out of sh
 history. Then run the current code against that target:
 
 ```sh
+# The shared restore lock is already released; this command acquires it independently.
 pnpm db:preflight
 ```
 
@@ -212,6 +253,19 @@ set -euo pipefail
 : "${EXPECTED_PG_SERVER_ADDRESS:?Set the expected literal PostgreSQL server address}"
 
 unset PGPASSWORD PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+
+(
+if ! command -v flock >/dev/null 2>&1; then
+  echo "ERROR: flock is required to serialize Indigo host database commands" >&2
+  exit 2
+fi
+source scripts/lib/host-lock.sh
+LOCK_PATH="$(indigo_host_lock_dir)/database-external-host.lock"
+exec 9>"$LOCK_PATH"
+if ! flock -n 9; then
+  echo "ERROR: another Indigo host database command is active ($LOCK_PATH)" >&2
+  exit 75
+fi
 
 CUTOVER_IDENTITY="$({
   psql --no-psqlrc \
@@ -300,6 +354,8 @@ BEGIN
 END
 $secure_restore$;
 SQL
+)
+# The authority-invalidation lock scope has exited; file descriptor 9 is closed here.
 ```
 
 Generate a new auth secret into protected storage without printing it or placing it in a
@@ -332,6 +388,24 @@ the service remains loopback-only. The recovered owner can then issue fresh one-
 reset codes. Members without a fresh reset remain unable to sign in; no snapshot-era
 credential or capability is accepted.
 
+The recovery commands below are separately wrapped package commands. Run them only after
+the authority-invalidation subshell above has exited and the restored deployment is using
+the new protected secret; otherwise they would correctly contend on the same non-reentrant
+lock. Supply protected absolute paths as described in the owner-recovery contract:
+
+```sh
+# The shared authority lock is already released; this command acquires it independently.
+pnpm owner:recover issue \
+  --owner-email owner@example.test \
+  --code-file /absolute/private/path/recovery-code \
+  --ttl-minutes 15
+
+pnpm owner:recover redeem \
+  --owner-email owner@example.test \
+  --code-file /absolute/private/path/recovery-code \
+  --password-file /absolute/private/path/new-password
+```
+
 After owner recovery and every isolated check passes, cut over explicitly: stop the
 application, select the restored `DATABASE_URL` and the restored deployment's newly generated
 `BETTER_AUTH_SECRET` together, and start the application on loopback. Run the post-cutover
@@ -357,7 +431,9 @@ retention policy.
 
 ## Guarded repository drill
 
-The repository drill never reads `DATABASE_URL` as a destructive target. It requires
+The repository drill is a test-only, disposable integration proof. It is not a production
+backup command, a production restore procedure, or permission to use a live/shared server.
+It never reads `DATABASE_URL` as a destructive target. It requires
 `INTEGRATION_ADMIN_DATABASE_URL` on literal loopback, creates a 96-bit-random database
 named `indigo_backup_restore_<24 lowercase hex>_integration`, and rechecks that exact
 shape immediately before its only wipe. It then:
@@ -399,4 +475,4 @@ operator's encryption, off-host storage, retention, media copying, recovery-time
 or cold-install procedure; those remain deployment evidence and, where appropriate,
 human-operated checks.
 
-See the [latest retained checkpoint evidence](evidence/2026-07-15-backup-restore-drill.md).
+See the [latest retained checkpoint evidence](evidence/2026-07-16-backup-restore-drill.md).

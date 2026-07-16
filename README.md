@@ -66,9 +66,17 @@ changing the prescription or session facts, rather than inventing an equivalent.
 
 Requirements:
 
+- Linux with procfs exposing `/proc/self/fd`
+- Bash
+- util-linux `flock` and GNU-compatible `stat -c`
 - Node.js 24 LTS
 - pnpm 10
 - PostgreSQL 18 or newer
+
+Run every Indigo host database command under the same operating-system account. The
+supported migration, preflight, startup-preflight, bootstrap, recovery, and maintenance
+commands share one per-UID host lock; using different UIDs would create different lock
+namespaces.
 
 Create a PostgreSQL database and copy `.env.example` to `.env.local`. Set a unique
 authentication secret of at least 32 characters. For the technical walkthrough, change
@@ -76,6 +84,7 @@ the content mode to `development`:
 
 ```dotenv
 DATABASE_URL=postgresql://indigo:change-me@127.0.0.1:5432/indigo_synthesis
+INDIGO_DATABASE_POOL_MAX=10
 BETTER_AUTH_SECRET=replace-with-a-unique-secret-at-least-32-characters-long
 BETTER_AUTH_URL=http://127.0.0.1:3000
 INDIGO_CONTENT_MODE=development
@@ -94,8 +103,16 @@ pnpm dev
 Open `http://127.0.0.1:3000`. Both `pnpm dev` and `pnpm start` bind only to that
 loopback address; network access belongs behind an operator-managed HTTPS ingress. A
 fresh database presents the one-time owner bootstrap, then setup and the
-development-program walkthrough. `pnpm start` retains the database compatibility
+development-program walkthrough. `pnpm start` retains the serialized one-shot database
 preflight before the production process starts listening.
+
+`INDIGO_DATABASE_POOL_MAX` accepts an integer from 6 through 64 and defaults to 10.
+Application pools use at most one fewer connection than that value; the remaining slot
+belongs to one serialized host command. Migration and preflight construct only that one
+dedicated connection and never instantiate the application pools. Direct invocation of
+their TypeScript entrypoints is unsupported and rejects before connection construction.
+Startup closes the preflight connection and releases the host lock before creating the
+long-lived application runtime.
 
 `INDIGO_CONTENT_MODE=development` is for technical validation only. A production
 process refuses that mode. No reviewed program release ships yet, so the application is
@@ -139,9 +156,11 @@ pnpm db:backup-restore-drill
 bash scripts/e2e/run-network-denied.sh
 ```
 
-The first creates, wipes, restores, verifies, and removes only a guarded random
-disposable database; the second runs the default browser suite in a Linux namespace with
-no non-loopback interface or default route. Read
+The first is a **test-only acceptance harness**: it creates, wipes, restores, verifies,
+and removes only a guarded random disposable database and may use application-pool test
+composition. It proves restore/schema invariants, not the production one-shot connection
+topology or a real operator's retention practice. The second runs the default browser
+suite in a Linux namespace with no non-loopback interface or default route. Read
 [`docs/operations/BACKUP_RESTORE.md`](docs/operations/BACKUP_RESTORE.md) and
 [`docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md`](docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md)
 before using them. The current committed 19-test isolation proof is retained in

@@ -83,11 +83,11 @@ repository as follows:
   Signing in resumes the exact committed workout; the denied command is not replayed and
   unsaved browser fields are not represented as durable.
 - **Threat controls.** Email-first and account-scoped lifecycle locks serialize sign-in,
-  creation, and recovery. The live J7–J9 checkpoint still uses four bounded raw lifecycle clients
-  beside the normal pool, with trusted host/account work prioritized. Accepted Part B Stage 3—not
-  yet live—replaces that allocation with one installation-wide ordinary/control/capture plus
-  external-host budget and bounded priority queues, configured by `INDIGO_DATABASE_POOL_MAX`
-  (default 10, range 6–64); there is no unused runtime-health reservation; web admission uses HMAC-keyed
+  creation, and recovery. Part B Stage 3 now uses one installation-wide bounded
+  ordinary/control/trusted-capture plus serialized external-host budget and bounded
+  priority queues, configured by `INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64).
+  There is no unused runtime-health reservation; migration and startup preflight use
+  exactly the external slot without constructing application pools; web admission uses HMAC-keyed
   fixed-window buckets and bounded cleanup; member-code backoff does not consume the
   code; session cookie caching is disabled; unsupported Better Auth identity-mutation
   routes are blocked; and audit addresses are minimized.
@@ -106,12 +106,12 @@ Account security follow-on, not unfinished J7–J9 work.
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
 | Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and retained 19/19 proof from a clean committed tree in a Linux namespace exposing only loopback plus a private PostgreSQL socket bridge | Rerun after any product/runtime or default-suite change; keep deployment ingress and cold-install evidence separate |
-| Database integrity | Seventeen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, HMAC-keyed recovery admission state, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
+| Database integrity | Nineteen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, HMAC-keyed recovery admission state, installation mutation epoch, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
 | Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with live-source abandonment or completed-source durable-invalidation prerequisite, no medical-clearance implication, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
 | Accessibility/mobile | Semantic server-rendered UI plus targeted Playwright proof at 390×844 for reflow, 200% text sizing, 48px controls, skip-link/focus visibility, keyboard form order and focus continuation, changing polite save status, distinct titles, reduced motion, and no horizontal overflow | Independent WCAG 2.2 AA review, manual screen-reader certification, and representative physical-device testing |
-| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, executable dependency/runtime guards, and the shipped O1–O5 schema write-authority fence | Implement accepted Part B: UnitOfWork/public ports, remove current debt/operator breadth, enforce public/private read boundaries, and complete O6 |
+| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, executable dependency/runtime guards, the shipped O1–O5 schema write-authority fence, and the live Stage 3 UnitOfWork/Identity/connection substrate | Finish Part B owner ports, remove remaining Data Portability operator breadth, enforce public/private read boundaries, and complete O6 |
 
 ## Validation commands
 
@@ -130,7 +130,7 @@ green. The complete default Playwright selection contains **19** tests and passe
 from clean committed product tree `7c7ea334d4c88d9279abe574031881a23a15f32c` inside
 the outbound-network-denied runner. The retained
 [acceptance record](operations/evidence/2026-07-13-outbound-network-blocked.md) covers the
-prior suite plus all J7/J8/J9 cases. Fresh migration/preflight covers all 17 ledger
+prior suite plus all J7/J8/J9 cases. Fresh migration/preflight covers all 19 ledger
 entries and 28 required integrity triggers. Playwright recreates a guarded disposable
 PostgreSQL database and does not mock application APIs.
 
@@ -146,7 +146,11 @@ training content or, by itself, satisfy the Product Spec's final release gate.
 The target architecture describes module-owned gateways and a shared workflow
 `UnitOfWork`. Part A of the schema-ownership arc shipped in #9: all live schema tables are
 manifested bijectively and every observed DML write is checked against owner/debt/operator grants.
-The maintainer selected the proper Part B boundary in #12. Runtime implementation remains open:
+The maintainer selected the proper Part B boundary in #12. Runtime implementation is in
+progress: the nominal UnitOfWork, transaction substrate, installation epoch, live
+Identity credential/recovery routes, bounded expired-session maintenance, bounded pool
+allocation, and serialized host preflight/migration are implemented on this branch.
+The remaining debt is explicit:
 
 - Programs and Training currently coordinate through direct Drizzle queries over the
   shared schema for some cross-module workflows.
@@ -163,8 +167,9 @@ The maintainer selected the proper Part B boundary in #12. Runtime implementatio
   [DEVELOPMENT_ROADMAP.md](architecture/DEVELOPMENT_ROADMAP.md), grounded in the retained
   [SCHEMA_OWNERSHIP_SPEC.md](architecture/SCHEMA_OWNERSHIP_SPEC.md) census and accepted
   [ADR 0007](architecture/adr/0007-schema-table-ownership.md).
-  Production-release blocker 4 remains open until Part B implementation removes the current debt
-  and Data Portability operator breadth and O6 status/documentation converges.
+  Production-release blocker 4 remains open until Part B removes the remaining
+  Data Portability operator breadth and co-write debt and O6 status/documentation
+  converges.
 
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.

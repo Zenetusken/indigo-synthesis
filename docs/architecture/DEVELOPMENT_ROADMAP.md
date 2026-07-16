@@ -1,6 +1,6 @@
 # Development roadmap — calibration and proper module architecture (Part B)
 
-Status: **active engineering roadmap; Phase 0 complete, Stage 3 next**
+Status: **active engineering roadmap; Phase 0 complete, Stage 3 in progress**
 
 This is the single engineering roadmap for the architecture arc from the shipped schema
 write-fence to a calibrated `profile → plan → train → learn` loop and complete Part B module
@@ -54,7 +54,7 @@ do not bless a direct-table workaround merely because the current installation i
 
 ### Open engineering work
 
-- executable `UnitOfWork` and transaction-scoped gateways;
+- complete the Stage 3 Data Portability destructive-adapter and export-UnitOfWork cutovers;
 - truthful calibration facts, schema, engine, persistence, and user-path integration;
 - Programs/Training co-write retirement;
 - audit, safety-hold, and Data Portability owner ports;
@@ -380,6 +380,27 @@ No runtime implementation begins until this gate is green.
   epoch/auth lifecycle data and neutral UoW ports required by the live substrate. Subject generation
   waits for Stage 4's atomic setup/deletion cutover.
 - **Review gate:** transaction lifetime/atomicity and architecture-boundary lenses.
+
+#### Stage 3 implementation checkpoint — 2026-07-16 *(IN PROGRESS)*
+
+- The nominal UnitOfWork and prelocked-session contracts, PostgreSQL transaction
+  substrate, scoped Drizzle bridge, runtime mutation authority, and content-lock-plan
+  capability boundaries are live.
+- Identity now persists and checks the installation mutation epoch; credential,
+  bootstrap, member reset, browser/host owner recovery, and bounded expired-session
+  maintenance use the reserved control/capture/external-host topology.
+- `INDIGO_DATABASE_POOL_MAX` now bounds the ordinary/control/trusted-capture allocation.
+  Migration and observational startup preflight share one serialized, separately
+  budgeted one-shot client, normalize `search_path`, verify role allowance, and never
+  instantiate application pools.
+- Static/type/unit/integration/build gates and the 19-migration disposable
+  backup→wipe→restore drill are green at code checkpoint `131222a`; independent
+  transaction/Identity, connection-budget, and one-shot-lifecycle reviews report no
+  unresolved finding in the completed slices.
+- Stage 3 is not complete: Data Portability still needs its epoch-bound destructive
+  adapter and export UnitOfWork cutovers, followed by the cumulative Stage 3 review and
+  certification gate. The retained 2026-07-13 network-denied browser evidence predates
+  this topology and is not relabeled as current proof.
 
 ### Stage 4 — calibration and loadability persistence skeleton
 
@@ -1116,7 +1137,7 @@ evidence only and is never represented as the independent human release reviews 
 | Stage 1 | #10 | typecheck/format/schema suite recorded in PR | three adversarial boundary rounds |
 | Stage 2 | #12; corrections #13 | docs-only validation | acceptance + roadmap certification |
 | Phase 0 | this Phase 0 contract commit | `pnpm check`; `pnpm docs:check`; `pnpm typecheck`; `pnpm test` (70 files, 570 tests); `git diff --check` | exact-tree architecture/integrity, product/status, and content-lock gates green; no unresolved critical/major |
-| Stage 3 | pending | pending | pending |
+| Stage 3 | in progress — `a93ebe1` through `131222a` | `pnpm check`; `pnpm docs:check`; `pnpm typecheck`; committed code checkpoint: 130 unit files/1194 tests; `pnpm test:integration` (19 files, 194 tests); reviewed-mode LLM-disabled build; 19-migration backup/restore drill | completed transaction/Identity, connection-budget, and one-shot-lifecycle slices independently green; Data Portability/export and cumulative disposition pending |
 | Stage 4 | pending | pending | pending |
 | Stage 5 | pending | pending | pending |
 | Stage 6 | pending | pending | pending |

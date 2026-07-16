@@ -13,6 +13,12 @@ Core product operation requires only:
 2. one PostgreSQL database; and
 3. one writable data directory if local media uploads are enabled.
 
+Those are the only application authorities. The supported host-command surface also
+requires Linux procfs (`/proc/self/fd`), Bash, util-linux `flock`, and GNU-compatible
+`stat -c` so migration, preflight, bootstrap, recovery, and maintenance can inherit one
+verified nonblocking lock. All such commands run under the same Unix UID; the tools and
+lock are host prerequisites, not additional services or data authorities.
+
 No other service is authoritative or mandatory.
 
 The optional grounded-language path is outside that core topology. When explicitly
@@ -82,6 +88,8 @@ diagnostic only. Inference must never become required for J1–J6. See
 The current required configuration is:
 
 - database URL;
+- total single-instance database connection budget (`INDIGO_DATABASE_POOL_MAX`, default
+  10, accepted range 6–64);
 - application origin;
 - authentication secret.
 
@@ -101,13 +109,25 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 19 current committed migration
-hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
-enforcement, current snapshot/revision and correction/invalidation structures,
-append-only content-release revocations, the access/recovery persistence and HMAC-keyed
-admission contract, the explanation-cache contract, and all 28 required enabled
-trigger/table/function bindings. `pnpm start` runs this preflight before starting the
-production server. Both
+The connection budget is partitioned into ordinary `poolMax - 4`, credential-control 2,
+credential-capture 1, and external-host 1. Application pools therefore total
+`poolMax - 1`; there is no unused health lane. The external slot is a serialized,
+dedicated client rather than a pool, and an in-process owner lease enforces one such
+client per wrapped command.
+
+`pnpm db:preflight` uses only that external-host client, normalizes its search path to
+`pg_catalog, public`, and verifies PostgreSQL 18 or newer, all 19 current committed
+migration hashes including the exact canonical 0004 program-ordinal provenance,
+owner-bootstrap enforcement, current snapshot/revision and correction/invalidation
+structures, append-only content-release revocations, the access/recovery persistence and
+HMAC-keyed admission contract, the explanation-cache contract, and all 28 required
+enabled trigger/table/function bindings. It also requires the authenticated
+`session_user` role's `rolconnlimit` to be `-1` or at least `poolMax`. That role check
+does not attest global `max_connections`, currently free capacity, or multi-instance
+capacity.
+
+`pnpm start` runs this observational preflight and closes its dedicated connection and
+host-lock scope before starting the application pools and production server. Both
 supported runtime commands bind `127.0.0.1` explicitly. A network-facing HTTPS ingress
 runs on the same trusted host and forwards to that loopback listener; the application
 process does not expose a plain-HTTP LAN socket.
@@ -171,6 +191,14 @@ behavior, and startup preflight. Operators still own encryption, off-host retent
 runtime-secret custody, deployment-specific restore practice, recovery objectives, and
 any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
 
+The production backup, restore, and destructive post-restore authority-invalidation
+procedures hold the same per-UID host lock as every other external-host database command
+and use no parallel database jobs. Each procedure therefore owns at most one database
+connection while application host commands are excluded. The repository drill is a
+test-only disposable-database harness: it may use application-pool helpers and proves
+restore invariants, not the production one-shot topology or an operator's retention
+practice.
+
 ## Privacy and telemetry
 
 - Application telemetry is off by default.
@@ -184,6 +212,10 @@ any future media boundary. See [the runbook](../operations/BACKUP_RESTORE.md).
 The first supported core topology is one application instance and one PostgreSQL
 instance. An explicitly enabled local-language path may add the non-authoritative
 loopback inference process described above.
+The connection allocation and authenticated-role allowance are a single-instance budget,
+not a cluster-wide reservation. Operators must account separately for PostgreSQL
+administration, backup, monitoring, other applications, and any unsupported additional
+Indigo instance when sizing `max_connections` and role limits.
 Multi-instance cache coordination, HA databases, replicas, failover, and multi-region
 operation are not implicit requirements.
 

@@ -1571,9 +1571,9 @@ Export-first may finish and return the coherent pre-delete snapshot before delet
 deletion-first makes a stale queued export fail generation/subject existence and a fresh export see
 the post-delete state. Both orders are integration-tested without blocking unrelated subjects.
 
-Admission is bounded before a dedicated connection is consumed. Stage 3 replaces the live single
-hard-coded pool plus four raw lifecycle clients with `INDIGO_DATABASE_POOL_MAX`, an integer 6–64
-defaulting to 10 and defining one physical `poolMax` budget split into independent pools/permits.
+Admission is bounded before a dedicated connection is consumed. The live Stage 3
+connection slice uses `INDIGO_DATABASE_POOL_MAX`, an integer 6–64 defaulting to 10 and
+defining one physical `poolMax` budget split into independent pools/permits.
 Ordinary page/UoW/Better-Auth read work gets `poolMax - 4` (minimum 2) with FIFO queue 128; two
 control connections are reserved for credential/recovery/reset/bootstrap leases; one priority-
 admitted security-capture connection performs the pre-wait installation epoch/owner read (Stage 4
@@ -1581,10 +1581,12 @@ extends that same lane to subject generation atomically with its consumers); and
 wide slot is reserved for an external host/operator process. Stage 3 adds no runtime database-health
 endpoint or reserved health lane: startup database preflight is a serialized host one-shot on the
 external slot, and any later accepted in-process diagnostic uses bounded ordinary admission or
-requires a contract amendment. Host bootstrap/recovery,
-preflight, backup/restore, and every shipped one-shot entrypoint acquire one common host `flock`
-before opening exactly one dedicated client, never instantiate application pools, and release it on
-every exit. App pool maxima sum to `poolMax - 1`; runbook/preflight verifies the configured
+requires a contract amendment. Host bootstrap/recovery, preflight, migration,
+maintenance, and every shipped true one-shot entrypoint acquire one common host `flock`
+before opening exactly one dedicated client, never instantiate application pools, and
+release it on every exit. Production backup, restore, and authority invalidation hold the
+same lock and use no parallel jobs; they may open several sequential CLI connections but
+hold at most one at a time. App pool maxima sum to `poolMax - 1`; runbook/preflight verifies the configured
 PostgreSQL-role allowance covers `poolMax`. A real separate-process CLI saturation test proves the
 runtime plus one external command never exceed that installation budget.
 The capture lane and the two-connection control pool each have separately bounded trusted and

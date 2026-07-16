@@ -432,10 +432,10 @@ malformed trusted forwarding data in network mode) remains the existing pre-cred
   lock and guesses never consume the code. CLI owner redemption bypasses all web buckets
   and remains the guaranteed owner escape.
 
-  **Part B connection-topology amendment (accepted, Stage 3; not live at the J7–J9
-  checkpoint):** `INDIGO_DATABASE_POOL_MAX` is an integer from **6 through 64**, defaults to
-  **10**, and is the one installation-wide `poolMax` replacing the live normal pool plus four raw
-  lifecycle clients. Ordinary page/UoW/Better Auth read work receives `poolMax - 4` connections
+  **Part B connection-topology amendment (accepted and live during Stage 3):**
+  `INDIGO_DATABASE_POOL_MAX` is an integer from **6 through 64**, defaults to **10**, and
+  is the one installation-wide `poolMax`. Ordinary page/UoW/Better Auth read work receives
+  `poolMax - 4` connections
   (minimum 2) with a FIFO queue of 128; two connections are reserved for credential/recovery/reset/
   bootstrap control leases; one priority-admitted capture connection resolves the pre-wait
   installation/owner boundary; and one installation-wide slot is reserved for a separate host/
@@ -451,15 +451,18 @@ malformed trusted forwarding data in network mode) remains the existing pre-cred
   scoped work has strict priority after current work; FIFO is preserved within a priority,
   so submitted-email floods cannot stand ahead of authenticated recovery/reset/bootstrap.
   Lease-bearing work reuses its control client and never re-enters the ordinary pool. The
-  production host bootstrap/recovery/preflight/backup/restore commands acquire one shared
-  host `flock`, open exactly one client against the reserved external slot, never instantiate
-  an application pool, and release it on every exit. A separate-process saturation test
-  proves runtime plus one host command never exceed `poolMax`.
+  production host bootstrap/recovery/preflight/migration/maintenance commands acquire one
+  shared host `flock`, open exactly one client against the reserved external slot, never
+  instantiate an application pool, and release it on every exit. Production backup,
+  restore, and authority invalidation acquire that same lock and use no parallel database
+  jobs; they may open multiple sequential CLI connections but hold at most one at a time.
+  A separate-process saturation test proves runtime plus one true one-shot host command
+  never exceed `poolMax`.
 
-  This amendment supersedes only the original four-client/separate-CLI-pool allocation; the
-  already shipped H-DoS admission, priority, uniformity, and durable bucket semantics remain
-  binding. Until Stage 3 lands, the repository still uses the earlier bounded lifecycle-
-  client topology and must not claim the amended budget as live.
+  This amendment supersedes only the original four-client/separate-CLI-pool allocation;
+  the already shipped H-DoS admission, priority, uniformity, and durable bucket semantics
+  remain binding. The retained J7–J9 network-denied evidence predates this cutover and is
+  not evidence for the live amended topology.
   Configuration validation happens before a slot is reserved. Each shared-fence request
   captures the claimed owner before waiting and requires the same non-null claim after it
   enters, so a queued pre-reset request cannot write into an open or newly re-bootstrapped
