@@ -20,28 +20,35 @@ import {
   memberResetIssuanceMutationScope,
 } from './credential-administration-mutation'
 import {
+  type InstanceResetMutationCapture,
+  instanceResetMutationReauthenticationScope,
+  type TraineeDataDeletionMutationCapture,
+  traineeDataDeletionMutationReauthenticationScope,
+} from './destructive-mutation'
+import {
   type DestructiveReauthenticationPurpose,
   destructiveReauthenticationPolicy,
 } from './destructive-reauthentication'
 
 type SupportedPurpose = Extract<
   DestructiveReauthenticationPurpose,
-  'local-user-create' | 'member-reset-issue'
+  'local-user-create' | 'member-reset-issue' | 'trainee-data-deletion' | 'instance-reset'
 >
+
+type ReauthenticationAuditBinding = Readonly<{
+  actorUserId: string
+  subjectUserId: string | null
+  eventType: 'local-user-create-rejected' | 'member-reset-rejected'
+  entityType: 'local-user' | 'member-reset'
+  entityId: string | null
+}>
 
 type ReauthenticationBinding = Readonly<{
   purpose: SupportedPurpose
   actorUserId: string
-  targetUserId: string
   commandEnteredAt: Date
   precondition: 'ready' | 'member-target-invalid'
-  audit: Readonly<{
-    actorUserId: string
-    subjectUserId: string | null
-    eventType: 'local-user-create-rejected' | 'member-reset-rejected'
-    entityType: 'local-user' | 'member-reset'
-    entityId: string | null
-  }>
+  audit: ReauthenticationAuditBinding | null
 }>
 
 type ReauthenticationAttemptInput<ProtectedAuthority> = Readonly<{
@@ -85,6 +92,18 @@ export interface ScopedMemberResetIssuanceReauthenticationGateway {
   ): Promise<ScopedCredentialPreconditionRejection>
 }
 
+export interface ScopedSubjectDeletionReauthenticationGateway {
+  attempt<ProtectedAuthority>(
+    input: ReauthenticationAttemptInput<ProtectedAuthority>,
+  ): Promise<ScopedCredentialReauthenticationOutcome<ProtectedAuthority>>
+}
+
+export interface ScopedInstanceResetReauthenticationGateway {
+  attempt<ProtectedAuthority>(
+    input: ReauthenticationAttemptInput<ProtectedAuthority>,
+  ): Promise<ScopedCredentialReauthenticationOutcome<ProtectedAuthority>>
+}
+
 export class ScopedCredentialReauthenticationInvariantError extends Error {
   constructor() {
     super('The scoped credential reauthentication state is no longer coherent.')
@@ -109,6 +128,14 @@ type ReauthenticationStateRow = Readonly<{
 
 function invariant(): never {
   throw new ScopedCredentialReauthenticationInvariantError()
+}
+
+function oneUseClaim(): () => void {
+  let claimed = false
+  return () => {
+    if (claimed) return invariant()
+    claimed = true
+  }
 }
 
 function attemptDate(value: Date): Date {
@@ -182,7 +209,9 @@ async function attemptReauthentication<
     return invariant()
   }
   const now = attemptDate(binding.commandEnteredAt)
-  const requestAuditContext = credentialAuditContext(input.requestContext)
+  const requestAuditContext = binding.audit
+    ? credentialAuditContext(input.requestContext)
+    : Object.freeze({})
 
   const [selectedCredential] = await database
     .select({ id: account.id, password: account.password })
@@ -297,11 +326,11 @@ async function attemptReauthentication<
   const outcome = becomesLocked ? 'locked' : 'failed'
   await database.insert(auditEvents).values({
     id: newUuidV7(now.getTime()),
-    actorUserId: binding.audit.actorUserId,
-    subjectUserId: binding.audit.subjectUserId,
-    eventType: binding.audit.eventType,
-    entityType: binding.audit.entityType,
-    entityId: binding.audit.entityId,
+    actorUserId: binding.audit?.actorUserId ?? null,
+    subjectUserId: binding.audit?.subjectUserId ?? null,
+    eventType: binding.audit?.eventType ?? 'destructive-reauthentication-denied',
+    entityType: binding.audit?.entityType ?? 'destructive-reauthentication-state',
+    entityId: binding.audit ? binding.audit.entityId : stateId,
     metadata: {
       ...requestAuditContext,
       purpose: binding.purpose,
@@ -328,7 +357,8 @@ async function rejectPrecondition<
     (binding.purpose === 'local-user-create' && input.reason !== 'validation-rejected') ||
     (binding.purpose === 'member-reset-issue' &&
       (input.reason !== 'target-invalid' ||
-        binding.precondition !== 'member-target-invalid'))
+        binding.precondition !== 'member-target-invalid')) ||
+    binding.audit === null
   ) {
     return invariant()
   }
@@ -349,6 +379,22 @@ async function rejectPrecondition<
   return Object.freeze({ status: 'precondition-rejected', reason: input.reason })
 }
 
+function destructiveBinding(
+  input: Readonly<{
+    purpose: 'trainee-data-deletion' | 'instance-reset'
+    actorUserId: string
+    commandEnteredAt: Date
+  }>,
+): ReauthenticationBinding {
+  return Object.freeze({
+    purpose: input.purpose,
+    actorUserId: input.actorUserId,
+    commandEnteredAt: new Date(input.commandEnteredAt.getTime()),
+    precondition: 'ready',
+    audit: null,
+  })
+}
+
 function localUserCreationBinding(
   capture: LocalUserCreationMutationCapture,
 ): ReauthenticationBinding {
@@ -364,7 +410,6 @@ function localUserCreationBinding(
   return Object.freeze({
     purpose: view.purpose,
     actorUserId: view.actorUserId,
-    targetUserId: view.preallocatedTargetUserId,
     commandEnteredAt: new Date(scope.commandEnteredAt.getTime()),
     precondition: 'ready',
     audit: Object.freeze({
@@ -396,7 +441,6 @@ function memberResetIssuanceBinding(
   return Object.freeze({
     purpose: view.purpose,
     actorUserId: view.actorUserId,
-    targetUserId: view.targetUserId,
     commandEnteredAt: new Date(scope.commandEnteredAt.getTime()),
     precondition: targetIsInvalid ? 'member-target-invalid' : 'ready',
     audit: Object.freeze({
@@ -447,6 +491,48 @@ export function createScopedMemberResetIssuanceReauthenticationGateway<
     },
     rejectPrecondition(input: PreconditionRejectionInput<'target-invalid'>) {
       return rejectPrecondition(database, binding, input)
+    },
+  })
+}
+
+/**
+ * Purpose-narrow, one-use subject-deletion password-attempt gateway. Its default
+ * denial event remains bound to the generated or existing attempt-state ID.
+ */
+export function createScopedSubjectDeletionReauthenticationGateway<
+  TSchema extends Record<string, unknown>,
+>(
+  database: NodePgDatabase<TSchema>,
+  capture: TraineeDataDeletionMutationCapture,
+): ScopedSubjectDeletionReauthenticationGateway {
+  const binding = destructiveBinding(
+    traineeDataDeletionMutationReauthenticationScope(capture),
+  )
+  const claim = oneUseClaim()
+  return Object.freeze({
+    attempt<ProtectedAuthority>(input: ReauthenticationAttemptInput<ProtectedAuthority>) {
+      claim()
+      return attemptReauthentication(database, binding, input)
+    },
+  })
+}
+
+/**
+ * Purpose-narrow, one-use instance-reset password-attempt gateway. It exposes no
+ * reset DML and promotes authority only after the captured owner's proof succeeds.
+ */
+export function createScopedInstanceResetReauthenticationGateway<
+  TSchema extends Record<string, unknown>,
+>(
+  database: NodePgDatabase<TSchema>,
+  capture: InstanceResetMutationCapture,
+): ScopedInstanceResetReauthenticationGateway {
+  const binding = destructiveBinding(instanceResetMutationReauthenticationScope(capture))
+  const claim = oneUseClaim()
+  return Object.freeze({
+    attempt<ProtectedAuthority>(input: ReauthenticationAttemptInput<ProtectedAuthority>) {
+      claim()
+      return attemptReauthentication(database, binding, input)
     },
   })
 }

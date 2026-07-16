@@ -1,10 +1,12 @@
 declare const checkedSignOutActionBindingBrand: unique symbol
 declare const emailSignInActionBindingBrand: unique symbol
+declare const instanceResetActionBindingBrand: unique symbol
 declare const localUserCreateActionBindingBrand: unique symbol
 declare const memberResetRedemptionActionBindingBrand: unique symbol
 declare const memberResetIssueActionBindingBrand: unique symbol
 declare const ownerBootstrapActionBindingBrand: unique symbol
 declare const ownerRecoveryRedemptionActionBindingBrand: unique symbol
+declare const traineeDataDeletionActionBindingBrand: unique symbol
 
 /**
  * Browser-safe proof that a checked sign-out was issued for one server-observed
@@ -20,6 +22,14 @@ export type CheckedSignOutActionBinding = string & {
  */
 export type EmailSignInActionBinding = string & {
   readonly [emailSignInActionBindingBrand]: 'email-sign-in-action-binding'
+}
+
+/**
+ * Browser-safe proof that an instance-reset form was rendered for one exact
+ * installation/session/owner/preview tuple.
+ */
+export type InstanceResetActionBinding = string & {
+  readonly [instanceResetActionBindingBrand]: 'instance-reset-action-binding'
 }
 
 /**
@@ -59,8 +69,17 @@ export type OwnerRecoveryRedemptionActionBinding = string & {
   readonly [ownerRecoveryRedemptionActionBindingBrand]: 'owner-recovery-redemption-action-binding'
 }
 
+/**
+ * Browser-safe proof that a trainee-data deletion form was rendered for one
+ * exact installation/session/actor/preview tuple.
+ */
+export type TraineeDataDeletionActionBinding = string & {
+  readonly [traineeDataDeletionActionBindingBrand]: 'trainee-data-deletion-action-binding'
+}
+
 export const checkedSignOutActionBindingPurpose = 'checked-sign-out' as const
 export const emailSignInActionBindingPurpose = 'email-sign-in' as const
+export const instanceResetActionBindingPurpose = 'instance-reset' as const
 export const localUserCreateActionBindingPurpose = 'local-user-create' as const
 export const memberResetRedemptionActionBindingPurpose =
   'member-reset-redemption' as const
@@ -68,5 +87,6 @@ export const memberResetIssueActionBindingPurpose = 'member-reset-issue' as cons
 export const ownerBootstrapActionBindingPurpose = 'owner-bootstrap' as const
 export const ownerRecoveryRedemptionActionBindingPurpose =
   'owner-recovery-redemption' as const
+export const traineeDataDeletionActionBindingPurpose = 'trainee-data-deletion' as const
 export const identityActionBindingHeader = 'x-indigo-action-binding' as const
 export const checkedSignOutActionBindingHeader = identityActionBindingHeader

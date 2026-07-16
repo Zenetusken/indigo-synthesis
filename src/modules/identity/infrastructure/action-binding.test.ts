@@ -3,18 +3,22 @@ import { resetServerConfigForTests } from '@/platform/config/server'
 import {
   issueCheckedSignOutActionBinding,
   issueEmailSignInActionBinding,
+  issueInstanceResetActionBinding,
   issueLocalUserCreateActionBinding,
   issueMemberResetIssueActionBinding,
   issueMemberResetRedemptionActionBinding,
   issueOwnerBootstrapActionBinding,
   issueOwnerRecoveryRedemptionActionBinding,
+  issueTraineeDataDeletionActionBinding,
   verifyCheckedSignOutActionBinding,
   verifyEmailSignInActionBinding,
+  verifyInstanceResetActionBinding,
   verifyLocalUserCreateActionBinding,
   verifyMemberResetIssueActionBinding,
   verifyMemberResetRedemptionActionBinding,
   verifyOwnerBootstrapActionBinding,
   verifyOwnerRecoveryRedemptionActionBinding,
+  verifyTraineeDataDeletionActionBinding,
 } from './action-binding'
 
 const now = new Date('2026-07-15T12:00:00.000Z')
@@ -310,6 +314,123 @@ describe('authenticated settings action bindings', () => {
         now,
       ),
     ).toThrow('expired session')
+  })
+})
+
+describe('destructive preview action bindings', () => {
+  beforeEach(() => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://localhost/indigo_action_binding_test')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'action-binding-test-secret-at-least-32-characters')
+    vi.stubEnv('BETTER_AUTH_URL', 'http://127.0.0.1:3000')
+    vi.stubEnv('INDIGO_CONTENT_MODE', 'development')
+    vi.stubEnv('NODE_ENV', 'test')
+    resetServerConfigForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    resetServerConfigForTests()
+  })
+
+  const planContext = {
+    ...context,
+    planId: 'private-plan-019f3456',
+    planDigest: 'private-plan-digest-019f7890',
+  } as const
+
+  it('purpose-separates subject deletion and instance reset without transporting raw authority', () => {
+    const planExpiresAt = new Date(now.getTime() + 10 * 60 * 1_000)
+    const subjectBinding = issueTraineeDataDeletionActionBinding(
+      { ...planContext, sessionExpiresAt, planExpiresAt },
+      now,
+    )
+    const resetBinding = issueInstanceResetActionBinding(
+      { ...planContext, sessionExpiresAt, planExpiresAt },
+      now,
+    )
+
+    expect(subjectBinding).toMatch(
+      /^iab1\.trainee-data-deletion\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(resetBinding).toMatch(
+      /^iab1\.instance-reset\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(verifyTraineeDataDeletionActionBinding(subjectBinding, planContext, now)).toBe(
+      true,
+    )
+    expect(verifyInstanceResetActionBinding(resetBinding, planContext, now)).toBe(true)
+    expect(verifyInstanceResetActionBinding(subjectBinding, planContext, now)).toBe(false)
+    expect(verifyTraineeDataDeletionActionBinding(resetBinding, planContext, now)).toBe(
+      false,
+    )
+
+    const transport = JSON.stringify({ subjectBinding, resetBinding })
+    for (const privateValue of Object.values(planContext)) {
+      expect(transport).not.toContain(privateValue)
+    }
+  })
+
+  it.each([
+    ['epoch', { ...planContext, expectedEpoch: 'replacement-epoch' }],
+    ['session', { ...planContext, sessionId: 'replacement-session' }],
+    ['actor', { ...planContext, actorUserId: 'replacement-actor' }],
+    ['plan id', { ...planContext, planId: 'replacement-plan' }],
+    ['plan digest', { ...planContext, planDigest: 'replacement-digest' }],
+  ])('rejects a changed %s', (_label, replacement) => {
+    const binding = issueTraineeDataDeletionActionBinding(
+      {
+        ...planContext,
+        sessionExpiresAt,
+        planExpiresAt: new Date(now.getTime() + 10 * 60 * 1_000),
+      },
+      now,
+    )
+
+    expect(verifyTraineeDataDeletionActionBinding(binding, replacement, now)).toBe(false)
+  })
+
+  it('expires at the earliest of the plan, session, and form lifetime', () => {
+    const planExpiresAt = new Date(now.getTime() + 3 * 60 * 1_000)
+    const planBound = issueTraineeDataDeletionActionBinding(
+      { ...planContext, sessionExpiresAt, planExpiresAt },
+      now,
+    )
+    expect(
+      verifyTraineeDataDeletionActionBinding(
+        planBound,
+        planContext,
+        new Date(planExpiresAt.getTime() - 1_000),
+      ),
+    ).toBe(true)
+    expect(
+      verifyTraineeDataDeletionActionBinding(planBound, planContext, planExpiresAt),
+    ).toBe(false)
+
+    const shortSession = new Date(now.getTime() + 2 * 60 * 1_000)
+    const sessionBound = issueInstanceResetActionBinding(
+      {
+        ...planContext,
+        sessionExpiresAt: shortSession,
+        planExpiresAt: new Date(now.getTime() + 10 * 60 * 1_000),
+      },
+      now,
+    )
+    expect(
+      verifyInstanceResetActionBinding(sessionBound, planContext, shortSession),
+    ).toBe(false)
+  })
+
+  it('refuses to issue after either browser authority has expired', () => {
+    expect(() =>
+      issueInstanceResetActionBinding(
+        {
+          ...planContext,
+          sessionExpiresAt,
+          planExpiresAt: new Date(now.getTime() - 1),
+        },
+        now,
+      ),
+    ).toThrow('expired session or plan')
   })
 })
 

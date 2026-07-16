@@ -10,10 +10,21 @@ import {
   type IdentityCredentialAdministrationQuery,
   localUserCreationMutationScope,
 } from './credential-administration-mutation'
+import {
+  captureInstanceResetMutation,
+  captureTraineeDataDeletionMutation,
+  type IdentityDestructiveMutationQuery,
+  type InstanceResetMutationCapture,
+  issueInstanceResetMutationCommand,
+  issueTraineeDataDeletionMutationCommand,
+  TraineeDataDeletionMutationCapture,
+} from './destructive-mutation'
 import { destructiveReauthenticationPolicy } from './destructive-reauthentication'
 import {
+  createScopedInstanceResetReauthenticationGateway,
   createScopedLocalUserCreationReauthenticationGateway,
   createScopedMemberResetIssuanceReauthenticationGateway,
+  createScopedSubjectDeletionReauthenticationGateway,
   ScopedCredentialReauthenticationInvariantError,
 } from './scoped-credential-reauthentication'
 
@@ -132,6 +143,74 @@ async function memberCapture(
     targetUserId: selectedTargetId,
     commandEnteredAt,
   })
+}
+
+function destructiveUser(userId: string) {
+  const isOwner = userId === ownerUserId
+  return {
+    id: userId,
+    name: isOwner ? 'Installation Owner' : 'Trainee',
+    email: isOwner ? 'owner@example.test' : 'trainee@example.test',
+    emailVerified: false,
+    createdAt,
+    updatedAt,
+  }
+}
+
+function destructiveSnapshotRow(actorUserId: string): SnapshotResultRow {
+  return {
+    product_mutation_epoch: epoch,
+    installation_owner_user_id: ownerUserId,
+    bootstrap_closed_at: new Date('2026-01-02T00:00:00.000Z'),
+    session_rows: [
+      {
+        id: `destructive-session-${actorUserId}`,
+        userId: actorUserId,
+        expiresAt: sessionExpiresAt,
+        createdAt,
+        updatedAt,
+        active: true,
+      },
+    ],
+    actor_rows: [destructiveUser(actorUserId)],
+    owner_rows: [destructiveUser(ownerUserId)],
+    credential_rows: [credential(actorUserId)],
+  }
+}
+
+function destructiveCaptureQuery(
+  row: SnapshotResultRow,
+): IdentityDestructiveMutationQuery {
+  const query = vi.fn().mockResolvedValue(snapshotResult(row))
+  return { query } as unknown as IdentityDestructiveMutationQuery
+}
+
+function destructiveCommandInput(typedConfirmation: 'DELETE' | 'RESET') {
+  return {
+    actionBinding: 'opaque-render-bound-action',
+    planId: 'rendered-plan-id',
+    planDigest: 'rendered-plan-digest',
+    currentPassword: 'captured-private-password',
+    typedConfirmation,
+    acknowledged: true,
+    commandEnteredAt,
+    requestContext: { channel: 'web' as const, clientAddress: '192.0.2.17' },
+    verifiedSessionToken,
+  }
+}
+
+function subjectDeletionCapture() {
+  return captureTraineeDataDeletionMutation(
+    destructiveCaptureQuery(destructiveSnapshotRow(targetUserId)),
+    issueTraineeDataDeletionMutationCommand(destructiveCommandInput('DELETE')),
+  )
+}
+
+function instanceResetCapture() {
+  return captureInstanceResetMutation(
+    destructiveCaptureQuery(destructiveSnapshotRow(ownerUserId)),
+    issueInstanceResetMutationCommand(destructiveCommandInput('RESET')),
+  )
 }
 
 type RecordedWrite = {
@@ -620,5 +699,172 @@ describe('scoped credential reauthentication gateways', () => {
       }),
     ).rejects.toBeInstanceOf(ScopedCredentialReauthenticationInvariantError)
     expect(harness.inserts).toEqual([])
+  })
+
+  it('preserves the default subject-deletion denial contract and binds the audit to the generated state ID', async () => {
+    cryptoMocks.verifyPassword.mockResolvedValue(false)
+    const capture = await subjectDeletionCapture()
+    const harness = databaseHarness([
+      [{ id: 'member-credential-id', password: 'database-member-hash' }],
+      [],
+    ])
+
+    await expect(
+      createScopedSubjectDeletionReauthenticationGateway(
+        harness.database,
+        capture,
+      ).attempt({
+        currentPassword: 'wrong-member-password',
+        requestContext: { channel: 'web', clientAddress: '203.0.113.42' },
+        markReauthenticationSucceeded: vi.fn(),
+      }),
+    ).resolves.toEqual({ status: 'failed' })
+
+    expect(compiledWhere(harness.selectionWheres[0] as SQL)).toMatchObject({
+      params: [targetUserId, 'credential'],
+    })
+    expect(compiledWhere(harness.selectionWheres[1] as SQL)).toMatchObject({
+      params: ['member-credential-id', 'trainee-data-deletion'],
+    })
+    expect(harness.inserts.map(({ table }) => table)).toEqual([
+      'destructive_reauthentication_state',
+      'audit_event',
+    ])
+    const stateId = harness.inserts[0]?.values?.id
+    expect(stateId).toEqual(expect.any(String))
+    expect(harness.inserts[0]?.values).toMatchObject({
+      id: stateId,
+      accountId: 'member-credential-id',
+      purpose: 'trainee-data-deletion',
+      failedAttempts: 1,
+      createdAt: commandEnteredAt,
+    })
+    expect(harness.inserts[1]?.values).toMatchObject({
+      actorUserId: null,
+      subjectUserId: null,
+      eventType: 'destructive-reauthentication-denied',
+      entityType: 'destructive-reauthentication-state',
+      entityId: stateId,
+      createdAt: commandEnteredAt,
+    })
+    expect(harness.inserts[1]?.values?.metadata).toEqual({
+      purpose: 'trainee-data-deletion',
+      outcome: 'failed',
+      attemptsInWindow: 1,
+      windowStartedAt: commandEnteredAt.toISOString(),
+      lockedUntil: null,
+    })
+    expect(uuidV7Timestamp(stateId)).toBe(commandEnteredAt.getTime())
+    const persisted = JSON.stringify(harness.inserts)
+    expect(persisted).not.toContain('wrong-member-password')
+    expect(persisted).not.toContain('database-member-hash')
+    expect(persisted).not.toContain('captured-private-password')
+    expect(persisted).not.toContain(verifiedSessionToken)
+    expect(persisted).not.toContain('203.0.113.42')
+  })
+
+  it('keeps an instance-reset denial attached to its existing attempt-state ID', async () => {
+    cryptoMocks.verifyPassword.mockResolvedValue(false)
+    const capture = await instanceResetCapture()
+    const priorLastAttemptAt = new Date(commandEnteredAt.getTime() + 30_000)
+    const harness = databaseHarness([
+      [{ id: 'owner-credential-id', password: 'database-owner-hash' }],
+      [
+        {
+          id: 'existing-instance-reset-state',
+          accountId: 'owner-credential-id',
+          purpose: 'instance-reset',
+          windowStartedAt: commandEnteredAt,
+          failedAttempts: 2,
+          lockedUntil: null,
+          lastAttemptAt: priorLastAttemptAt,
+        },
+      ],
+    ])
+
+    await expect(
+      createScopedInstanceResetReauthenticationGateway(harness.database, capture).attempt(
+        {
+          currentPassword: 'wrong-owner-password',
+          requestContext: { channel: 'web', clientAddress: '198.51.100.77' },
+          markReauthenticationSucceeded: vi.fn(),
+        },
+      ),
+    ).resolves.toEqual({ status: 'failed' })
+
+    expect(harness.updates).toHaveLength(1)
+    expect(harness.updates[0]?.values).toMatchObject({
+      failedAttempts: 3,
+      lastAttemptAt: priorLastAttemptAt,
+      updatedAt: priorLastAttemptAt,
+    })
+    expect(harness.inserts).toHaveLength(1)
+    expect(harness.inserts[0]?.values).toMatchObject({
+      actorUserId: null,
+      subjectUserId: null,
+      eventType: 'destructive-reauthentication-denied',
+      entityType: 'destructive-reauthentication-state',
+      entityId: 'existing-instance-reset-state',
+      metadata: {
+        purpose: 'instance-reset',
+        outcome: 'failed',
+        attemptsInWindow: 3,
+      },
+    })
+  })
+
+  it('rejects forged and cross-purpose captures and spends each destructive gateway once', async () => {
+    cryptoMocks.verifyPassword.mockResolvedValue(true)
+    const subjectCapture = await subjectDeletionCapture()
+    const resetCapture = await instanceResetCapture()
+    const harness = databaseHarness([
+      [{ id: 'member-credential-id', password: 'database-member-hash' }],
+      [],
+    ])
+
+    expect(() =>
+      createScopedSubjectDeletionReauthenticationGateway(
+        harness.database,
+        resetCapture as unknown as TraineeDataDeletionMutationCapture,
+      ),
+    ).toThrow('purpose does not match')
+    expect(() =>
+      createScopedInstanceResetReauthenticationGateway(
+        harness.database,
+        subjectCapture as unknown as InstanceResetMutationCapture,
+      ),
+    ).toThrow('purpose does not match')
+
+    const forged = Object.create(
+      TraineeDataDeletionMutationCapture.prototype,
+    ) as TraineeDataDeletionMutationCapture
+    expect(() =>
+      createScopedSubjectDeletionReauthenticationGateway(harness.database, forged),
+    ).toThrow('was not issued by Identity')
+    expect(harness.selectionWheres).toEqual([])
+
+    const authority = Object.freeze({ kind: 'subject-deletion-authority' })
+    const gateway = createScopedSubjectDeletionReauthenticationGateway(
+      harness.database,
+      subjectCapture,
+    )
+    expect(Object.keys(gateway)).toEqual(['attempt'])
+    expect(Object.isFrozen(gateway)).toBe(true)
+    await expect(
+      gateway.attempt({
+        currentPassword: 'accepted-member-password',
+        requestContext: { channel: 'web', clientAddress: '192.0.2.17' },
+        markReauthenticationSucceeded: () => authority,
+      }),
+    ).resolves.toEqual({ status: 'succeeded', authority })
+    const operationCount = harness.operations.length
+    expect(() =>
+      gateway.attempt({
+        currentPassword: 'accepted-member-password',
+        requestContext: { channel: 'web', clientAddress: '192.0.2.17' },
+        markReauthenticationSucceeded: () => authority,
+      }),
+    ).toThrow(ScopedCredentialReauthenticationInvariantError)
+    expect(harness.operations).toHaveLength(operationCount)
   })
 })

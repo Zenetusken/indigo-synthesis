@@ -3,8 +3,10 @@ import {
   type AuthenticatedActionEnvelope,
   getActor,
   getUiActor,
+  issueInstanceResetFormEnvelope,
   issueLocalUserCreationFormEnvelope,
   issueMemberResetIssuanceFormEnvelope,
+  issueTraineeDataDeletionFormEnvelope,
 } from './actor'
 
 const actorMocks = vi.hoisted(() => ({
@@ -12,8 +14,10 @@ const actorMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   getInstallation: vi.fn(),
   issueBinding: vi.fn(),
+  issueInstanceResetBinding: vi.fn(),
   issueLocalUserBinding: vi.fn(),
   issueMemberResetBinding: vi.fn(),
+  issueTraineeDeletionBinding: vi.fn(),
   newUuid: vi.fn(),
   redirect: vi.fn(),
 }))
@@ -28,8 +32,10 @@ vi.mock('../infrastructure/installation', () => ({
 }))
 vi.mock('../infrastructure/action-binding', () => ({
   issueCheckedSignOutActionBinding: actorMocks.issueBinding,
+  issueInstanceResetActionBinding: actorMocks.issueInstanceResetBinding,
   issueLocalUserCreateActionBinding: actorMocks.issueLocalUserBinding,
   issueMemberResetIssueActionBinding: actorMocks.issueMemberResetBinding,
+  issueTraineeDataDeletionActionBinding: actorMocks.issueTraineeDeletionBinding,
 }))
 vi.mock('@/platform/ids/uuid-v7', () => ({ newUuidV7: actorMocks.newUuid }))
 
@@ -40,6 +46,10 @@ describe('server authenticated actor', () => {
     actorMocks.newUuid.mockReturnValue('preallocated-local-user-id')
     actorMocks.issueLocalUserBinding.mockReturnValue('opaque-local-user-binding')
     actorMocks.issueMemberResetBinding.mockReturnValue('opaque-member-reset-binding')
+    actorMocks.issueTraineeDeletionBinding.mockReturnValue(
+      'opaque-trainee-deletion-binding',
+    )
+    actorMocks.issueInstanceResetBinding.mockReturnValue('opaque-instance-reset-binding')
   })
 
   it('issues an opaque sign-out binding from server-only session and epoch state', async () => {
@@ -121,6 +131,21 @@ describe('server authenticated actor', () => {
       'member-id',
       now,
     )
+    const plan = {
+      id: 'private-plan-id',
+      digest: 'private-plan-digest',
+      expiresAt: new Date(now.getTime() + 10 * 60 * 1_000),
+    }
+    const traineeDeletionForm = issueTraineeDataDeletionFormEnvelope(
+      actor.authenticatedActionEnvelope,
+      plan,
+      now,
+    )
+    const instanceResetForm = issueInstanceResetFormEnvelope(
+      actor.authenticatedActionEnvelope,
+      plan,
+      now,
+    )
 
     expect(actorMocks.newUuid).toHaveBeenCalledWith(now.getTime())
     expect(actorMocks.issueLocalUserBinding).toHaveBeenCalledWith(
@@ -143,6 +168,30 @@ describe('server authenticated actor', () => {
       },
       now,
     )
+    expect(actorMocks.issueTraineeDeletionBinding).toHaveBeenCalledWith(
+      {
+        expectedEpoch: 'private-installation-epoch',
+        sessionId: 'private-provider-session-id',
+        actorUserId: 'private-owner-id',
+        planId: plan.id,
+        planDigest: plan.digest,
+        sessionExpiresAt: expiresAt,
+        planExpiresAt: plan.expiresAt,
+      },
+      now,
+    )
+    expect(actorMocks.issueInstanceResetBinding).toHaveBeenCalledWith(
+      {
+        expectedEpoch: 'private-installation-epoch',
+        sessionId: 'private-provider-session-id',
+        actorUserId: 'private-owner-id',
+        planId: plan.id,
+        planDigest: plan.digest,
+        sessionExpiresAt: expiresAt,
+        planExpiresAt: plan.expiresAt,
+      },
+      now,
+    )
     expect(localUserForm).toEqual({
       targetUserId: 'preallocated-local-user-id',
       actionBinding: 'opaque-local-user-binding',
@@ -151,11 +200,63 @@ describe('server authenticated actor', () => {
       targetUserId: 'member-id',
       actionBinding: 'opaque-member-reset-binding',
     })
+    expect(traineeDeletionForm).toEqual({
+      planId: plan.id,
+      planDigest: plan.digest,
+      actionBinding: 'opaque-trainee-deletion-binding',
+    })
+    expect(instanceResetForm).toEqual({
+      planId: plan.id,
+      planDigest: plan.digest,
+      actionBinding: 'opaque-instance-reset-binding',
+    })
 
-    const transport = JSON.stringify({ actor, localUserForm, memberResetForm })
+    const transport = JSON.stringify({
+      actor,
+      localUserForm,
+      memberResetForm,
+      traineeDeletionForm,
+      instanceResetForm,
+    })
     expect(transport).not.toContain('private-installation-epoch')
     expect(transport).not.toContain('private-provider-session-id')
     expect(transport).not.toContain('private-provider-session-token')
+  })
+
+  it('allows members to bind their own trainee-data preview but not instance reset', async () => {
+    const now = new Date('2026-07-15T18:00:00.000Z')
+    actorMocks.getSession.mockResolvedValue({
+      user: { id: 'member-id', email: 'member@example.test', name: 'Member' },
+      session: {
+        id: 'session-id',
+        token: 'private-token',
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+      },
+    })
+    actorMocks.getInstallation.mockResolvedValue({
+      ownerUserId: 'owner-id',
+      productMutationEpoch: 'private-installation-epoch',
+    })
+    actorMocks.issueBinding.mockReturnValue('opaque-checked-sign-out-binding')
+    const actor = await getUiActor()
+    if (!actor) throw new Error('Expected an authenticated member.')
+    const plan = {
+      id: 'member-plan',
+      digest: 'member-digest',
+      expiresAt: new Date(now.getTime() + 10 * 60 * 1_000),
+    }
+
+    expect(
+      issueTraineeDataDeletionFormEnvelope(actor.authenticatedActionEnvelope, plan, now),
+    ).toEqual({
+      planId: plan.id,
+      planDigest: plan.digest,
+      actionBinding: 'opaque-trainee-deletion-binding',
+    })
+    expect(() =>
+      issueInstanceResetFormEnvelope(actor.authenticatedActionEnvelope, plan, now),
+    ).toThrow('Owner role is required')
+    expect(actorMocks.issueInstanceResetBinding).not.toHaveBeenCalled()
   })
 
   it('rejects member and forged action envelopes before issuing settings bindings', async () => {
@@ -220,9 +321,31 @@ describe('server authenticated actor', () => {
         unusableWholeSecond,
       ),
     ).toBeNull()
+    const expiredPlan = {
+      id: 'expired-plan',
+      digest: 'expired-digest',
+      expiresAt: new Date(Date.now() - 2_000),
+    }
+    const afterPlanExpiry = new Date(expiredPlan.expiresAt.getTime() + 1_000)
+    expect(
+      issueTraineeDataDeletionFormEnvelope(
+        actor.authenticatedActionEnvelope,
+        expiredPlan,
+        afterPlanExpiry,
+      ),
+    ).toBeNull()
+    expect(
+      issueInstanceResetFormEnvelope(
+        actor.authenticatedActionEnvelope,
+        expiredPlan,
+        afterPlanExpiry,
+      ),
+    ).toBeNull()
     expect(actorMocks.newUuid).not.toHaveBeenCalled()
     expect(actorMocks.issueLocalUserBinding).not.toHaveBeenCalled()
     expect(actorMocks.issueMemberResetBinding).not.toHaveBeenCalled()
+    expect(actorMocks.issueTraineeDeletionBinding).not.toHaveBeenCalled()
+    expect(actorMocks.issueInstanceResetBinding).not.toHaveBeenCalled()
   })
 
   it('does not read installation state or issue a binding without a session', async () => {

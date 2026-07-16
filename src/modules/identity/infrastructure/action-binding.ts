@@ -5,6 +5,8 @@ import {
   checkedSignOutActionBindingPurpose,
   type EmailSignInActionBinding,
   emailSignInActionBindingPurpose,
+  type InstanceResetActionBinding,
+  instanceResetActionBindingPurpose,
   type LocalUserCreateActionBinding,
   localUserCreateActionBindingPurpose,
   type MemberResetIssueActionBinding,
@@ -15,6 +17,8 @@ import {
   type OwnerRecoveryRedemptionActionBinding,
   ownerBootstrapActionBindingPurpose,
   ownerRecoveryRedemptionActionBindingPurpose,
+  type TraineeDataDeletionActionBinding,
+  traineeDataDeletionActionBindingPurpose,
 } from '../application/action-binding'
 
 const actionBindingVersion = 'iab1'
@@ -31,11 +35,13 @@ const checkedSignOutCleanupGraceMilliseconds = 15 * 60 * 1_000
 type IdentityActionBindingPurpose =
   | typeof checkedSignOutActionBindingPurpose
   | typeof emailSignInActionBindingPurpose
+  | typeof instanceResetActionBindingPurpose
   | typeof localUserCreateActionBindingPurpose
   | typeof memberResetRedemptionActionBindingPurpose
   | typeof memberResetIssueActionBindingPurpose
   | typeof ownerBootstrapActionBindingPurpose
   | typeof ownerRecoveryRedemptionActionBindingPurpose
+  | typeof traineeDataDeletionActionBindingPurpose
 
 export type CheckedSignOutActionBindingContext = {
   readonly expectedEpoch: string
@@ -51,6 +57,22 @@ type CheckedSignOutActionBindingIssuance = CheckedSignOutActionBindingContext & 
 export type EmailSignInActionBindingContext = {
   readonly expectedEpoch: string
 }
+
+export type DestructivePlanActionBindingContext = {
+  readonly expectedEpoch: string
+  readonly sessionId: string
+  readonly actorUserId: string
+  readonly planId: string
+  readonly planDigest: string
+}
+
+type DestructivePlanActionBindingIssuance = DestructivePlanActionBindingContext & {
+  readonly sessionExpiresAt: Date
+  readonly planExpiresAt: Date
+}
+
+export type InstanceResetActionBindingContext = DestructivePlanActionBindingContext
+export type TraineeDataDeletionActionBindingContext = DestructivePlanActionBindingContext
 
 export type LocalUserCreateActionBindingContext = {
   readonly expectedEpoch: string
@@ -244,6 +266,68 @@ function verifyAuthenticatedFormBinding(
   return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
 }
 
+function issueDestructivePlanActionBinding(
+  purpose:
+    | typeof instanceResetActionBindingPurpose
+    | typeof traineeDataDeletionActionBindingPurpose,
+  input: DestructivePlanActionBindingIssuance,
+  now: Date,
+): string {
+  const earliestAuthorityExpiry = new Date(
+    Math.min(input.sessionExpiresAt.getTime(), input.planExpiresAt.getTime()),
+  )
+  if (expiresAtSeconds(earliestAuthorityExpiry) <= currentSeconds(now)) {
+    throw new TypeError(
+      'Cannot issue a destructive plan binding for an expired session or plan.',
+    )
+  }
+  const encodedExpiry = authenticatedFormExpiry(earliestAuthorityExpiry, now)
+  const encodedSignature = signature(
+    purpose,
+    [
+      input.expectedEpoch,
+      input.sessionId,
+      input.actorUserId,
+      input.planId,
+      input.planDigest,
+    ],
+    encodedExpiry,
+  ).toString('base64url')
+  return `${actionBindingVersion}.${purpose}.${encodedExpiry}.${encodedSignature}`
+}
+
+function verifyDestructivePlanActionBinding(
+  binding: unknown,
+  purpose:
+    | typeof instanceResetActionBindingPurpose
+    | typeof traineeDataDeletionActionBindingPurpose,
+  context: DestructivePlanActionBindingContext,
+  now: Date,
+): boolean {
+  const parsed = parseBinding(binding, purpose)
+  if (!parsed) return false
+  const expiry = Number.parseInt(parsed.encodedExpiry, 36)
+  if (currentSeconds(now) >= expiry) return false
+
+  let expectedSignature: Buffer
+  try {
+    expectedSignature = signature(
+      purpose,
+      [
+        context.expectedEpoch,
+        context.sessionId,
+        context.actorUserId,
+        context.planId,
+        context.planDigest,
+      ],
+      parsed.encodedExpiry,
+    )
+  } catch {
+    return false
+  }
+  return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
 function issuePublicRecoveryRedemptionBinding(
   purpose: PublicRecoveryRedemptionPurpose,
   context: PublicRecoveryRedemptionContext,
@@ -424,6 +508,58 @@ export function verifyMemberResetIssueActionBinding(
   return verifyAuthenticatedFormBinding(
     binding,
     memberResetIssueActionBindingPurpose,
+    context,
+    now,
+  )
+}
+
+/** Issues a purpose-separated proof for one exact owner reset preview. */
+export function issueInstanceResetActionBinding(
+  input: DestructivePlanActionBindingIssuance,
+  now = new Date(),
+): InstanceResetActionBinding {
+  return issueDestructivePlanActionBinding(
+    instanceResetActionBindingPurpose,
+    input,
+    now,
+  ) as InstanceResetActionBinding
+}
+
+/** Rechecks every server-observed authority and preview dimension for reset. */
+export function verifyInstanceResetActionBinding(
+  binding: unknown,
+  context: InstanceResetActionBindingContext,
+  now = new Date(),
+): binding is InstanceResetActionBinding {
+  return verifyDestructivePlanActionBinding(
+    binding,
+    instanceResetActionBindingPurpose,
+    context,
+    now,
+  )
+}
+
+/** Issues a purpose-separated proof for one exact trainee-data preview. */
+export function issueTraineeDataDeletionActionBinding(
+  input: DestructivePlanActionBindingIssuance,
+  now = new Date(),
+): TraineeDataDeletionActionBinding {
+  return issueDestructivePlanActionBinding(
+    traineeDataDeletionActionBindingPurpose,
+    input,
+    now,
+  ) as TraineeDataDeletionActionBinding
+}
+
+/** Rechecks every server-observed authority and preview dimension for subject deletion. */
+export function verifyTraineeDataDeletionActionBinding(
+  binding: unknown,
+  context: TraineeDataDeletionActionBindingContext,
+  now = new Date(),
+): binding is TraineeDataDeletionActionBinding {
+  return verifyDestructivePlanActionBinding(
+    binding,
+    traineeDataDeletionActionBindingPurpose,
     context,
     now,
   )

@@ -4,15 +4,19 @@ import { redirect } from 'next/navigation'
 import { newUuidV7 } from '@/platform/ids/uuid-v7'
 import type {
   CheckedSignOutActionBinding,
+  InstanceResetActionBinding,
   LocalUserCreateActionBinding,
   MemberResetIssueActionBinding,
+  TraineeDataDeletionActionBinding,
 } from '../application/action-binding'
 import { type AuthenticatedActor, deriveIdentityRole } from '../application/actor'
 import { expiredWorkoutSignInLocation } from '../application/sign-in-return'
 import {
   issueCheckedSignOutActionBinding,
+  issueInstanceResetActionBinding,
   issueLocalUserCreateActionBinding,
   issueMemberResetIssueActionBinding,
+  issueTraineeDataDeletionActionBinding,
 } from '../infrastructure/action-binding'
 import { readIdentitySession } from '../infrastructure/auth'
 import { getServerActorInstallationState } from '../infrastructure/installation'
@@ -53,6 +57,24 @@ export type LocalUserCreationFormEnvelope = Readonly<{
 export type MemberResetIssuanceFormEnvelope = Readonly<{
   targetUserId: string
   actionBinding: MemberResetIssueActionBinding
+}>
+
+export type DestructivePlanFormInput = Readonly<{
+  id: string
+  digest: string
+  expiresAt: Date
+}>
+
+export type TraineeDataDeletionFormEnvelope = Readonly<{
+  planId: string
+  planDigest: string
+  actionBinding: TraineeDataDeletionActionBinding
+}>
+
+export type InstanceResetFormEnvelope = Readonly<{
+  planId: string
+  planDigest: string
+  actionBinding: InstanceResetActionBinding
 }>
 
 function authenticatedFormSessionIsCurrent(
@@ -142,6 +164,95 @@ export function issueMemberResetIssuanceFormEnvelope(
         actorUserId: state.actorUserId,
         targetUserId,
         sessionExpiresAt: state.sessionExpiresAt,
+      },
+      now,
+    ),
+  })
+}
+
+function destructivePlanInput(plan: DestructivePlanFormInput): DestructivePlanFormInput {
+  if (
+    typeof plan.id !== 'string' ||
+    plan.id.length === 0 ||
+    plan.id.length > 512 ||
+    plan.id.includes('\0') ||
+    typeof plan.digest !== 'string' ||
+    plan.digest.length === 0 ||
+    plan.digest.length > 512 ||
+    plan.digest.includes('\0') ||
+    !(plan.expiresAt instanceof Date) ||
+    !Number.isFinite(plan.expiresAt.getTime())
+  ) {
+    throw new TypeError('A valid destructive-action preview is required.')
+  }
+  return Object.freeze({
+    id: plan.id,
+    digest: plan.digest,
+    expiresAt: new Date(plan.expiresAt.getTime()),
+  })
+}
+
+/** Binds a subject-deletion form to the exact authenticated actor and preview. */
+export function issueTraineeDataDeletionFormEnvelope(
+  envelope: AuthenticatedActionEnvelope,
+  plan: DestructivePlanFormInput,
+  now = new Date(),
+): TraineeDataDeletionFormEnvelope | null {
+  const state = authenticatedActionEnvelopes.get(envelope)
+  if (!state) {
+    throw new TypeError('Authenticated action envelope was not issued by Identity.')
+  }
+  const preview = destructivePlanInput(plan)
+  if (
+    !authenticatedFormSessionIsCurrent(state, now) ||
+    Math.floor(preview.expiresAt.getTime() / 1_000) <= Math.floor(now.getTime() / 1_000)
+  ) {
+    return null
+  }
+  return Object.freeze({
+    planId: preview.id,
+    planDigest: preview.digest,
+    actionBinding: issueTraineeDataDeletionActionBinding(
+      {
+        expectedEpoch: state.expectedEpoch,
+        sessionId: state.sessionId,
+        actorUserId: state.actorUserId,
+        planId: preview.id,
+        planDigest: preview.digest,
+        sessionExpiresAt: state.sessionExpiresAt,
+        planExpiresAt: preview.expiresAt,
+      },
+      now,
+    ),
+  })
+}
+
+/** Binds an owner-only instance-reset form to the exact preview. */
+export function issueInstanceResetFormEnvelope(
+  envelope: AuthenticatedActionEnvelope,
+  plan: DestructivePlanFormInput,
+  now = new Date(),
+): InstanceResetFormEnvelope | null {
+  const state = ownerActionEnvelopeState(envelope)
+  const preview = destructivePlanInput(plan)
+  if (
+    !authenticatedFormSessionIsCurrent(state, now) ||
+    Math.floor(preview.expiresAt.getTime() / 1_000) <= Math.floor(now.getTime() / 1_000)
+  ) {
+    return null
+  }
+  return Object.freeze({
+    planId: preview.id,
+    planDigest: preview.digest,
+    actionBinding: issueInstanceResetActionBinding(
+      {
+        expectedEpoch: state.expectedEpoch,
+        sessionId: state.sessionId,
+        actorUserId: state.actorUserId,
+        planId: preview.id,
+        planDigest: preview.digest,
+        sessionExpiresAt: state.sessionExpiresAt,
+        planExpiresAt: preview.expiresAt,
       },
       now,
     ),
