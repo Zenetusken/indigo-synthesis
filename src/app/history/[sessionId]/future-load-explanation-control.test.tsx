@@ -206,7 +206,7 @@ describe('FutureLoadExplanationControl', () => {
 
     expect(await screen.findByText(/explanation request did not finish/)).toBeVisible()
     expect(
-      screen.getByRole('button', { name: 'Explain in plain language' }),
+      await screen.findByRole('button', { name: 'Explain in plain language' }),
     ).toBeEnabled()
   })
 })
