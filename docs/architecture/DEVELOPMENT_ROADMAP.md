@@ -958,6 +958,23 @@ No runtime implementation begins until this gate is green.
   append port, an Athletes-owned safety-hold lifecycle API for every current writer, per-module Data
   Portability export/deletion ports, public module entrypoints, and read/private-import guards.
 - **Depends on:** Stages 3 and 6.
+- **Explicit deliverable — normative Part B contract before implementation:** a standalone
+  specification (`docs/architecture/PART_B_BOUNDARY_SPEC.md`) plus **ADR 0010**, drafted **after
+  Stage 6 lands** so it binds to the proven `UnitOfWork`/port pattern rather than its paper design,
+  and passed through the same adversarial-review loop as the write-fence and calibration contracts
+  before any Stage 9 implementation begins. Grounding: the DoD below already carries the normative
+  intent (port shapes, lock/fence orderings, the Data Portability snapshot/deletion transaction
+  matrix, the `safety_hold_resolution` ownership transfer), but it lives in a roadmap checklist;
+  [SCHEMA_OWNERSHIP_SPEC](SCHEMA_OWNERSHIP_SPEC.md) is the historical decision pack (C1–C5 options,
+  costed, not an implementation contract); and
+  [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule — exact discriminants,
+  bounds, and lock identities "live in the normative specification … changing them requires an
+  explicit ADR/spec amendment, not an implementation shortcut." The deliverable extracts and
+  expands this DoD into that contract: the read/private-import and public-entrypoint scanner
+  contract with synthetic fixtures, the port contracts, the Data Portability transaction matrix,
+  the manifest/ownership-transfer plan for `safety_hold_resolution`, and falsifiable
+  definition-of-done items, mirroring the O-/K-series treatment every other enforced boundary
+  received.
 - **DoD:** every current `additionalWriters` grant is removed; the cross-cutting Data Portability
   operator and Stage 3 temporary verb-scoped adapter are removed; modules import peers only through
   public entrypoints; non-owners cannot
