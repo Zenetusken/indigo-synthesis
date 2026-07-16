@@ -51,6 +51,21 @@ import {
 } from '@/modules/identity/infrastructure/credential-lifecycle-lock'
 import { getInstallationOwnerUserId } from '@/modules/identity/infrastructure/installation'
 import { createLocalUserAsOwner } from '@/modules/identity/infrastructure/local-users'
+import {
+  captureMemberResetRedemption,
+  captureOwnerRecoveryCliRedemption,
+  captureOwnerRecoveryIssuance,
+  captureOwnerRecoveryWebRedemption,
+  memberResetRedemptionCaptureView,
+  ownerRecoveryCliRedemptionCaptureView,
+  ownerRecoveryIssuanceCaptureView,
+  ownerRecoveryWebRedemptionCaptureView,
+  RecoveryMutationCaptureInvariantError,
+  recheckMemberResetRedemption,
+  recheckOwnerRecoveryCliRedemption,
+  recheckOwnerRecoveryIssuance,
+  recheckOwnerRecoveryWebRedemption,
+} from '@/modules/identity/infrastructure/recovery-mutation'
 import { createScopedWebRecoveryRateLimitGateway } from '@/modules/identity/infrastructure/web-recovery-rate-limit'
 import {
   handleAuthGet,
@@ -72,6 +87,7 @@ import {
   account,
   auditEvents,
   installationState,
+  memberResetStates,
   session,
   user,
   verification,
@@ -245,6 +261,67 @@ async function checkedSignOutFixture(
     sessionId: createdSession.id,
     userId: createdSession.userId,
   }
+}
+
+type RecoveryCaptureFixture = Readonly<{
+  memberVerificationId: string
+  ownerVerificationId: string
+  expiresAt: Date
+  createdAt: Date
+}>
+
+async function removeRecoveryCaptureFixtures(): Promise<void> {
+  if (!owner || !localMember) return
+  await getDb()
+    .delete(memberResetStates)
+    .where(eq(memberResetStates.targetUserId, localMember.id))
+  await getDb()
+    .delete(verification)
+    .where(
+      sql`${verification.identifier} IN (
+      ${`indigo:member-reset:${localMember.id}`},
+      ${`indigo:owner-recovery:${owner.id}`}
+    )`,
+    )
+}
+
+async function createRecoveryCaptureFixture(): Promise<RecoveryCaptureFixture> {
+  await removeRecoveryCaptureFixtures()
+  const createdAt = new Date('2026-07-15T16:00:00.000Z')
+  const expiresAt = new Date('2026-07-15T16:15:00.000Z')
+  const memberVerificationId = newUuidV7(createdAt.getTime())
+  const ownerVerificationId = newUuidV7(createdAt.getTime() + 1)
+  await getDb()
+    .insert(verification)
+    .values([
+      {
+        id: memberVerificationId,
+        identifier: `indigo:member-reset:${localMember.id}`,
+        value: `member-reset-v1:${'a'.repeat(64)}`,
+        expiresAt,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: ownerVerificationId,
+        identifier: `indigo:owner-recovery:${owner.id}`,
+        value: `owner-recovery-v1:${'b'.repeat(64)}`,
+        expiresAt,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    ])
+  await getDb().insert(memberResetStates).values({
+    targetUserId: localMember.id,
+    activeVerificationId: memberVerificationId,
+    lastIssuedAt: createdAt,
+    failedAttempts: 0,
+    retryAfter: null,
+    lastAttemptAt: null,
+    createdAt,
+    updatedAt: createdAt,
+  })
+  return { memberVerificationId, ownerVerificationId, expiresAt, createdAt }
 }
 
 async function waitForAdvisoryWait(input: {
@@ -1435,6 +1512,145 @@ describe('identity database boundary', () => {
       ).resolves.toEqual({ status: 'current' })
     } finally {
       await client.end()
+    }
+  })
+
+  it('executes every recovery capture and exact recheck against PostgreSQL', async () => {
+    const fixture = await createRecoveryCaptureFixture()
+    const client = new Client({ connectionString: getServerConfig().databaseUrl })
+    await client.connect()
+    try {
+      const commandEnteredAt = new Date('2026-07-15T16:01:00.000Z')
+      const memberCodeIdentity = '1'.repeat(64)
+      const ownerCodeIdentity = '2'.repeat(64)
+      const cliInvocationId = newUuidV7(commandEnteredAt.getTime())
+      const issuanceInvocationId = newUuidV7(commandEnteredAt.getTime() + 1)
+
+      const memberCapture = await captureMemberResetRedemption(client, {
+        normalizedEmail: localMember.email,
+        codeIdentity: memberCodeIdentity,
+        commandEnteredAt,
+      })
+      expect(memberResetRedemptionCaptureView(memberCapture)).toMatchObject({
+        purpose: 'member-reset-redemption',
+        installationState: 'claimed',
+        codeIdentity: memberCodeIdentity,
+        targetUserId: localMember.id,
+        targetState: 'member',
+        targetCredential: 'present',
+        activeVerification: {
+          id: fixture.memberVerificationId,
+          expiresAt: fixture.expiresAt,
+        },
+      })
+
+      const ownerWebCapture = await captureOwnerRecoveryWebRedemption(client, {
+        normalizedEmail: owner.email,
+        codeIdentity: ownerCodeIdentity,
+        commandEnteredAt,
+      })
+      expect(ownerRecoveryWebRedemptionCaptureView(ownerWebCapture)).toMatchObject({
+        purpose: 'owner-recovery-web-redemption',
+        installationState: 'claimed',
+        codeIdentity: ownerCodeIdentity,
+        ownerUserId: owner.id,
+        ownerEmailMatches: true,
+        ownerCredential: 'present',
+        activeVerification: {
+          id: fixture.ownerVerificationId,
+          expiresAt: fixture.expiresAt,
+        },
+        hostInvocationId: null,
+      })
+
+      const ownerCliCapture = await captureOwnerRecoveryCliRedemption(client, {
+        normalizedEmail: owner.email,
+        codeIdentity: ownerCodeIdentity,
+        commandEnteredAt,
+        hostInvocationId: cliInvocationId,
+      })
+      expect(ownerRecoveryCliRedemptionCaptureView(ownerCliCapture)).toMatchObject({
+        purpose: 'owner-recovery-cli-redemption',
+        ownerUserId: owner.id,
+        ownerEmailMatches: true,
+        ownerCredential: 'present',
+        activeVerification: { id: fixture.ownerVerificationId },
+        hostInvocationId: cliInvocationId,
+      })
+
+      const ownerIssuanceCapture = await captureOwnerRecoveryIssuance(client, {
+        normalizedOwnerEmail: owner.email,
+        commandEnteredAt,
+        hostInvocationId: issuanceInvocationId,
+      })
+      expect(ownerRecoveryIssuanceCaptureView(ownerIssuanceCapture)).toMatchObject({
+        purpose: 'owner-recovery-issue',
+        ownerUserId: owner.id,
+        ownerEmailMatches: true,
+        ownerCredential: 'present',
+        activeVerification: { id: fixture.ownerVerificationId },
+        hostInvocationId: issuanceInvocationId,
+      })
+
+      await expect(recheckMemberResetRedemption(client, memberCapture)).resolves.toEqual({
+        status: 'current',
+      })
+      await expect(
+        recheckOwnerRecoveryWebRedemption(client, ownerWebCapture),
+      ).resolves.toEqual({ status: 'current' })
+      await expect(
+        recheckOwnerRecoveryCliRedemption(client, ownerCliCapture),
+      ).resolves.toEqual({ status: 'current' })
+      await expect(
+        recheckOwnerRecoveryIssuance(client, ownerIssuanceCapture),
+      ).resolves.toEqual({ status: 'current' })
+    } finally {
+      await client.end()
+      await removeRecoveryCaptureFixtures()
+    }
+  })
+
+  it('fails closed on changed and duplicate recovery verification rows in PostgreSQL', async () => {
+    const fixture = await createRecoveryCaptureFixture()
+    const client = new Client({ connectionString: getServerConfig().databaseUrl })
+    await client.connect()
+    try {
+      const commandEnteredAt = new Date('2026-07-15T16:02:00.000Z')
+      const capture = await captureMemberResetRedemption(client, {
+        normalizedEmail: localMember.email,
+        codeIdentity: '3'.repeat(64),
+        commandEnteredAt,
+      })
+      await getDb()
+        .update(verification)
+        .set({ value: `member-reset-v1:${'c'.repeat(64)}` })
+        .where(eq(verification.id, fixture.memberVerificationId))
+
+      await expect(recheckMemberResetRedemption(client, capture)).resolves.toEqual({
+        status: 'stale',
+        reason: 'member-reset-verification-set-changed',
+      })
+
+      await getDb()
+        .insert(verification)
+        .values({
+          id: newUuidV7(commandEnteredAt.getTime() + 1),
+          identifier: `indigo:member-reset:${localMember.id}`,
+          value: `member-reset-v1:${'d'.repeat(64)}`,
+          expiresAt: fixture.expiresAt,
+          createdAt: fixture.createdAt,
+          updatedAt: fixture.createdAt,
+        })
+      await expect(
+        captureMemberResetRedemption(client, {
+          normalizedEmail: localMember.email,
+          codeIdentity: '4'.repeat(64),
+          commandEnteredAt,
+        }),
+      ).rejects.toBeInstanceOf(RecoveryMutationCaptureInvariantError)
+    } finally {
+      await client.end()
+      await removeRecoveryCaptureFixtures()
     }
   })
 
