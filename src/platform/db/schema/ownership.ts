@@ -49,15 +49,18 @@ export type SqlTableName =
   | TableNamesOf<typeof productSchema>
 
 /** Product module folder names under src/modules/. */
-export type ModuleId =
-  | 'athletes'
-  | 'data-portability'
-  | 'exercises'
-  | 'identity'
-  | 'methodology'
-  | 'programs'
-  | 'progress'
-  | 'training'
+export const PRODUCT_MODULES = [
+  'athletes',
+  'data-portability',
+  'exercises',
+  'identity',
+  'methodology',
+  'programs',
+  'progress',
+  'training',
+] as const
+
+export type ModuleId = (typeof PRODUCT_MODULES)[number]
 
 /**
  * Principals that write schema tables but are not product modules. They may
@@ -79,8 +82,8 @@ export type WriterGrant = {
   readonly ops: readonly WriteOp[]
   /** Non-empty rationale. Debt grants cite ADR 0007 / the spec. */
   readonly reason: string
-  /** True when the grant is vertical-slice debt, not terminal co-ownership. */
-  readonly debt?: boolean
+  /** Required marker: every cross-module grant is temporary vertical-slice debt. */
+  readonly debt: true
 }
 
 /** Optional documentation of a table's mutation shape; not enforced in v1. */
@@ -203,8 +206,8 @@ export const tableWriteFence = {
   safety_hold: {
     owner: 'athletes',
     mutability: 'lifecycle-status',
-    // Data Portability also deletes rows here via the operator grant (delete
-    // '*'), so it is not listed as an additionalWriter.
+    // Data Portability also deletes rows here through the exact temporary
+    // scoped-adapter operator grant, so it is not listed as an additionalWriter.
     additionalWriters: [
       {
         module: 'training',
@@ -353,7 +356,7 @@ export const crossCuttingOperator = {
     // installation_state is identity-owned, so DP's instance-reset UPDATE needs
     // an explicit operator grant. DP-owned tables (deletion_plan,
     // deletion_tombstone) are authorized by their owner grants, not here
-    // (spec §5.3(7)), so they are intentionally absent.
+    // (spec §5.3(8)), so they are intentionally absent.
     update: ['installation_state'],
     // DP performs no non-owned INSERTs; its own ledger inserts are owner grants.
     insert: [],
@@ -364,8 +367,9 @@ export const crossCuttingOperator = {
  * Modules that intentionally write zero tables in the current slice —
  * `exercises` (content schema not yet built), `methodology` (pure domain
  * engine), and `progress` (read-model not yet built). They never appear above;
- * that absence is itself an enforceable fact. `satisfies readonly ModuleId[]`
- * keeps the list honest against the module union.
+ * tests assert both that none owns/receives a grant and that every module absent
+ * from the live write census is listed here. `satisfies readonly ModuleId[]`
+ * keeps the entries honest against the module union.
  */
 export const NON_WRITING_MODULES = [
   'exercises',

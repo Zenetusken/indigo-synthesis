@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { analyzeImportGraph, readCodeSources } from './import-graph'
@@ -14,62 +15,6 @@ function isProductionSource(path: string): boolean {
 }
 
 type ImportPolicy = ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>
-
-function runtimeDependencyKeys(files: ReadonlyMap<string, string>): ReadonlySet<string> {
-  const keys = new Set<string>()
-  const add = (path: string, kind: string, specifier: ts.Expression | undefined) => {
-    if (specifier && ts.isStringLiteralLike(specifier)) {
-      keys.add(`${path}\0${kind}\0${specifier.text}`)
-    }
-  }
-
-  for (const [path, source] of files) {
-    const sourceFile = ts.createSourceFile(
-      path,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    )
-    const visit = (node: ts.Node): void => {
-      if (ts.isImportDeclaration(node)) {
-        const clause = node.importClause
-        const namedBindings = clause?.namedBindings
-        const hasRuntimeBinding =
-          !clause ||
-          (!clause.isTypeOnly &&
-            (Boolean(clause.name) ||
-              !namedBindings ||
-              ts.isNamespaceImport(namedBindings) ||
-              namedBindings.elements.some((element) => !element.isTypeOnly)))
-        if (hasRuntimeBinding) add(path, 'import', node.moduleSpecifier)
-      } else if (ts.isExportDeclaration(node)) {
-        const exports = node.exportClause
-        const hasRuntimeBinding =
-          !node.isTypeOnly &&
-          (!exports ||
-            ts.isNamespaceExport(exports) ||
-            exports.elements.some((element) => !element.isTypeOnly))
-        if (hasRuntimeBinding) add(path, 're-export', node.moduleSpecifier)
-      } else if (ts.isImportEqualsDeclaration(node)) {
-        if (!node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) {
-          add(path, 'import-equals', node.moduleReference.expression)
-        }
-      } else if (ts.isCallExpression(node)) {
-        const kind =
-          node.expression.kind === ts.SyntaxKind.ImportKeyword
-            ? 'dynamic-import'
-            : ts.isIdentifier(node.expression) && node.expression.text === 'require'
-              ? 'require'
-              : null
-        if (kind) add(path, kind, node.arguments[0])
-      }
-      ts.forEachChild(node, visit)
-    }
-    visit(sourceFile)
-  }
-  return keys
-}
 
 function exactRuntimeImportViolations(
   files: ReadonlyMap<string, string>,
@@ -162,6 +107,14 @@ function exactRuntimeImportViolations(
     }
   }
   return [...new Set(violations)].sort()
+}
+
+function policyTargetStubs(policies: ImportPolicy): Map<string, string> {
+  return new Map(
+    [...policies.keys()].map(
+      (target) => [resolve(process.cwd(), target), 'export {}'] as const,
+    ),
+  )
 }
 
 function policy(
@@ -851,7 +804,9 @@ const identityAuthPolicies = policy([
       'issueInstanceResetNoticeReceipt',
       'issueSubjectDeletionNoticeReceipt',
       'verifyInstanceResetNoticeReceipt',
+      'verifyInstanceResetNoticeReceiptForActor',
       'verifySubjectDeletionNoticeReceipt',
+      'verifySubjectDeletionNoticeReceiptForActor',
     ],
   ],
   [
@@ -867,22 +822,27 @@ const identityAuthPolicies = policy([
   [
     'src/modules/data-portability/server/destructive-notice.ts',
     'src/app/settings/delete-account/page.tsx',
-    ['verifySubjectDeletionNoticeReceipt'],
+    ['verifySubjectDeletionNoticeReceiptForActor'],
   ],
   [
     'src/modules/data-portability/server/destructive-notice.ts',
     'src/app/settings/delete/page.tsx',
-    ['verifyInstanceResetNoticeReceipt'],
+    ['verifyInstanceResetNoticeReceiptForActor'],
   ],
   [
     'src/modules/data-portability/server/destructive-notice.ts',
     'src/app/settings/page.tsx',
-    ['verifySubjectDeletionNoticeReceipt'],
+    ['verifySubjectDeletionNoticeReceiptForActor'],
   ],
   [
     'src/modules/data-portability/server/destructive-notice.ts',
     'src/app/sign-in/page.tsx',
-    ['verifyInstanceResetNoticeReceipt', 'verifySubjectDeletionNoticeReceipt'],
+    [
+      'verifyInstanceResetNoticeReceipt',
+      'verifyInstanceResetNoticeReceiptForActor',
+      'verifySubjectDeletionNoticeReceipt',
+      'verifySubjectDeletionNoticeReceiptForActor',
+    ],
   ],
   [
     'src/modules/data-portability/server/destructive-notice.ts',
@@ -1016,7 +976,7 @@ describe('Identity authentication cutover boundaries', () => {
     )
 
     const rogue = resolve(process.cwd(), 'scripts/identity/rogue-recovery.ts')
-    const synthetic = new Map(productionFiles)
+    const synthetic = policyTargetStubs(identityAuthPolicies)
     synthetic.set(
       rogue,
       "import { createScopedMemberResetRedemptionMutationGateway } from '@/modules/identity/infrastructure/scoped-browser-recovery'\nvoid createScopedMemberResetRedemptionMutationGateway\n",
@@ -1058,7 +1018,7 @@ describe('Identity authentication cutover boundaries', () => {
         'scripts/identity/rogue-destructive.ts: unauthorized broad import -> src/modules/data-portability/server/destructive-notice.ts',
       ],
     ] as const) {
-      const synthetic = new Map(productionFiles)
+      const synthetic = policyTargetStubs(identityAuthPolicies)
       synthetic.set(rogue, source)
       expect(exactRuntimeImportViolations(synthetic, identityAuthPolicies)).toContain(
         expected,
@@ -1161,15 +1121,9 @@ describe('Identity authentication cutover boundaries', () => {
     )
     const violations = (files: ReadonlyMap<string, string>) => {
       const graph = analyzeImportGraph(files, { sourceRoot })
-      const runtimeDependencies = runtimeDependencyKeys(files)
       const outgoing = new Map<string, string[]>()
       for (const edge of graph.edges) {
-        if (
-          !edge.to ||
-          !runtimeDependencies.has(`${edge.from}\0${edge.kind}\0${edge.specifier}`)
-        ) {
-          continue
-        }
+        if (!edge.to || !edge.runtime) continue
         const targets = outgoing.get(edge.from) ?? []
         targets.push(edge.to)
         outgoing.set(edge.from, targets)
@@ -1197,7 +1151,11 @@ describe('Identity authentication cutover boundaries', () => {
 
     expect(violations(productionFiles)).toEqual([])
 
-    const synthetic = new Map(productionFiles)
+    const synthetic = policyTargetStubs(externalHostIdentityPolicies)
+    synthetic.set(
+      resolve(sourceRoot, 'platform/db/client.ts'),
+      'export const getDb = true',
+    )
     synthetic.set(
       entries[0],
       `${productionFiles.get(entries[0]) ?? ''}\nimport { getDb } from '@/platform/db/client'\nvoid getDb\n`,
@@ -1206,24 +1164,35 @@ describe('Identity authentication cutover boundaries', () => {
       'scripts/identity/recover-owner.ts -> src/platform/db/client.ts',
     )
 
-    const helper = resolve(sourceRoot, 'composition/rogue-host-recovery-helper.ts')
-    const transitive = new Map(productionFiles)
-    transitive.set(
-      helper,
-      "import { getDb } from '@/platform/db/client'\nexport const rogueHostRecoveryHelper = getDb\n",
+    const alternateLoader = new Map(synthetic)
+    alternateLoader.set(
+      entries[0],
+      "void globalThis.module.require('@/platform/db/client')\n",
     )
+    expect(violations(alternateLoader)).toContain(
+      'scripts/identity/recover-owner.ts -> src/platform/db/client.ts',
+    )
+
+    const helper = resolve(sourceRoot, 'composition/rogue-host-recovery-helper.ts')
+    const transitive = new Map<string, string>([
+      [resolve(sourceRoot, 'platform/db/client.ts'), 'export const getDb = true'],
+      [
+        helper,
+        "import { getDb } from '@/platform/db/client'\nexport const rogueHostRecoveryHelper = getDb\n",
+      ],
+    ])
     transitive.set(
       entries[1],
-      `${productionFiles.get(entries[1]) ?? ''}\nimport { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n`,
+      "import { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n",
     )
     expect(violations(transitive)).toContain(
       'src/composition/identity-host-recovery-mutations.ts -> src/platform/db/client.ts',
     )
 
-    transitive.set(entries[1], productionFiles.get(entries[1]) ?? '')
+    transitive.delete(entries[1])
     transitive.set(
       entries[3],
-      `${productionFiles.get(entries[3]) ?? ''}\nimport { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n`,
+      "import { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n",
     )
     expect(violations(transitive)).toContain(
       'src/composition/identity-session-maintenance.ts -> src/platform/db/client.ts',
@@ -1236,7 +1205,7 @@ describe('Identity authentication cutover boundaries', () => {
     ).toEqual([])
 
     const rogue = resolve(process.cwd(), 'scripts/identity/rogue-host-capture.ts')
-    const synthetic = new Map(productionFiles)
+    const synthetic = policyTargetStubs(externalHostIdentityPolicies)
     synthetic.set(
       rogue,
       "import { withExternalHostCommand } from '@/platform/db/external-host-command'\nvoid withExternalHostCommand\n",
@@ -1258,7 +1227,7 @@ describe('Identity authentication cutover boundaries', () => {
       ],
     ] as const) {
       const rogueRoute = resolve(sourceRoot, 'app/api/rogue-recovery/route.ts')
-      const bypass = new Map(productionFiles)
+      const bypass = policyTargetStubs(externalHostIdentityPolicies)
       bypass.set(rogueRoute, source)
       expect(
         exactRuntimeImportViolations(bypass, externalHostIdentityPolicies),
@@ -1268,6 +1237,14 @@ describe('Identity authentication cutover boundaries', () => {
 
   it('detects aliases, re-exports, literal and computed loading outside the root', () => {
     const rogue = resolve(sourceRoot, 'modules/programs/infrastructure/rogue-auth.ts')
+    const sealedTargetStubs = policyTargetStubs(identityAuthPolicies)
+    const absoluteScopedMutationAuth = resolve(
+      sourceRoot,
+      'modules/identity/infrastructure/scoped-mutation-auth',
+    )
+    const fileUrlScopedMutationAuth = pathToFileURL(
+      `${absoluteScopedMutationAuth}.ts`,
+    ).href
     for (const [source, expected] of [
       [
         "import { createScopedIdentityMutationGateway as bypass } from '@/modules/identity/infrastructure/scoped-mutation-auth'\nvoid bypass\n",
@@ -1275,6 +1252,14 @@ describe('Identity authentication cutover boundaries', () => {
       ],
       [
         "import '@/modules/identity/infrastructure/scoped-mutation-auth'\n",
+        'unauthorized broad import',
+      ],
+      [
+        `import { createScopedIdentityMutationGateway } from '${absoluteScopedMutationAuth}'\nvoid createScopedIdentityMutationGateway\n`,
+        'unauthorized broad import',
+      ],
+      [
+        `import { createScopedIdentityMutationGateway } from '${fileUrlScopedMutationAuth}'\nvoid createScopedIdentityMutationGateway\n`,
         'unauthorized broad import',
       ],
       [
@@ -1293,8 +1278,20 @@ describe('Identity authentication cutover boundaries', () => {
         "const target = '@/modules/identity/infrastructure/scoped-mutation-auth'\nvoid require(target)\n",
         'computed require',
       ],
+      [
+        "const load = require\nvoid load('@/modules/data-portability/infrastructure/scoped-destructive-adapter')\n",
+        'computed require',
+      ],
+      [
+        "void module.require('@/modules/data-portability/infrastructure/scoped-destructive-adapter')\n",
+        'non-static import',
+      ],
+      [
+        "import { createRequire as makeRequire } from 'node:module'\nconst load = makeRequire(import.meta.url)\nvoid load('@/modules/data-portability/infrastructure/scoped-destructive-adapter')\n",
+        'computed require',
+      ],
     ] as const) {
-      const mutated = new Map(sourceFiles)
+      const mutated = new Map(sealedTargetStubs)
       mutated.set(rogue, source)
       expect(
         exactRuntimeImportViolations(mutated, identityAuthPolicies).join('\n'),
@@ -1304,15 +1301,9 @@ describe('Identity authentication cutover boundaries', () => {
 
   it('keeps client-component dependency closures away from server auth and database code', () => {
     const graph = analyzeImportGraph(sourceFiles, { sourceRoot })
-    const runtimeDependencies = runtimeDependencyKeys(sourceFiles)
     const outgoing = new Map<string, string[]>()
     for (const edge of graph.edges) {
-      if (
-        !edge.to ||
-        !runtimeDependencies.has(`${edge.from}\0${edge.kind}\0${edge.specifier}`)
-      ) {
-        continue
-      }
+      if (!edge.to || !edge.runtime) continue
       const targets = outgoing.get(edge.from) ?? []
       targets.push(edge.to)
       outgoing.set(edge.from, targets)

@@ -161,8 +161,9 @@ At re-entry, the Part A manifest is the migration checklist.
 - **C3 — safety_hold single-owner API.** Selected; matches DB's two-policy model.
 - **C4 — Data Portability per-module ports.** Selected; matches ARCHITECTURE target;
   independent of Programs↔Training.
-- **C5 — UnitOfWork for multi-module writes only.** Selected; implemented first under
-  `src/application/workflows/`.
+- **C5 — UnitOfWork for multi-module writes only.** Selected; implemented first as neutral
+  contracts under `src/application/coordination/`, the Drizzle adapter under
+  `src/platform/application-coordination/`, and cross-module wiring under `src/composition/`.
 - **Import-presence ownership as primary enforcement.** Rejected: punishes legitimate
   reads; blind to raw SQL and adapters; wrong invariant. Declared readers may be a
   follow-on (Part A2), not a substitute for the write fence.

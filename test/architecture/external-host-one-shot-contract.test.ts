@@ -25,79 +25,15 @@ function productionFiles(): ReadonlyMap<string, string> {
   )
 }
 
-function runtimeDependencyKeys(files: ReadonlyMap<string, string>): ReadonlySet<string> {
-  const keys = new Set<string>()
-  const add = (path: string, kind: string, specifier: ts.Expression | undefined) => {
-    if (specifier && ts.isStringLiteralLike(specifier)) {
-      keys.add(`${path}\0${kind}\0${specifier.text}`)
-    }
-  }
-
-  for (const [path, source] of files) {
-    const sourceFile = ts.createSourceFile(
-      path,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    )
-    const visit = (node: ts.Node): void => {
-      if (ts.isImportDeclaration(node)) {
-        const clause = node.importClause
-        const bindings = clause?.namedBindings
-        const hasRuntimeBinding =
-          !clause ||
-          (!clause.isTypeOnly &&
-            (Boolean(clause.name) ||
-              !bindings ||
-              ts.isNamespaceImport(bindings) ||
-              bindings.elements.some((element) => !element.isTypeOnly)))
-        if (hasRuntimeBinding) add(path, 'import', node.moduleSpecifier)
-      } else if (ts.isExportDeclaration(node)) {
-        const exports = node.exportClause
-        const hasRuntimeBinding =
-          !node.isTypeOnly &&
-          (!exports ||
-            ts.isNamespaceExport(exports) ||
-            exports.elements.some((element) => !element.isTypeOnly))
-        if (hasRuntimeBinding) add(path, 're-export', node.moduleSpecifier)
-      } else if (
-        ts.isImportEqualsDeclaration(node) &&
-        !node.isTypeOnly &&
-        ts.isExternalModuleReference(node.moduleReference)
-      ) {
-        add(path, 'import-equals', node.moduleReference.expression)
-      } else if (ts.isCallExpression(node)) {
-        const kind =
-          node.expression.kind === ts.SyntaxKind.ImportKeyword
-            ? 'dynamic-import'
-            : ts.isIdentifier(node.expression) && node.expression.text === 'require'
-              ? 'require'
-              : null
-        if (kind) add(path, kind, node.arguments[0])
-      }
-      ts.forEachChild(node, visit)
-    }
-    visit(sourceFile)
-  }
-  return keys
-}
-
 function runtimeReachabilityViolations(
   files: ReadonlyMap<string, string>,
   entries: readonly string[],
   forbiddenTargets: ReadonlySet<string>,
 ): readonly string[] {
   const graph = analyzeImportGraph(files, { sourceRoot })
-  const runtimeDependencies = runtimeDependencyKeys(files)
   const outgoing = new Map<string, Set<string>>()
   for (const edge of graph.edges) {
-    if (
-      !edge.to ||
-      !runtimeDependencies.has(`${edge.from}\0${edge.kind}\0${edge.specifier}`)
-    ) {
-      continue
-    }
+    if (!edge.to || !edge.runtime) continue
     const targets = outgoing.get(edge.from) ?? new Set<string>()
     targets.add(edge.to)
     outgoing.set(edge.from, targets)
@@ -340,6 +276,15 @@ describe('external-host one-shot architecture contract', () => {
     expect(runtimeReachabilityViolations(direct, entries, forbiddenTargets)).toContain(
       'scripts/db/preflight.ts -> src/platform/db/client.ts',
     )
+
+    const alternateLoader = new Map(files)
+    alternateLoader.set(
+      entries[0],
+      `${files.get(entries[0]) ?? ''}\nvoid globalThis.module.require('@/platform/db/client')\n`,
+    )
+    expect(
+      runtimeReachabilityViolations(alternateLoader, entries, forbiddenTargets),
+    ).toContain('scripts/db/preflight.ts -> src/platform/db/client.ts')
 
     const helper = resolve(sourceRoot, 'platform/db/rogue-host-helper.ts')
     const transitive = new Map(files)

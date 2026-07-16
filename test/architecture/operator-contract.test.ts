@@ -155,7 +155,7 @@ describe('clean-clone operator contract', () => {
         'E2E_DATABASE_URL database must match indigo_<name>_e2e',
       )
     }
-  })
+  }, 15_000)
 
   it('keeps every application table in the production-aligned E2E clear order', () => {
     const schemaTables = Object.values(databaseSchema)

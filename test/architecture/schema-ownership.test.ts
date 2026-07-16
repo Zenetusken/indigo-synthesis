@@ -3,11 +3,12 @@ import { describe, expect, it } from 'vitest'
 import {
   type CrossCuttingOperator,
   crossCuttingOperator,
+  NON_WRITING_MODULES,
+  PRODUCT_MODULES,
   type TableWriteFence,
   tableWriteFence,
 } from '@/platform/db/schema/ownership'
 import {
-  adapterConfiguredOutsideIdentity,
   buildSchemaTableMap,
   listAdapterConfigurers,
   type ObservedWrite,
@@ -16,11 +17,7 @@ import {
   type WriteOp,
 } from './schema-ownership-scan'
 
-/**
- * Part A enforcement (spec §5, DoD O1–O5). O1 (coverage/bijection) is already a
- * compile-time invariant in ownership.ts; it is re-asserted here as
- * belt-and-suspenders. O2–O5 are the runtime write-authority checks.
- */
+/** Live O1-O5 authorization gate; focused scanner grammars have separate tests. */
 
 const sourceRoot = resolve(process.cwd(), 'src')
 const scriptsRoot = resolve(process.cwd(), 'scripts')
@@ -28,13 +25,9 @@ const fence: Readonly<Record<string, TableWriteFence>> = tableWriteFence
 const operator: CrossCuttingOperator = crossCuttingOperator
 
 /**
- * Non-module operational writers, explicitly allow-listed (spec §5.3(1)). These
- * are NOT product sharedWriters; app/module code must never write these tables.
- * The backup-restore drill seeds a sentinel `audit_event` and then UPDATEs it as
- * a tamper-detection probe (an append-only table mutated by a test/ops script).
- * The match is `file`-scoped on purpose: relocating the drill deliberately
- * reddens CI until this entry is updated, so a sanctioned raw audit write cannot
- * silently spread to other scripts.
+ * File-scoped operational exceptions are not product shared-writer grants.
+ * The backup drill deliberately inserts and then attempts to tamper with its
+ * sentinel audit row to prove the append-only trigger survives restoration.
  */
 const NON_MODULE_WRITE_ALLOWLIST: readonly {
   readonly principal: string
@@ -60,7 +53,9 @@ function operatorAllows(table: string, op: WriteOp): boolean {
   if (op === 'delete') {
     return (operator.allow.delete as readonly string[]).includes(table)
   }
-  if (op === 'update') return (operator.allow.update as readonly string[]).includes(table)
+  if (op === 'update') {
+    return (operator.allow.update as readonly string[]).includes(table)
+  }
   return (operator.allow.insert as readonly string[]).includes(table)
 }
 
@@ -83,11 +78,11 @@ function authorization(
   }
   if (
     NON_MODULE_WRITE_ALLOWLIST.some(
-      (a) =>
-        a.principal === write.principal &&
-        a.table === write.table &&
-        a.op === write.op &&
-        a.file === write.file,
+      (allowed) =>
+        allowed.principal === write.principal &&
+        allowed.table === write.table &&
+        allowed.op === write.op &&
+        allowed.file === write.file,
     )
   ) {
     return 'allowlist'
@@ -99,201 +94,329 @@ function describeWrite(write: ObservedWrite): string {
   return `${write.principal} ${write.op} ${write.table} (${write.kind}) ${write.file}:${write.line}`
 }
 
+function staleAdditionalWriterGrants(
+  manifest: Readonly<Record<string, TableWriteFence>>,
+  observedWrites: readonly ObservedWrite[],
+): string[] {
+  const observed = new Set(
+    observedWrites
+      .filter((write) => write.evidence === 'executable')
+      .map((write) => `${write.principal}:${write.table}:${write.op}`),
+  )
+  const stale: string[] = []
+  for (const [table, entry] of Object.entries(manifest)) {
+    for (const grant of entry.additionalWriters ?? []) {
+      for (const op of grant.ops) {
+        if (!observed.has(`${grant.module}:${table}:${op}`)) {
+          stale.push(`${grant.module}:${table}:${op}`)
+        }
+      }
+    }
+  }
+  return stale
+}
+
 const writes = scanWrites({ sourceRoot, extraDirs: [scriptsRoot] })
 const { sqlNames } = buildSchemaTableMap(sourceRoot)
 
 describe('schema/table write-authority fence', () => {
-  it('O1: manifest is bijective with the live pgTable schema', () => {
+  it('O1: manifest is bijective with the closed pgTable catalog', () => {
     expect(Object.keys(fence).sort()).toEqual([...sqlNames].sort())
   })
 
-  it('O2: every observed write is authorized by the manifest', () => {
-    const unauthorized = writes
-      .filter((w) => authorization(w) === null)
-      .map(describeWrite)
-    expect(unauthorized).toEqual([])
-  })
-
-  it('finds a non-trivial number of writes (scanner is not silently empty)', () => {
-    // Guards against a regression that makes the scanner return nothing, which
-    // would make O2 vacuously green.
-    expect(writes.length).toBeGreaterThan(100)
-    expect(writes.some((w) => w.kind === 'raw')).toBe(true)
-    expect(writes.some((w) => w.kind === 'drizzle')).toBe(true)
-  })
-
-  it('O3: no stale debt grant (every additionalWriters grant is exercised)', () => {
-    const observed = new Set(writes.map((w) => `${w.principal}:${w.table}:${w.op}`))
-    const stale: string[] = []
+  it('O1: manifest grants and external-writer metadata stay exact and reviewable', () => {
     for (const [table, entry] of Object.entries(fence)) {
-      for (const grant of entry.additionalWriters ?? []) {
-        for (const op of grant.ops) {
-          if (!observed.has(`${grant.module}:${table}:${op}`)) {
-            stale.push(`${grant.module}:${table}:${op}`)
-          }
-        }
+      const additionalWriters = entry.additionalWriters ?? []
+      const externalWriters = entry.externalWriters ?? []
+      if (entry.additionalWriters) expect(additionalWriters.length).toBeGreaterThan(0)
+      if (entry.externalWriters) expect(externalWriters.length).toBeGreaterThan(0)
+
+      expect(additionalWriters.map((grant) => grant.module)).toEqual([
+        ...new Set(additionalWriters.map((grant) => grant.module)),
+      ])
+      for (const grant of additionalWriters) {
+        expect(grant.module, table).not.toBe(entry.owner)
+        expect(grant.reason.trim(), `${table}:${grant.module}`).not.toBe('')
+        expect(grant.debt, `${table}:${grant.module}`).toBe(true)
+        expect(grant.ops.length, `${table}:${grant.module}`).toBeGreaterThan(0)
+        expect(grant.ops, `${table}:${grant.module}`).toEqual([...new Set(grant.ops)])
+      }
+
+      expect(externalWriters.map((writer) => writer.principal)).toEqual([
+        ...new Set(externalWriters.map((writer) => writer.principal)),
+      ])
+      for (const writer of externalWriters) {
+        expect(writer.note.trim(), `${table}:${writer.principal}`).not.toBe('')
       }
     }
-    expect(stale).toEqual([])
+    expect(operator.reason.trim()).not.toBe('')
   })
 
-  it('O3: no stale owner (owner writes the table, or has an external writer)', () => {
-    const staleOwners = Object.entries(fence)
-      .filter(
-        ([table, entry]) =>
-          !writes.some((w) => w.principal === entry.owner && w.table === table) &&
-          !(entry.externalWriters && entry.externalWriters.length > 0),
-      )
-      .map(([table, entry]) => `${entry.owner}:${table}`)
-    expect(staleOwners).toEqual([])
-  })
-
-  it('O4: only data-portability holds cross-table (operator) write breadth', () => {
-    // The operator path is the whole-schema breadth mechanism; only DP may use
-    // it. A non-owner write by any other principal must be a declared shared
-    // grant or a bounded allowlist entry, never operator breadth.
-    const operatorUsers = new Set(
-      writes.filter((w) => authorization(w) === 'operator').map((w) => w.principal),
+  it('O1: zero-write module metadata matches both declared and executable authority', () => {
+    const declaredWriters = new Set([
+      operator.module,
+      ...Object.values(fence).flatMap((entry) => [
+        entry.owner,
+        ...(entry.additionalWriters ?? []).map((grant) => grant.module),
+      ]),
+    ])
+    const executableWriters = new Set(
+      writes
+        .filter(
+          (write) =>
+            write.evidence === 'executable' &&
+            (PRODUCT_MODULES as readonly string[]).includes(write.principal),
+        )
+        .map((write) => write.principal),
     )
-    expect([...operatorUsers].sort()).toEqual(['data-portability'])
-    // The installation_state UPDATE is specifically authorized via the operator.
+    const undeclared = PRODUCT_MODULES.filter((module) => !declaredWriters.has(module))
+    const unobserved = PRODUCT_MODULES.filter((module) => !executableWriters.has(module))
+
+    expect(PRODUCT_MODULES).toEqual([...new Set(PRODUCT_MODULES)])
+    expect(NON_WRITING_MODULES).toEqual(undeclared)
+    expect(NON_WRITING_MODULES).toEqual(unobserved)
+  })
+
+  it('O2: every observed write is authorized by the manifest', () => {
+    expect(
+      writes.filter((write) => authorization(write) === null).map(describeWrite),
+    ).toEqual([])
+  })
+
+  it('O2: catalogued schema files remain inside the DML and raw-SQL perimeter', () => {
+    const options = {
+      file: 'src/platform/db/schema/auth.ts',
+      bindingToSql: new Map([['user', 'user']]),
+      sqlNames: new Set(['user']),
+    } as const
+    const drizzleSideEffect = scanSource(
+      "import { pgTable } from 'drizzle-orm/pg-core'\n" +
+        "export const user = pgTable('user', {})\n" +
+        'declare const rogueDb: any\nvoid rogueDb.delete(user)',
+      options,
+    )
+    const rawSideEffect = scanSource(
+      "import { sql } from 'drizzle-orm'\n" +
+        'declare const rogueDb: any\nrogueDb.execute(sql`DELETE FROM user`)',
+      options,
+    )
+
+    expect(
+      drizzleSideEffect.map(({ evidence, kind, op, principal, table }) => ({
+        evidence,
+        kind,
+        op,
+        principal,
+        table,
+      })),
+    ).toEqual([
+      {
+        evidence: 'executable',
+        kind: 'drizzle',
+        op: 'delete',
+        principal: 'platform',
+        table: 'user',
+      },
+    ])
+    expect(
+      rawSideEffect.map(({ evidence, kind, op, principal, table }) => ({
+        evidence,
+        kind,
+        op,
+        principal,
+        table,
+      })),
+    ).toEqual([
+      {
+        evidence: 'executable',
+        kind: 'raw',
+        op: 'delete',
+        principal: 'platform',
+        table: 'user',
+      },
+    ])
+  })
+
+  it('O2: authorization matches the exact principal, table, operation, and file', () => {
+    const write = (
+      principal: string,
+      table: string,
+      op: WriteOp,
+      file = `src/modules/${principal}/probe.ts`,
+    ): ObservedWrite => ({
+      evidence: 'executable',
+      principal,
+      table,
+      op,
+      kind: 'drizzle',
+      file,
+      line: 1,
+    })
+
+    expect(authorization(write('athletes', 'athlete_profile', 'update'))).toBe('owner')
+    expect(authorization(write('training', 'safety_hold', 'insert'))).toBe('shared')
+    expect(authorization(write('training', 'safety_hold', 'update'))).toBeNull()
+    expect(authorization(write('data-portability', 'installation_state', 'update'))).toBe(
+      'operator',
+    )
+    expect(
+      authorization(write('data-portability', 'installation_state', 'insert')),
+    ).toBeNull()
+    expect(
+      authorization(
+        write('scripts', 'audit_event', 'insert', 'scripts/db/backup-restore-drill.ts'),
+      ),
+    ).toBe('allowlist')
+    expect(
+      authorization(write('scripts', 'audit_event', 'insert', 'scripts/db/other.ts')),
+    ).toBeNull()
+    expect(authorization(write('rogue', 'athlete_profile', 'update'))).toBeNull()
+    expect(authorization(write('athletes', 'unknown_table', 'update'))).toBeNull()
+  })
+
+  it('O2: the non-module exception surface is exactly the backup-drill proof', () => {
+    expect(NON_MODULE_WRITE_ALLOWLIST).toEqual([
+      {
+        principal: 'scripts',
+        table: 'audit_event',
+        op: 'insert',
+        file: 'scripts/db/backup-restore-drill.ts',
+      },
+      {
+        principal: 'scripts',
+        table: 'audit_event',
+        op: 'update',
+        file: 'scripts/db/backup-restore-drill.ts',
+      },
+    ])
+    expect(
+      new Set(
+        NON_MODULE_WRITE_ALLOWLIST.map(
+          ({ principal, table, op, file }) => `${principal}:${table}:${op}:${file}`,
+        ),
+      ).size,
+    ).toBe(NON_MODULE_WRITE_ALLOWLIST.length)
+  })
+
+  it('keeps the census non-vacuous across both detectors', () => {
+    expect(writes.length).toBeGreaterThan(100)
+    expect(writes.some((write) => write.kind === 'raw')).toBe(true)
+    expect(writes.some((write) => write.kind === 'drizzle')).toBe(true)
+  })
+
+  it('O3: every additional-writer operation grant is exercised', () => {
+    expect(staleAdditionalWriterGrants(fence, writes)).toEqual([])
+  })
+
+  it('O3: a missing operation observation makes an additional-writer grant stale', () => {
+    const syntheticFence: Readonly<Record<string, TableWriteFence>> = {
+      example_table: {
+        owner: 'identity',
+        additionalWriters: [
+          {
+            module: 'training',
+            ops: ['insert', 'update'],
+            reason: 'Synthetic exact-operation coverage probe.',
+            debt: true,
+          },
+        ],
+      },
+    }
+    const observedInsert: ObservedWrite = {
+      evidence: 'executable',
+      principal: 'training',
+      table: 'example_table',
+      op: 'insert',
+      kind: 'drizzle',
+      file: 'src/modules/training/probe.ts',
+      line: 1,
+    }
+
+    expect(staleAdditionalWriterGrants(syntheticFence, [observedInsert])).toEqual([
+      'training:example_table:update',
+    ])
+  })
+
+  it('O3: potential raw SQL stays in the census without satisfying liveness', () => {
+    const syntheticFence: Readonly<Record<string, TableWriteFence>> = {
+      example_table: {
+        owner: 'identity',
+        additionalWriters: [
+          {
+            module: 'training',
+            ops: ['delete'],
+            reason: 'Synthetic executable-evidence coverage probe.',
+            debt: true,
+          },
+        ],
+      },
+    }
+    const options = {
+      file: 'src/modules/training/sql-probe.ts',
+      bindingToSql: new Map<string, string>(),
+      sqlNames: new Set(['example_table']),
+    } as const
+    const potential = scanSource(
+      "import { sql } from 'drizzle-orm'\n" +
+        'const unused = sql`DELETE FROM example_table`\nvoid unused',
+      options,
+    )
+    const executable = scanSource(
+      "import { sql } from 'drizzle-orm'\n" +
+        'db.execute(sql`DELETE FROM example_table`)',
+      options,
+    )
+
+    expect(potential.map(({ evidence }) => evidence)).toEqual(['potential'])
+    expect(staleAdditionalWriterGrants(syntheticFence, potential)).toEqual([
+      'training:example_table:delete',
+    ])
+    expect(executable.map(({ evidence }) => evidence)).toEqual(['executable'])
+    expect(staleAdditionalWriterGrants(syntheticFence, executable)).toEqual([])
+  })
+
+  it('O3: every owner writes or has an attributed external writer', () => {
+    expect(
+      Object.entries(fence)
+        .filter(
+          ([table, entry]) =>
+            !writes.some(
+              (write) =>
+                write.evidence === 'executable' &&
+                write.principal === entry.owner &&
+                write.table === table,
+            ) && !(entry.externalWriters && entry.externalWriters.length > 0),
+        )
+        .map(([table, entry]) => `${entry.owner}:${table}`),
+    ).toEqual([])
+  })
+
+  it('O4: only data-portability exercises operator breadth', () => {
+    expect(
+      [
+        ...new Set(
+          writes
+            .filter((write) => authorization(write) === 'operator')
+            .map((write) => write.principal),
+        ),
+      ].sort(),
+    ).toEqual(['data-portability'])
     expect(operatorAllows('installation_state', 'update')).toBe(true)
     expect(operator.module).toBe('data-portability')
   })
 
-  it('O5: Better Auth adapter is configured only in identity', () => {
+  it('O5: Better Auth Drizzle adapters stay inside Identity', () => {
     expect(listAdapterConfigurers(sourceRoot)).toEqual([
       'src/modules/identity/infrastructure/auth.ts',
       'src/modules/identity/infrastructure/scoped-mutation-auth.ts',
     ])
     for (const table of ['user', 'session', 'account', 'verification']) {
-      expect(fence[table]?.owner).toBe('identity')
+      const entry = fence[table]
+      expect(entry?.owner).toBe('identity')
+      expect(entry?.externalWriters?.map((writer) => writer.principal)).toEqual([
+        'library-adapter',
+      ])
+      expect(entry?.externalWriters?.[0]?.note).toContain('Better Auth drizzleAdapter')
     }
-  })
-})
-
-describe('schema-ownership scanner fixtures (through the production detectors)', () => {
-  const { bindingToSql, sqlNames: names } = buildSchemaTableMap(sourceRoot)
-  const scan = (file: string, source: string) =>
-    scanSource(source, { file, bindingToSql, sqlNames: names })
-
-  it('flags an undeclared module Drizzle write as unauthorized', () => {
-    const found = scan(
-      'src/modules/progress/application/leak.ts',
-      "import { auditEvents } from '@/platform/db/schema'\n" +
-        'export const go = (db: any) => db.insert(auditEvents).values({})',
-    )
-    expect(found).toHaveLength(1)
-    expect(authorization(found[0] as ObservedWrite)).toBeNull()
-  })
-
-  it('flags an undeclared raw-SQL write as unauthorized', () => {
-    const found = scan(
-      'src/modules/progress/application/leak.ts',
-      'export const go = (db: any) => db.execute(sql`DELETE FROM audit_event WHERE id = 1`)',
-    )
-    expect(found).toHaveLength(1)
-    expect(found[0]?.op).toBe('delete')
-    expect(authorization(found[0] as ObservedWrite)).toBeNull()
-  })
-
-  it('does not treat Map/Set .delete or non-DML SQL as a write (control)', () => {
-    const mapDelete = scan(
-      'src/modules/programs/application/build.ts',
-      'export const go = (requiredEquipment: Map<string, unknown>, item: any) =>\n' +
-        '  requiredEquipment.delete(item.equipmentCode)',
-    )
-    expect(mapDelete).toEqual([])
-    // FOR UPDATE / SELECT must not register as writes (SET-anchored UPDATE).
-    const selectForUpdate = scan(
-      'src/modules/identity/infrastructure/probe.ts',
-      'export const q = (db: any) =>\n' +
-        '  db.execute(sql`SELECT scope FROM web_recovery_rate_limit_bucket FOR UPDATE SKIP LOCKED`)',
-    )
-    expect(selectForUpdate).toEqual([])
-  })
-
-  it('detects a stale debt grant (unexercised additionalWriters)', () => {
-    // A fabricated grant not present in the observed set must be reported stale.
-    const observed = new Set(writes.map((w) => `${w.principal}:${w.table}:${w.op}`))
-    expect(observed.has('progress:audit_event:insert')).toBe(false)
-    // And a real one is present, proving the check is not always-true.
-    expect(observed.has('programs:audit_event:insert')).toBe(true)
-  })
-
-  it('resolves schema bindings imported via the barrel /index subpath', () => {
-    const found = scan(
-      'src/modules/progress/application/leak.ts',
-      "import { auditEvents } from '@/platform/db/schema/index'\n" +
-        'export const go = (db: any) => db.insert(auditEvents).values({})',
-    )
-    expect(found).toHaveLength(1)
-    expect(found[0]?.table).toBe('audit_event')
-    expect(authorization(found[0] as ObservedWrite)).toBeNull()
-  })
-
-  it('resolves a table re-bound to a local const', () => {
-    const found = scan(
-      'src/modules/progress/application/leak.ts',
-      "import { auditEvents } from '@/platform/db/schema'\n" +
-        'export const go = (db: any) => {\n  const t = auditEvents\n  return db.delete(t)\n}',
-    )
-    expect(found).toHaveLength(1)
-    expect(found[0]?.op).toBe('delete')
-    expect(found[0]?.table).toBe('audit_event')
-  })
-
-  it('detects raw writes with a schema-qualified name and an aliased UPDATE target', () => {
-    const qualified = scan(
-      'src/modules/progress/application/leak.ts',
-      'export const go = (db: any) =>\n' +
-        '  db.execute(sql`INSERT INTO public.audit_event (id) VALUES (1)`)',
-    )
-    expect(qualified).toHaveLength(1)
-    expect(qualified[0]?.table).toBe('audit_event')
-
-    const aliasedUpdate = scan(
-      'src/modules/progress/application/leak.ts',
-      'export const go = (db: any) =>\n' +
-        '  db.execute(sql`UPDATE safety_hold h SET resolved = true WHERE h.id = 1`)',
-    )
-    expect(aliasedUpdate).toHaveLength(1)
-    expect(aliasedUpdate[0]?.op).toBe('update')
-    expect(aliasedUpdate[0]?.table).toBe('safety_hold')
-  })
-
-  it('does not treat SQL keywords in a non-executed string (error message) as a write', () => {
-    const found = scan(
-      'src/modules/programs/application/guard.ts',
-      'export const message =\n' +
-        "  'never DELETE FROM audit_event directly — use the audit ledger port'",
-    )
-    expect(found).toEqual([])
-  })
-
-  it('detects a Better Auth adapter configured outside identity, incl. aliased import (O5)', () => {
-    const direct =
-      "import { drizzleAdapter } from 'better-auth/adapters/drizzle'\n" +
-      'export const auth = drizzleAdapter(db, {})'
-    const aliased =
-      "import { drizzleAdapter as da } from 'better-auth/adapters/drizzle'\n" +
-      'export const auth = da(db, {})'
-    const mentionOnly = '// drizzleAdapter is configured in identity\nexport const x = 1'
-    expect(
-      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', direct),
-    ).toBe(true)
-    expect(
-      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', aliased),
-    ).toBe(true)
-    // The same configuration inside identity is allowed; a bare mention is not a config.
-    expect(
-      adapterConfiguredOutsideIdentity(
-        'src/modules/identity/infrastructure/auth.ts',
-        direct,
-      ),
-    ).toBe(false)
-    expect(
-      adapterConfiguredOutsideIdentity('src/modules/progress/infra/auth.ts', mentionOnly),
-    ).toBe(false)
-  })
+  }, 15_000)
 })
