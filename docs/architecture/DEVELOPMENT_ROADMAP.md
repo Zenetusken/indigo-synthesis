@@ -274,7 +274,8 @@ No runtime implementation begins until this gate is green.
   credential locks, sealed same-session lease, request-scoped mutation
   adapter, fixed-expiry read-only session policy, checked sign-out, and bounded expired-session
   cleanup. Neutral `ProductMutationFence`/`SubjectWorkflowLock` ports own no product schema/read.
-- **Depends on:** Phase 0. **Unblocks:** Stages 4, 6, and 9.
+- **Depends on:** Phase 0. **Unblocks:** Stage 4; the ordered path then reaches Stage 6 and the
+  Part B contract track before Stage 9.
 - **DoD:** checked-in Identity epoch migration/metadata plus fresh/upgrade/preflight/backup/
   portability proof; reset rotates the epoch. Live Identity/auth/reset/bootstrap forms carry the
   issued expected epoch and stale-value proof passes. Subject generation deliberately does not land
@@ -980,7 +981,7 @@ No runtime implementation begins until this gate is green.
 - **Goal:** apply the proven port/`UnitOfWork` pattern to the remaining boundary debt: one audit
   append port, an Athletes-owned safety-hold lifecycle API for every current writer, per-module Data
   Portability export/deletion ports, public module entrypoints, and read/private-import guards.
-- **Depends on:** Stages 3 and 6.
+- **Depends on:** Stages 3 and 6, plus a green Part B contract gate.
 - **Explicit deliverable — normative Part B contract before implementation:** a standalone
   specification (`docs/architecture/PART_B_BOUNDARY_SPEC.md`) plus **ADR 0010**, drafted **after
   Stage 6 lands** so it binds to the proven `UnitOfWork`/port pattern rather than its paper design.
@@ -991,10 +992,11 @@ No runtime implementation begins until this gate is green.
   row (§7). Grounding: the DoD below already carries the normative intent (port shapes, lock/fence
   orderings, the Data Portability snapshot/deletion transaction matrix, the
   `safety_hold_resolution` ownership transfer), but it lives in a roadmap checklist;
-  [SCHEMA_OWNERSHIP_SPEC](SCHEMA_OWNERSHIP_SPEC.md) §6 is the historical decision pack (C1–C5
-  options, costed) while its §5.3 write-fence scanner contract remains normative — the new
-  read/private-import and public-entrypoint scanner contract extends that base rather than
-  starting fresh; and [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule —
+  [SCHEMA_OWNERSHIP_SPEC](SCHEMA_OWNERSHIP_SPEC.md) §§6.1–6.2 are the historical decision pack
+  (C1–C5 options, costed), §6.3 remains the active blocker-closure rule, and §5.3's write-fence
+  scanner contract remains normative — the new read/private-import and public-entrypoint scanner
+  contract extends that base rather than starting fresh; and
+  [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule —
   exact discriminants, bounds, and lock identities "live in the normative specification … changing
   them requires an explicit ADR/spec amendment, not an implementation shortcut." The deliverable
   extracts and expands this DoD into that contract with falsifiable definition-of-done items,
@@ -1126,7 +1128,7 @@ green; final certification follows Stage 7.
 | Stage 5 | golden/property/boundary vectors and purity tests | safety/property | non-total, non-deterministic, unattainable, or unclamped output |
 | Stage 6 | failure injection, replay/concurrency/correction/auth, ownership | transaction/concurrency; boundary | any partial, duplicate, stale-estimate, or co-write path |
 | Stage 8 | components + full LLM-off E2E/restart/export/deletion | product/UI/accessibility; privacy | hidden provenance, invented fact, or inaccessible state |
-| Part B contract | `pnpm docs:check` + `git diff --check`; `PART_B_BOUNDARY_SPEC.md` + ADR 0010 landed with recorded review disposition | adversarial architecture (contract) | Stage 9 implementation begins before this gate is green |
+| Part B contract | `pnpm docs:check` + `git diff --check`; `PART_B_BOUNDARY_SPEC.md` + ADR 0010 landed with a recorded disposition and no unresolved critical or major finding | adversarial architecture (contract) | any unresolved critical/major finding, or Stage 9 implementation begins before this gate is green |
 | Stage 9 | public-import/read guards, all port/integration suites | adversarial architecture | any remaining current grant/operator/private reach |
 | Stage 7 | offline baseline, contract/cache tests, LLM-off E2E; optional attested live proof | LLM safety/provenance | prose changes authority or unknown input is served |
 | Final | full static/type/unit/integration/E2E/build, migration/preflight, backup/restore, network-denied, baseline, docs | cumulative architecture; integrity/privacy; product/UI; concurrency; LLM safety | any failed command or unresolved critical/major |
