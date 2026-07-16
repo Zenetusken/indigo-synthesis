@@ -4,6 +4,7 @@ import { resetServerConfigForTests } from '@/platform/config/server'
 import {
   captureRecoveryCommandEntry,
   memberResetCodeIdentity,
+  memberResetStoredValue,
   memberResetStoredValueMatches,
   ownerRecoveryCodeIdentity,
   ownerRecoveryStoredValueMatches,
@@ -117,15 +118,11 @@ describe('recovery preparation', () => {
     const code = 'same-submitted-code'
     const memberIdentity = memberResetCodeIdentity(code)
     const ownerIdentity = ownerRecoveryCodeIdentity(code)
-    const member = prepareMemberResetIssuance({
-      targetUserId: '01900000-0000-7000-8000-000000000002',
-      commandEnteredAt,
-    })
 
     expect(memberIdentity).toMatch(/^[0-9a-f]{64}$/)
     expect(ownerIdentity).toMatch(/^[0-9a-f]{64}$/)
     expect(memberIdentity).not.toBe(ownerIdentity)
-    expect(memberIdentity).not.toBe(member.storedValue.split(':')[1])
+    expect(memberIdentity).not.toBe(memberResetStoredValue(code).split(':')[1])
   })
 
   it('bounds public redemption input and always prepares a password hash', async () => {

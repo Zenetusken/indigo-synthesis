@@ -32,6 +32,14 @@ import {
   readIdentitySession,
   resetAuthForTests,
 } from '@/modules/identity/infrastructure/auth'
+import {
+  captureLocalUserCreationMutation,
+  captureMemberResetIssuanceMutation,
+  localUserCreationMutationCaptureView,
+  memberResetIssuanceMutationCaptureView,
+  recheckLocalUserCreationMutation,
+  recheckMemberResetIssuanceMutation,
+} from '@/modules/identity/infrastructure/credential-administration-mutation'
 import { credentialEmailLockDigest } from '@/modules/identity/infrastructure/credential-digests'
 import {
   CredentialLifecycleCapacityError,
@@ -1381,6 +1389,53 @@ describe('identity database boundary', () => {
     expect(userCount?.value).toBe(2)
     expect(installation?.ownerUserId).toBe(owner.id)
     expect(modeResult.rows[0]?.mode ?? '').toBe('')
+  })
+
+  it('executes credential-administration capture and exact recheck against PostgreSQL', async () => {
+    const signedIn = await checkedSignOutFixture(owner)
+    const [storedSession] = await getDb()
+      .select({ token: session.token })
+      .from(session)
+      .where(eq(session.id, signedIn.sessionId))
+    if (!storedSession) throw new Error('Owner session fixture is missing.')
+
+    const client = new Client({ connectionString: getServerConfig().databaseUrl })
+    await client.connect()
+    try {
+      const commandEnteredAt = new Date()
+      const preallocatedTargetUserId = newUuidV7()
+      const localCapture = await captureLocalUserCreationMutation(client, {
+        verifiedSessionToken: storedSession.token,
+        preallocatedTargetUserId,
+        submittedEmail: 'future-local-member@example.test',
+        commandEnteredAt,
+      })
+      expect(localUserCreationMutationCaptureView(localCapture)).toMatchObject({
+        actorUserId: owner.id,
+        preallocatedTargetUserId,
+        submittedEmailUserIds: [],
+      })
+      await expect(
+        recheckLocalUserCreationMutation(client, localCapture),
+      ).resolves.toEqual({ status: 'current' })
+
+      const resetCapture = await captureMemberResetIssuanceMutation(client, {
+        verifiedSessionToken: storedSession.token,
+        targetUserId: localMember.id,
+        commandEnteredAt,
+      })
+      expect(memberResetIssuanceMutationCaptureView(resetCapture)).toMatchObject({
+        actorUserId: owner.id,
+        targetUserId: localMember.id,
+        targetState: 'member',
+        targetCredential: 'present',
+      })
+      await expect(
+        recheckMemberResetIssuanceMutation(client, resetCapture),
+      ).resolves.toEqual({ status: 'current' })
+    } finally {
+      await client.end()
+    }
   })
 
   it('authenticates the controlled local user as a credential account', async () => {
