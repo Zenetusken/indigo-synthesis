@@ -27,7 +27,7 @@ export default async function SettingsPage({
   searchParams,
 }: {
   searchParams?: Promise<SettingsSearchParams>
-} = {}) {
+}) {
   const actor = await requireUiActor()
   const [profile, localUsers, query] = await Promise.all([
     getAthleteProfile(actor.userId),

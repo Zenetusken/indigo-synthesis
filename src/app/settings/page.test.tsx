@@ -126,7 +126,7 @@ describe('settings credential-administration form envelopes', () => {
   afterEach(cleanup)
 
   it('uses one post-read clock and preserves each exact target-to-binding mapping', async () => {
-    render(await SettingsPage())
+    render(await SettingsPage({}))
 
     expect(screen.getByRole('form', { name: 'Create local user' })).toHaveAttribute(
       'data-target-user-id',
@@ -163,7 +163,7 @@ describe('settings credential-administration form envelopes', () => {
       throw redirectSignal
     })
 
-    await expect(SettingsPage()).rejects.toBe(redirectSignal)
+    await expect(SettingsPage({})).rejects.toBe(redirectSignal)
     expect(pageMocks.redirect).toHaveBeenCalledWith('/sign-in')
     expect(pageMocks.issueMemberForm).not.toHaveBeenCalled()
   })
