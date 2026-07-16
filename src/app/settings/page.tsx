@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { PageHeading, ProductFrame } from '@/components'
 import { getAthleteProfile } from '@/modules/athletes/application/profile'
-import { verifySubjectDeletionNoticeReceipt } from '@/modules/data-portability/server/destructive-notice'
+import { verifySubjectDeletionNoticeReceiptForActor } from '@/modules/data-portability/server/destructive-notice'
 import {
   issueLocalUserCreationFormEnvelope,
   issueMemberResetIssuanceFormEnvelope,
@@ -65,7 +65,10 @@ export default async function SettingsPage({
     }
     return envelope
   }
-  const deletionNotice = verifySubjectDeletionNoticeReceipt(query.notice)
+  const deletionNotice = verifySubjectDeletionNoticeReceiptForActor(
+    query.notice,
+    actor.userId,
+  )
   const confirmedOwnerDeletion =
     actor.role === 'owner' &&
     deletionNotice?.kind === 'deleted' &&

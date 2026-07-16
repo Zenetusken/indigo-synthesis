@@ -26,7 +26,7 @@ vi.mock('@/modules/data-portability/application/deletion', () => ({
   getActiveSubjectDeletionPlan: pageMocks.getPlan,
 }))
 vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
-  verifySubjectDeletionNoticeReceipt: pageMocks.verifyNotice,
+  verifySubjectDeletionNoticeReceiptForActor: pageMocks.verifyNotice,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   issueTraineeDataDeletionFormEnvelope: pageMocks.issueForm,
@@ -140,7 +140,10 @@ describe('subject-deletion page binding and recovery', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Current password')).toBeVisible()
-    expect(pageMocks.verifyNotice).toHaveBeenCalledWith('tampered-or-expired')
+    expect(pageMocks.verifyNotice).toHaveBeenCalledWith(
+      'tampered-or-expired',
+      'member-id',
+    )
   })
 
   it('drops a preview that expires during rendering instead of emitting a dead form', async () => {

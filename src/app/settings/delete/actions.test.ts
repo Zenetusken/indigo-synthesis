@@ -102,8 +102,11 @@ describe('instance-reset actions', () => {
       formData: expect.any(FormData),
       commandEnteredAt: expect.any(Date),
     })
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.requireActor).toHaveBeenCalledOnce()
     expect(actionMocks.resetInstance).toHaveBeenCalledWith(command)
-    expect(actionMocks.requireActor).not.toHaveBeenCalled()
+    expect(actionMocks.issueNotice).toHaveBeenCalledOnce()
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(expect.anything(), 'owner-id')
   })
 
   it('keeps preview creation ordinary and treats unclassified execution as uncertain', async () => {
@@ -115,6 +118,22 @@ describe('instance-reset actions', () => {
     await expect(resetInstanceAction(formData())).rejects.toThrow(
       'redirect:/settings/delete?notice=reset-execution-failed-none',
     )
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      { kind: 'execution-failed' },
+      'owner-id',
+    )
+  })
+
+  it('binds rejected command snapshots to the owner who submitted them', async () => {
+    actionMocks.capture.mockResolvedValueOnce({ kind: 'rejected' })
+
+    await expect(resetInstanceAction(formData())).rejects.toThrow(
+      'redirect:/settings/delete?notice=reset-stale-none',
+    )
+
+    expect(actionMocks.resetInstance).not.toHaveBeenCalled()
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith({ kind: 'stale' }, 'owner-id')
   })
 
   it('reports command-capture failure as verified not to have started', async () => {
@@ -124,9 +143,43 @@ describe('instance-reset actions', () => {
       'redirect:/settings/delete?notice=reset-request-not-verified-none',
     )
     expect(actionMocks.resetInstance).not.toHaveBeenCalled()
-    expect(actionMocks.issueNotice).toHaveBeenCalledWith({
-      kind: 'request-not-verified',
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      {
+        kind: 'request-not-verified',
+      },
+      'owner-id',
+    )
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+  })
+
+  it('finishes the form snapshot before reading the request actor', async () => {
+    let releaseCapture = () => {}
+    actionMocks.capture.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCapture = () => resolve({ kind: 'captured', command })
+        }),
+    )
+    actionMocks.resetInstance.mockResolvedValueOnce({ kind: 'reset', warning: null })
+    const submittedForm = formData()
+
+    const pendingAction = resetInstanceAction(submittedForm)
+
+    expect(actionMocks.capture).toHaveBeenCalledWith({
+      formData: submittedForm,
+      commandEnteredAt: expect.any(Date),
     })
+    expect(actionMocks.requireActor).not.toHaveBeenCalled()
+
+    releaseCapture()
+    await expect(pendingAction).rejects.toThrow(
+      'redirect:/bootstrap?notice=reset-reset-none',
+    )
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      { kind: 'reset', warning: null },
+      'owner-id',
+    )
   })
 
   it('authenticates preview failure before redirecting it back to the page', async () => {
@@ -135,6 +188,9 @@ describe('instance-reset actions', () => {
     await expect(createResetPreviewAction()).rejects.toThrow(
       'redirect:/settings/delete?notice=reset-preview-failed-none',
     )
-    expect(actionMocks.issueNotice).toHaveBeenCalledWith({ kind: 'preview-failed' })
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      { kind: 'preview-failed' },
+      'owner-id',
+    )
   })
 })

@@ -26,7 +26,7 @@ vi.mock('@/modules/data-portability/application/deletion', () => ({
   getActiveInstanceResetPlan: pageMocks.getPlan,
 }))
 vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
-  verifyInstanceResetNoticeReceipt: pageMocks.verifyNotice,
+  verifyInstanceResetNoticeReceiptForActor: pageMocks.verifyNotice,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   issueInstanceResetFormEnvelope: pageMocks.issueForm,
@@ -124,6 +124,10 @@ describe('instance-reset page binding and recovery', () => {
       'request could not be verified. Nothing was reset',
     )
     expect(screen.queryByLabelText('Current owner password')).not.toBeInTheDocument()
+    expect(pageMocks.verifyNotice).toHaveBeenCalledWith(
+      'signed-request-failure',
+      'owner-id',
+    )
   })
 
   it('redirects a member before reading an owner-only reset plan', async () => {

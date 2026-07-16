@@ -212,7 +212,12 @@ async function executeSubjectDeletion<TSchema extends Record<string, unknown>>(
   requireWriteAuthorized: () => void,
 ): Promise<void> {
   const [plan] = await database
-    .select()
+    .select({
+      id: deletionPlans.id,
+      consumedAt: deletionPlans.consumedAt,
+      planDigest: deletionPlans.planDigest,
+      expiresAt: deletionPlans.expiresAt,
+    })
     .from(deletionPlans)
     .where(
       and(
@@ -364,7 +369,12 @@ async function executeInstanceReset<TSchema extends Record<string, unknown>>(
   requireWriteAuthorized: () => void,
 ): Promise<void> {
   const [plan] = await database
-    .select()
+    .select({
+      id: deletionPlans.id,
+      consumedAt: deletionPlans.consumedAt,
+      planDigest: deletionPlans.planDigest,
+      expiresAt: deletionPlans.expiresAt,
+    })
     .from(deletionPlans)
     .where(
       and(

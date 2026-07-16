@@ -11,13 +11,17 @@ import {
 import { requireActor } from '@/modules/identity/server/actor'
 import { captureTraineeDataDeletionMutationCommand } from '@/modules/identity/server/destructive-command'
 
-function noticeUrl(path: string, payload: SubjectDeletionNoticeReceiptPayload): string {
-  const receipt = issueSubjectDeletionNoticeReceipt(payload)
+function noticeUrl(
+  path: string,
+  payload: SubjectDeletionNoticeReceiptPayload,
+  actorUserId: string,
+): string {
+  const receipt = issueSubjectDeletionNoticeReceipt(payload, actorUserId)
   return `${path}?notice=${encodeURIComponent(receipt)}`
 }
 
-function deletionError(kind: DestructiveNoticeFailureKind): never {
-  redirect(noticeUrl('/settings/delete-account', { kind }) as never)
+function deletionError(kind: DestructiveNoticeFailureKind, actorUserId: string): never {
+  redirect(noticeUrl('/settings/delete-account', { kind }, actorUserId) as never)
 }
 
 function unreachableResult(value: never): never {
@@ -29,23 +33,30 @@ export async function createAccountDeletionPreviewAction(): Promise<void> {
   try {
     await createSubjectDeletionPlan(actor)
   } catch {
-    deletionError('preview-failed')
+    deletionError('preview-failed', actor.userId)
   }
   redirect('/settings/delete-account' as never)
 }
 
 export async function deleteAccountAction(formData: FormData): Promise<void> {
   const commandEnteredAt = new Date()
-  let captured: Awaited<ReturnType<typeof captureTraineeDataDeletionMutationCommand>>
+  let captured: Awaited<
+    ReturnType<typeof captureTraineeDataDeletionMutationCommand>
+  > | null = null
   try {
     captured = await captureTraineeDataDeletionMutationCommand({
       formData,
       commandEnteredAt,
     })
   } catch {
-    deletionError('request-not-verified')
+    captured = null
   }
-  if (captured.kind === 'rejected') deletionError('stale')
+
+  // Form-owned fields are captured before this second request-bound read. Retain the
+  // exact actor so every result receipt remains bound after a destructive commit.
+  const actor = await requireActor()
+  if (!captured) deletionError('request-not-verified', actor.userId)
+  if (captured.kind === 'rejected') deletionError('stale', actor.userId)
 
   let result: Awaited<
     ReturnType<
@@ -59,33 +70,37 @@ export async function deleteAccountAction(formData: FormData): Promise<void> {
       captured.command,
     )
   } catch {
-    deletionError('execution-failed')
+    deletionError('execution-failed', actor.userId)
   }
 
   switch (result.kind) {
     case 'deleted':
-      return redirect(noticeUrl(postDeletionPath(result.actorRole), result) as never)
+      return redirect(
+        noticeUrl(postDeletionPath(result.actorRole), result, actor.userId) as never,
+      )
     case 'outcome-unknown':
       if (result.actorRole === 'member') {
-        return redirect(noticeUrl('/sign-in', result) as never)
+        return redirect(noticeUrl('/sign-in', result, actor.userId) as never)
       }
-      return redirect(noticeUrl('/settings/delete-account', result) as never)
+      return redirect(
+        noticeUrl('/settings/delete-account', result, actor.userId) as never,
+      )
     case 'confirmation-rejected':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'reauthentication-failed':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'reauthentication-locked':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'plan-invalid':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'plan-changed':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'stale':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'unavailable':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
     case 'reauthentication-incomplete':
-      return deletionError(result.kind)
+      return deletionError(result.kind, actor.userId)
   }
   return unreachableResult(result)
 }

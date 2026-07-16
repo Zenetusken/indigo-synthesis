@@ -1,14 +1,17 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { getServerConfig } from '@/platform/config/server'
 
-const receiptVersion = 'dpnr1'
-const receiptDomain = 'indigo-data-portability-destructive-notice-receipt-v1\0'
+const receiptVersion = 'dpnr2'
+const receiptDomain = 'indigo-data-portability-destructive-notice-receipt-v2\0'
+const actorBindingDomain = 'indigo-data-portability-destructive-notice-actor-binding-v1\0'
 const subjectDeletionPurpose = 'subject-deletion'
 const instanceResetPurpose = 'instance-reset'
 const receiptLifetimeSeconds = 15 * 60
 const maximumReceiptBytes = 192
+const receiptNonceBytes = 12
 const canonicalBase36Pattern = /^[1-9a-z][0-9a-z]*$/
 const base64urlSha256Pattern = /^[A-Za-z0-9_-]{43}$/
+const base64urlNoncePattern = /^[A-Za-z0-9_-]{16}$/
 
 type ReceiptPurpose = typeof subjectDeletionPurpose | typeof instanceResetPurpose
 
@@ -85,6 +88,8 @@ export type InstanceResetNoticeReceipt = string & {
 }
 
 type ParsedReceipt = {
+  readonly actorBinding: Buffer
+  readonly nonce: string
   readonly purpose: ReceiptPurpose
   readonly payload:
     | SubjectDeletionNoticeReceiptPayload
@@ -120,21 +125,58 @@ function signature(canonicalPayload: string): Buffer {
     .digest()
 }
 
+function validActorUserId(actorUserId: unknown): actorUserId is string {
+  return (
+    typeof actorUserId === 'string' &&
+    actorUserId.length > 0 &&
+    Buffer.byteLength(actorUserId, 'utf8') <= 512 &&
+    !actorUserId.includes('\0')
+  )
+}
+
+function actorBinding(
+  actorUserId: string,
+  purpose: ReceiptPurpose,
+  nonce: string,
+  issuedAt: number,
+  expiresAt: number,
+): Buffer {
+  return createHmac('sha256', getServerConfig().authSecret)
+    .update(actorBindingDomain, 'utf8')
+    .update(purpose, 'utf8')
+    .update('\0', 'utf8')
+    .update(nonce, 'utf8')
+    .update('\0', 'utf8')
+    .update(issuedAt.toString(36), 'utf8')
+    .update('\0', 'utf8')
+    .update(expiresAt.toString(36), 'utf8')
+    .update('\0', 'utf8')
+    .update(actorUserId, 'utf8')
+    .digest()
+}
+
 function issueReceipt(
   purpose: ReceiptPurpose,
   kind: 'deleted' | 'outcome-unknown' | 'reset' | DestructiveNoticeFailureKind,
   actorRole: 'owner' | 'member' | 'none',
   warning: 'none' | 'cleanup-failed',
+  actorUserId: string,
   now: Date,
 ): string {
+  if (!validActorUserId(actorUserId)) {
+    throw new TypeError('A valid destructive notice actor is required.')
+  }
   const issuedAt = issuanceSeconds(now)
   const expiresAt = issuedAt + receiptLifetimeSeconds
+  const nonce = randomBytes(receiptNonceBytes).toString('base64url')
   const canonicalPayload = [
     receiptVersion,
     purpose,
     kind,
     actorRole,
     warning,
+    nonce,
+    actorBinding(actorUserId, purpose, nonce, issuedAt, expiresAt).toString('base64url'),
     issuedAt.toString(36),
     expiresAt.toString(36),
   ].join('.')
@@ -216,6 +258,8 @@ function parseReceipt(receipt: unknown): ParsedReceipt | null {
     kind,
     actorRole,
     warning,
+    nonce,
+    encodedActorBinding,
     encodedIssuedAt,
     encodedExpiresAt,
     encodedSignature,
@@ -228,9 +272,13 @@ function parseReceipt(receipt: unknown): ParsedReceipt | null {
     !kind ||
     !actorRole ||
     !warning ||
+    !nonce ||
+    !encodedActorBinding ||
     !encodedIssuedAt ||
     !encodedExpiresAt ||
     !encodedSignature ||
+    !base64urlNoncePattern.test(nonce) ||
+    !base64urlSha256Pattern.test(encodedActorBinding) ||
     !base64urlSha256Pattern.test(encodedSignature)
   ) {
     return null
@@ -250,15 +298,20 @@ function parseReceipt(receipt: unknown): ParsedReceipt | null {
   }
 
   const suppliedSignature = Buffer.from(encodedSignature, 'base64url')
+  const suppliedActorBinding = Buffer.from(encodedActorBinding, 'base64url')
   if (
     suppliedSignature.length !== 32 ||
-    suppliedSignature.toString('base64url') !== encodedSignature
+    suppliedSignature.toString('base64url') !== encodedSignature ||
+    suppliedActorBinding.length !== 32 ||
+    suppliedActorBinding.toString('base64url') !== encodedActorBinding
   ) {
     return null
   }
 
   return {
     ...parsedPayload,
+    actorBinding: suppliedActorBinding,
+    nonce,
     issuedAt,
     expiresAt,
     canonicalPayload: receipt.slice(0, receipt.lastIndexOf('.')),
@@ -270,7 +323,7 @@ function verifyReceipt(
   receipt: unknown,
   expectedPurpose: ReceiptPurpose,
   now: Date,
-): ParsedReceipt['payload'] | null {
+): ParsedReceipt | null {
   const parsed = parseReceipt(receipt)
   const current = clockSeconds(now)
   if (!parsed || current === null) return null
@@ -284,12 +337,58 @@ function verifyReceipt(
   ) {
     return null
   }
-  return parsed.payload
+  return parsed
 }
 
-/** Issues an identity-free receipt for an exact post-redirect subject-deletion result. */
+function verifyReceiptForActor(
+  receipt: unknown,
+  expectedPurpose: ReceiptPurpose,
+  actorUserId: unknown,
+  now: Date,
+): ParsedReceipt | null {
+  if (!validActorUserId(actorUserId)) return null
+
+  const parsed = verifyReceipt(receipt, expectedPurpose, now)
+  if (!parsed) return null
+
+  const expectedActorBinding = actorBinding(
+    actorUserId,
+    parsed.purpose,
+    parsed.nonce,
+    parsed.issuedAt,
+    parsed.expiresAt,
+  )
+  return timingSafeEqual(parsed.actorBinding, expectedActorBinding) ? parsed : null
+}
+
+function subjectDeletionPayload(
+  parsed: ParsedReceipt | null,
+): SubjectDeletionNoticeReceiptPayload | null {
+  const payload = parsed?.payload
+  if (payload?.kind === 'deleted') return payload
+  if (payload?.kind === 'outcome-unknown' && 'actorRole' in payload) return payload
+  if (payload && isDestructiveNoticeFailureKind(payload.kind)) {
+    return { kind: payload.kind }
+  }
+  return null
+}
+
+function instanceResetPayload(
+  parsed: ParsedReceipt | null,
+): InstanceResetNoticeReceiptPayload | null {
+  const payload = parsed?.payload
+  if (payload?.kind === 'reset') return payload
+  if (payload?.kind === 'outcome-unknown' && !('actorRole' in payload)) return payload
+  if (payload && isDestructiveNoticeFailureKind(payload.kind)) {
+    return { kind: payload.kind }
+  }
+  return null
+}
+
+/** Issues an opaque actor-bound receipt for an exact subject-deletion result. */
 export function issueSubjectDeletionNoticeReceipt(
   payload: SubjectDeletionNoticeReceiptPayload,
+  actorUserId: string,
   now = new Date(),
 ): SubjectDeletionNoticeReceipt {
   if (payload.kind === 'deleted') {
@@ -304,6 +403,7 @@ export function issueSubjectDeletionNoticeReceipt(
       payload.kind,
       payload.actorRole,
       payload.warning ?? 'none',
+      actorUserId,
       now,
     ) as SubjectDeletionNoticeReceipt
   }
@@ -316,6 +416,7 @@ export function issueSubjectDeletionNoticeReceipt(
       payload.kind,
       payload.actorRole,
       'none',
+      actorUserId,
       now,
     ) as SubjectDeletionNoticeReceipt
   }
@@ -325,6 +426,7 @@ export function issueSubjectDeletionNoticeReceipt(
       payload.kind,
       'none',
       'none',
+      actorUserId,
       now,
     ) as SubjectDeletionNoticeReceipt
   }
@@ -336,18 +438,24 @@ export function verifySubjectDeletionNoticeReceipt(
   receipt: unknown,
   now = new Date(),
 ): SubjectDeletionNoticeReceiptPayload | null {
-  const payload = verifyReceipt(receipt, subjectDeletionPurpose, now)
-  if (payload?.kind === 'deleted') return payload
-  if (payload?.kind === 'outcome-unknown' && 'actorRole' in payload) return payload
-  if (payload && isDestructiveNoticeFailureKind(payload.kind)) {
-    return { kind: payload.kind }
-  }
-  return null
+  return subjectDeletionPayload(verifyReceipt(receipt, subjectDeletionPurpose, now))
 }
 
-/** Issues an identity-free receipt for an exact post-redirect instance-reset result. */
+/** Returns a subject-deletion payload only for the exact issuing actor. */
+export function verifySubjectDeletionNoticeReceiptForActor(
+  receipt: unknown,
+  actorUserId: unknown,
+  now = new Date(),
+): SubjectDeletionNoticeReceiptPayload | null {
+  return subjectDeletionPayload(
+    verifyReceiptForActor(receipt, subjectDeletionPurpose, actorUserId, now),
+  )
+}
+
+/** Issues an opaque actor-bound receipt for an exact instance-reset result. */
 export function issueInstanceResetNoticeReceipt(
   payload: InstanceResetNoticeReceiptPayload,
+  actorUserId: string,
   now = new Date(),
 ): InstanceResetNoticeReceipt {
   if (payload.kind === 'reset') {
@@ -359,6 +467,7 @@ export function issueInstanceResetNoticeReceipt(
       payload.kind,
       'none',
       payload.warning ?? 'none',
+      actorUserId,
       now,
     ) as InstanceResetNoticeReceipt
   }
@@ -368,6 +477,7 @@ export function issueInstanceResetNoticeReceipt(
       payload.kind,
       'none',
       'none',
+      actorUserId,
       now,
     ) as InstanceResetNoticeReceipt
   }
@@ -377,6 +487,7 @@ export function issueInstanceResetNoticeReceipt(
       payload.kind,
       'none',
       'none',
+      actorUserId,
       now,
     ) as InstanceResetNoticeReceipt
   }
@@ -388,11 +499,16 @@ export function verifyInstanceResetNoticeReceipt(
   receipt: unknown,
   now = new Date(),
 ): InstanceResetNoticeReceiptPayload | null {
-  const payload = verifyReceipt(receipt, instanceResetPurpose, now)
-  if (payload?.kind === 'reset') return payload
-  if (payload?.kind === 'outcome-unknown' && !('actorRole' in payload)) return payload
-  if (payload && isDestructiveNoticeFailureKind(payload.kind)) {
-    return { kind: payload.kind }
-  }
-  return null
+  return instanceResetPayload(verifyReceipt(receipt, instanceResetPurpose, now))
+}
+
+/** Returns an instance-reset payload only for the exact issuing actor. */
+export function verifyInstanceResetNoticeReceiptForActor(
+  receipt: unknown,
+  actorUserId: unknown,
+  now = new Date(),
+): InstanceResetNoticeReceiptPayload | null {
+  return instanceResetPayload(
+    verifyReceiptForActor(receipt, instanceResetPurpose, actorUserId, now),
+  )
 }

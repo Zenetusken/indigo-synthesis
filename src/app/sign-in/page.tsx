@@ -4,7 +4,9 @@ import { redirect } from 'next/navigation'
 import { BrandMark, Disclosure } from '@/components'
 import {
   verifyInstanceResetNoticeReceipt,
+  verifyInstanceResetNoticeReceiptForActor,
   verifySubjectDeletionNoticeReceipt,
+  verifySubjectDeletionNoticeReceiptForActor,
 } from '@/modules/data-portability/server/destructive-notice'
 import { workoutSignInReturnTo } from '@/modules/identity/application/sign-in-return'
 import { getActor } from '@/modules/identity/server/actor'
@@ -47,15 +49,26 @@ export default async function SignInPage({
   const returnTo = workoutSignInReturnTo(query.returnTo)
   const actor = await getActor()
   if (actor) {
+    const subjectDeletionNoticeForActor = verifySubjectDeletionNoticeReceiptForActor(
+      query.notice,
+      actor.userId,
+    )
+    const instanceResetNoticeForActor = verifyInstanceResetNoticeReceiptForActor(
+      query.notice,
+      actor.userId,
+    )
     if (
-      subjectDeletionNotice?.kind === 'outcome-unknown' &&
-      subjectDeletionNotice.actorRole === actor.role
+      subjectDeletionNoticeForActor?.kind === 'outcome-unknown' &&
+      subjectDeletionNoticeForActor.actorRole === actor.role
     ) {
       redirect(
         `/settings/delete-account?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
       )
     }
-    if (instanceResetNotice?.kind === 'outcome-unknown' && actor.role === 'owner') {
+    if (
+      instanceResetNoticeForActor?.kind === 'outcome-unknown' &&
+      actor.role === 'owner'
+    ) {
       redirect(
         `/settings/delete?notice=${encodeURIComponent(query.notice ?? '')}` as Route,
       )

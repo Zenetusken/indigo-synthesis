@@ -325,7 +325,7 @@ test('completes the unmocked J1–J6 development journey', async ({ page }) => {
     .check()
   await page.getByRole('button', { name: 'Reset instance' }).click()
 
-  await expect(page).toHaveURL(/\/bootstrap\?notice=dpnr1\.instance-reset\.reset\.none\./)
+  await expect(page).toHaveURL(/\/bootstrap\?notice=dpnr2\.instance-reset\.reset\.none\./)
   await expect(
     page.getByText('Instance reset. Create a new owner to begin again.'),
   ).toBeVisible()
@@ -383,7 +383,7 @@ test('owner deletes only trainee data and keeps installation login continuity', 
   await page.getByRole('button', { name: 'Delete my training data' }).click()
 
   await expect(page).toHaveURL(
-    /\/settings\?notice=dpnr1\.subject-deletion\.deleted\.owner\./,
+    /\/settings\?notice=dpnr2\.subject-deletion\.deleted\.owner\./,
   )
   await expect(
     page.getByRole('heading', { name: 'Your instance and data.' }),
@@ -866,7 +866,7 @@ test('a second local user cannot read the owner workout or export', async ({ pag
   await page.getByLabel('I understand that my local account cannot be recovered.').check()
   await page.getByRole('button', { name: 'Delete my account' }).click()
   await expect(page).toHaveURL(
-    /\/sign-in\?notice=dpnr1\.subject-deletion\.deleted\.member\./,
+    /\/sign-in\?notice=dpnr2\.subject-deletion\.deleted\.member\./,
   )
   await expect(
     page.getByText('Local account and subject-scoped training data deleted.'),

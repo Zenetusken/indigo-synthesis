@@ -4,7 +4,7 @@ import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveSubjectDeletionPlan } from '@/modules/data-portability/application/deletion'
 import {
   type SubjectDeletionNoticeReceiptPayload,
-  verifySubjectDeletionNoticeReceipt,
+  verifySubjectDeletionNoticeReceiptForActor,
 } from '@/modules/data-portability/server/destructive-notice'
 import {
   issueTraineeDataDeletionFormEnvelope,
@@ -62,7 +62,7 @@ export default async function DeleteAccountPage({
     getActiveSubjectDeletionPlan(actor),
     searchParams,
   ])
-  const notice = verifySubjectDeletionNoticeReceipt(query.notice)
+  const notice = verifySubjectDeletionNoticeReceiptForActor(query.notice, actor.userId)
   const errorKind: SubjectDeletionNoticeErrorKind | null =
     notice?.kind === 'outcome-unknown'
       ? notice.actorRole === actor.role

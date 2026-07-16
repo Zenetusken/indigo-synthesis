@@ -173,22 +173,10 @@ function zeroResetCounts(): InstanceResetCounts {
 
 function planRow(input: {
   readonly id: string
-  readonly userId: string
-  readonly scope: 'trainee-data' | 'instance-reset'
   readonly digest: string
-  readonly counts: QueryResultRow
   readonly expiresAt: Date
 }): unknown[] {
-  return [
-    input.id,
-    input.userId,
-    input.scope,
-    input.digest,
-    input.counts,
-    input.expiresAt,
-    null,
-    completedAt,
-  ]
+  return [input.id, null, input.digest, input.expiresAt]
 }
 
 const completedAt = new Date('2026-07-16T12:00:00.000Z')
@@ -334,13 +322,9 @@ describe('scoped destructive Data Portability adapter', () => {
       arrayResult([
         [
           'subject-plan-id',
-          'actor-user-id',
-          'trainee-data',
-          'different-digest',
-          {},
-          new Date('2026-07-17T12:00:00.000Z'),
           null,
-          completedAt,
+          'different-digest',
+          new Date('2026-07-17T12:00:00.000Z'),
         ],
       ]),
     )
@@ -362,13 +346,9 @@ describe('scoped destructive Data Portability adapter', () => {
       arrayResult([
         [
           'reset-plan-id',
-          'owner-user-id',
-          'instance-reset',
-          'reset-plan-digest',
-          {},
-          new Date('2026-07-17T12:00:00.000Z'),
           null,
-          completedAt,
+          'reset-plan-digest',
+          new Date('2026-07-17T12:00:00.000Z'),
         ],
       ]),
     )
@@ -442,10 +422,7 @@ describe('scoped destructive Data Portability adapter', () => {
     const harness = successfulDatabaseHarness({
       plan: planRow({
         id: 'subject-plan-id',
-        userId: 'actor-user-id',
-        scope: 'trainee-data',
         digest,
-        counts,
         expiresAt,
       }),
       counts,
@@ -514,10 +491,7 @@ describe('scoped destructive Data Portability adapter', () => {
       const harness = successfulDatabaseHarness({
         plan: planRow({
           id: 'subject-plan-id',
-          userId: 'actor-user-id',
-          scope: 'trainee-data',
           digest,
-          counts,
           expiresAt,
         }),
         counts,
@@ -582,10 +556,7 @@ describe('scoped destructive Data Portability adapter', () => {
     const harness = successfulDatabaseHarness({
       plan: planRow({
         id: 'reset-plan-id',
-        userId: 'owner-user-id',
-        scope: 'instance-reset',
         digest,
-        counts,
         expiresAt,
       }),
       counts,

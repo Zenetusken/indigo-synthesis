@@ -4,7 +4,7 @@ import { PageHeading, ProductFrame, SubmitButton } from '@/components'
 import { getActiveInstanceResetPlan } from '@/modules/data-portability/application/deletion'
 import {
   type InstanceResetNoticeReceiptPayload,
-  verifyInstanceResetNoticeReceipt,
+  verifyInstanceResetNoticeReceiptForActor,
 } from '@/modules/data-portability/server/destructive-notice'
 import {
   issueInstanceResetFormEnvelope,
@@ -59,7 +59,7 @@ export default async function DeleteSettingsPage({
   const actor = await requireUiActor()
   if (actor.role !== 'owner') redirect('/settings')
   let [plan, query] = await Promise.all([getActiveInstanceResetPlan(actor), searchParams])
-  const notice = verifyInstanceResetNoticeReceipt(query.notice)
+  const notice = verifyInstanceResetNoticeReceiptForActor(query.notice, actor.userId)
   const errorKind: InstanceResetNoticeErrorKind | null =
     notice && notice.kind !== 'reset' ? notice.kind : null
   if (errorKind && !reusablePlanErrors.has(errorKind)) plan = null

@@ -12,7 +12,9 @@ const pageMocks = vi.hoisted(() => ({
   getSignInPageInstallation: vi.fn(),
   redirect: vi.fn(),
   verifyResetNotice: vi.fn(),
+  verifyResetNoticeForActor: vi.fn(),
   verifySubjectNotice: vi.fn(),
+  verifySubjectNoticeForActor: vi.fn(),
 }))
 
 vi.mock('next/link', () => ({
@@ -29,7 +31,9 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
   verifyInstanceResetNoticeReceipt: pageMocks.verifyResetNotice,
+  verifyInstanceResetNoticeReceiptForActor: pageMocks.verifyResetNoticeForActor,
   verifySubjectDeletionNoticeReceipt: pageMocks.verifySubjectNotice,
+  verifySubjectDeletionNoticeReceiptForActor: pageMocks.verifySubjectNoticeForActor,
 }))
 vi.mock('@/modules/identity/server/sign-in-page', () => ({
   getSignInPageInstallation: pageMocks.getSignInPageInstallation,
@@ -68,7 +72,9 @@ describe('Sign-in orientation', () => {
     })
     pageMocks.getActor.mockResolvedValue(null)
     pageMocks.verifyResetNotice.mockReturnValue(null)
+    pageMocks.verifyResetNoticeForActor.mockReturnValue(null)
     pageMocks.verifySubjectNotice.mockReturnValue(null)
+    pageMocks.verifySubjectNoticeForActor.mockReturnValue(null)
   })
 
   afterEach(cleanup)
@@ -159,6 +165,10 @@ describe('Sign-in orientation', () => {
       kind: 'outcome-unknown',
       actorRole: 'member',
     })
+    pageMocks.verifySubjectNoticeForActor.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
     pageMocks.redirect.mockImplementationOnce(() => {
       throw redirectSignal
     })
@@ -171,12 +181,19 @@ describe('Sign-in orientation', () => {
     expect(pageMocks.redirect).toHaveBeenCalledWith(
       '/settings/delete-account?notice=signed-member-unknown',
     )
+    expect(pageMocks.verifySubjectNoticeForActor).toHaveBeenCalledWith(
+      'signed-member-unknown',
+      'member-id',
+    )
   })
 
   it('returns an authenticated owner with uncertain reset to the checking page', async () => {
     const redirectSignal = new Error('NEXT_REDIRECT')
     pageMocks.getActor.mockResolvedValueOnce({ userId: 'owner-id', role: 'owner' })
     pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.verifyResetNoticeForActor.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+    })
     pageMocks.redirect.mockImplementationOnce(() => {
       throw redirectSignal
     })
@@ -186,6 +203,67 @@ describe('Sign-in orientation', () => {
     ).rejects.toBe(redirectSignal)
     expect(pageMocks.redirect).toHaveBeenCalledWith(
       '/settings/delete?notice=signed-reset-unknown',
+    )
+    expect(pageMocks.verifyResetNoticeForActor).toHaveBeenCalledWith(
+      'signed-reset-unknown',
+      'owner-id',
+    )
+  })
+
+  it('does not let one member replay another member receipt into authenticated checking', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({
+      userId: 'different-member-id',
+      role: 'member',
+    })
+    pageMocks.verifySubjectNotice.mockReturnValueOnce({
+      kind: 'outcome-unknown',
+      actorRole: 'member',
+    })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'receipt-for-original-member' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.verifySubjectNoticeForActor).toHaveBeenCalledWith(
+      'receipt-for-original-member',
+      'different-member-id',
+    )
+    expect(pageMocks.redirect).toHaveBeenCalledWith('/')
+    expect(pageMocks.redirect).not.toHaveBeenCalledWith(
+      expect.stringContaining('/settings/delete-account'),
+    )
+  })
+
+  it('does not let a replacement owner replay the previous owner reset receipt', async () => {
+    const redirectSignal = new Error('NEXT_REDIRECT')
+    pageMocks.getActor.mockResolvedValueOnce({
+      userId: 'replacement-owner-id',
+      role: 'owner',
+    })
+    pageMocks.verifyResetNotice.mockReturnValueOnce({ kind: 'outcome-unknown' })
+    pageMocks.redirect.mockImplementationOnce(() => {
+      throw redirectSignal
+    })
+
+    await expect(
+      SignInPage({
+        searchParams: Promise.resolve({ notice: 'receipt-for-previous-owner' }),
+      }),
+    ).rejects.toBe(redirectSignal)
+
+    expect(pageMocks.verifyResetNoticeForActor).toHaveBeenCalledWith(
+      'receipt-for-previous-owner',
+      'replacement-owner-id',
+    )
+    expect(pageMocks.redirect).toHaveBeenCalledWith('/')
+    expect(pageMocks.redirect).not.toHaveBeenCalledWith(
+      expect.stringContaining('/settings/delete?'),
     )
   })
 
@@ -204,6 +282,8 @@ describe('Sign-in orientation', () => {
     expect(pageMocks.redirect).toHaveBeenCalledWith(
       '/bootstrap?notice=signed-reset-unknown',
     )
+    expect(pageMocks.verifyResetNoticeForActor).not.toHaveBeenCalled()
+    expect(pageMocks.verifySubjectNoticeForActor).not.toHaveBeenCalled()
   })
 
   it('marks cleanup-after-commit as a warning without weakening deletion success', async () => {

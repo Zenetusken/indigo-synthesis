@@ -30,7 +30,7 @@ vi.mock('@/modules/athletes/application/profile', () => ({
   getAthleteProfile: pageMocks.getAthleteProfile,
 }))
 vi.mock('@/modules/data-portability/server/destructive-notice', () => ({
-  verifySubjectDeletionNoticeReceipt: pageMocks.verifyDeletionNotice,
+  verifySubjectDeletionNoticeReceiptForActor: pageMocks.verifyDeletionNotice,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({
   issueLocalUserCreationFormEnvelope: pageMocks.issueLocalForm,
@@ -184,6 +184,10 @@ describe('settings credential-administration form envelopes', () => {
       'Your training data was deleted. Your owner account and this installation remain available.',
     )
     expect(screen.getByRole('status')).toHaveTextContent('do not repeat the deletion')
+    expect(pageMocks.verifyDeletionNotice).toHaveBeenCalledWith(
+      'signed-owner-success',
+      'owner-id',
+    )
   })
 
   it('never renders owner deletion-success copy to a member', async () => {

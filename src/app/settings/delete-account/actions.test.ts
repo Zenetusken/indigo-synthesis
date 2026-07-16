@@ -121,8 +121,11 @@ describe('subject-deletion actions', () => {
       formData: expect.any(FormData),
       commandEnteredAt: expect.any(Date),
     })
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.requireActor).toHaveBeenCalledOnce()
     expect(actionMocks.deleteSubject).toHaveBeenCalledWith(command)
-    expect(actionMocks.requireActor).not.toHaveBeenCalled()
+    expect(actionMocks.issueNotice).toHaveBeenCalledOnce()
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(expect.anything(), 'member-id')
   })
 
   it('maps request rejection and unclassified failure without claiming rollback', async () => {
@@ -131,12 +134,24 @@ describe('subject-deletion actions', () => {
       'redirect:/settings/delete-account?notice=subject-stale-none-none',
     )
     expect(actionMocks.deleteSubject).not.toHaveBeenCalled()
+    expect(actionMocks.issueNotice).toHaveBeenNthCalledWith(
+      1,
+      { kind: 'stale' },
+      'member-id',
+    )
 
     actionMocks.capture.mockResolvedValueOnce({ kind: 'captured', command })
     actionMocks.deleteSubject.mockRejectedValueOnce(new Error('unclassified'))
     await expect(deleteAccountAction(formData())).rejects.toThrow(
       'redirect:/settings/delete-account?notice=subject-execution-failed-none-none',
     )
+    expect(actionMocks.issueNotice).toHaveBeenNthCalledWith(
+      2,
+      { kind: 'execution-failed' },
+      'member-id',
+    )
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.requireActor).toHaveBeenCalledTimes(2)
   })
 
   it('reports command-capture failure as verified not to have started', async () => {
@@ -146,12 +161,54 @@ describe('subject-deletion actions', () => {
       'redirect:/settings/delete-account?notice=subject-request-not-verified-none-none',
     )
     expect(actionMocks.deleteSubject).not.toHaveBeenCalled()
-    expect(actionMocks.issueNotice).toHaveBeenCalledWith({
-      kind: 'request-not-verified',
-    })
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      {
+        kind: 'request-not-verified',
+      },
+      'member-id',
+    )
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
   })
 
-  it('keeps ordinary actor lookup confined to preview creation', async () => {
+  it('finishes the form snapshot before reading the request actor', async () => {
+    let releaseCapture = () => {}
+    actionMocks.capture.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCapture = () => resolve({ kind: 'captured', command })
+        }),
+    )
+    actionMocks.deleteSubject.mockResolvedValueOnce({
+      kind: 'deleted',
+      actorRole: 'member',
+      warning: null,
+    })
+    const submittedForm = formData()
+
+    const pendingAction = deleteAccountAction(submittedForm)
+
+    expect(actionMocks.capture).toHaveBeenCalledWith({
+      formData: submittedForm,
+      commandEnteredAt: expect.any(Date),
+    })
+    expect(actionMocks.requireActor).not.toHaveBeenCalled()
+
+    releaseCapture()
+    await expect(pendingAction).rejects.toThrow(
+      'redirect:/sign-in?notice=subject-deleted-member-none',
+    )
+    expect(actionMocks.capture).toHaveBeenCalledBefore(actionMocks.requireActor)
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      {
+        kind: 'deleted',
+        actorRole: 'member',
+        warning: null,
+      },
+      'member-id',
+    )
+  })
+
+  it('authenticates ordinary preview creation', async () => {
     await expect(createAccountDeletionPreviewAction()).rejects.toThrow(
       'redirect:/settings/delete-account',
     )
@@ -167,6 +224,9 @@ describe('subject-deletion actions', () => {
     await expect(createAccountDeletionPreviewAction()).rejects.toThrow(
       'redirect:/settings/delete-account?notice=subject-preview-failed-none-none',
     )
-    expect(actionMocks.issueNotice).toHaveBeenCalledWith({ kind: 'preview-failed' })
+    expect(actionMocks.issueNotice).toHaveBeenCalledWith(
+      { kind: 'preview-failed' },
+      'member-id',
+    )
   })
 })
