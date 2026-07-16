@@ -1430,6 +1430,13 @@ export function prepareMutationAuthorityClaim(
   if (preparedClaims.has(request)) throw staleAuthority()
   const capability = stateForAuthority(request.authority, request.expectedEpoch)
   if (
+    capability.kind === 'authenticated-session' &&
+    request.subjectLock != null &&
+    request.subjectLock.subjectUserId !== capability.actorUserId
+  ) {
+    throw staleAuthority()
+  }
+  if (
     request.operation === 'subject-deletion' &&
     (capability.kind !== 'authenticated-destructive' ||
       capability.purpose !== 'trainee-data-deletion' ||

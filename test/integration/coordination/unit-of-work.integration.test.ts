@@ -573,9 +573,10 @@ async function runSubject<Result>(input: {
 }): Promise<Result> {
   const planPort = createContentLockPlanPort({
     authSecret: 'integration-auth-secret-with-at-least-thirty-two-bytes',
-    resolveActorAccountId: async () => 'actor-1',
+    resolveActorAccountId: async () => input.subjectId,
   })
   const bindings = contentBindings({
+    actorAccountId: input.subjectId,
     commandId: input.commandId,
     expectedEpoch: input.epoch,
     shape: 'none',
@@ -592,7 +593,7 @@ async function runSubject<Result>(input: {
         operation: 'subject-product-mutation',
         authority: authorityIssuer.authenticatedSession({
           expectedEpoch: input.epoch,
-          actorUserId: 'actor-1',
+          actorUserId: input.subjectId,
           sessionId: `${input.commandId}:subject-session`,
           expectedRole: 'owner',
         }).authority,
@@ -709,9 +710,10 @@ async function runInitialPublication<Result>(input: {
 }): Promise<Result> {
   const planPort = createContentLockPlanPort({
     authSecret: 'integration-auth-secret-with-at-least-thirty-two-bytes',
-    resolveActorAccountId: async () => 'actor-1',
+    resolveActorAccountId: async () => input.subjectId,
   })
   const bindings = contentBindings({
+    actorAccountId: input.subjectId,
     commandId: input.commandId,
     expectedEpoch: input.epoch,
     shape: 'current-publication.initial',
@@ -729,7 +731,7 @@ async function runInitialPublication<Result>(input: {
         operation: 'current-publication.initial',
         authority: authorityIssuer.authenticatedSession({
           expectedEpoch: input.epoch,
-          actorUserId: 'actor-1',
+          actorUserId: input.subjectId,
           sessionId: `${input.commandId}:publication-session`,
           expectedRole: 'owner',
         }).authority,
@@ -1170,7 +1172,7 @@ describe('PostgreSQL UnitOfWork integration', () => {
       productAfterMaintenance = runSubject({
         commandId: 'product-shared-after-maintenance',
         epoch,
-        subjectId: 'maintenance-account-seam-a',
+        subjectId: 'actor-1',
         callback: async () => {
           productEnteredAfterMaintenance = true
         },
@@ -1203,7 +1205,7 @@ describe('PostgreSQL UnitOfWork integration', () => {
     const productFirst = runSubject({
       commandId: 'product-shared-first',
       epoch,
-      subjectId: 'maintenance-account-seam-b',
+      subjectId: 'actor-1',
       callback: async () => {
         productEntered.resolve()
         await releaseProduct.promise

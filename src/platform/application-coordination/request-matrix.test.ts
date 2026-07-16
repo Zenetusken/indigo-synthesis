@@ -256,14 +256,14 @@ function validRequests(): readonly (readonly [label: string, request: unknown])[
     ],
     [
       'subject product mutation',
-      ordinaryProduct('subject-product-mutation', 'none', 'subject-1'),
+      ordinaryProduct('subject-product-mutation', 'none', 'actor-1'),
     ],
     [
       'initial publication',
       ordinaryProduct(
         'current-publication.initial',
         'current-publication.initial',
-        'subject-1',
+        'actor-1',
       ),
     ],
     [
@@ -271,16 +271,16 @@ function validRequests(): readonly (readonly [label: string, request: unknown])[
       ordinaryProduct(
         'current-publication.existing',
         'current-publication.existing',
-        'subject-1',
+        'actor-1',
       ),
     ],
     [
       'stale regeneration',
-      ordinaryProduct('stale-regeneration', 'stale-regeneration', 'subject-1'),
+      ordinaryProduct('stale-regeneration', 'stale-regeneration', 'actor-1'),
     ],
     [
       'correction closure',
-      ordinaryProduct('correction-closure', 'correction-closure', 'subject-1'),
+      ordinaryProduct('correction-closure', 'correction-closure', 'actor-1'),
     ],
     [
       'subject export',
@@ -290,7 +290,7 @@ function validRequests(): readonly (readonly [label: string, request: unknown])[
         session: { kind: 'ordinary' },
         expectedEpoch: epoch,
         productFence: 'shared',
-        subjectLock: { subjectUserId: 'subject-1', mode: 'shared' },
+        subjectLock: { subjectUserId: 'actor-1', mode: 'shared' },
         content: { kind: 'none' },
         mode: { isolation: 'repeatable-read', access: 'read-only' },
       },

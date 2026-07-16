@@ -644,6 +644,43 @@ describe('Platform mutation authority', () => {
     ).toThrow(expect.objectContaining({ code: 'identity.authority-stale' }))
   })
 
+  it('binds every authenticated-session subject scope to the actor', () => {
+    const issued = createPlatformMutationAuthorityIssuer().authenticatedSession({
+      expectedEpoch: epoch(),
+      actorUserId: 'member-1',
+      sessionId: 'session-1',
+      expectedRole: 'member',
+    })
+
+    const mismatchedExport = {
+      operation: 'subject-export',
+      authority: issued.authority,
+      session: { kind: 'ordinary' },
+      expectedEpoch: issued.expectedEpoch,
+      productFence: 'shared',
+      subjectLock: { subjectUserId: 'member-2', mode: 'shared' },
+      content: { kind: 'none' },
+      mode: { isolation: 'repeatable-read', access: 'read-only' },
+    } as unknown as UnitOfWorkRequest
+    const mismatchedMutation = {
+      operation: 'subject-product-mutation',
+      authority: issued.authority,
+      session: { kind: 'ordinary' },
+      expectedEpoch: issued.expectedEpoch,
+      productFence: 'shared',
+      subjectLock: { subjectUserId: 'member-2', mode: 'exclusive' },
+      content: { kind: 'none' },
+      mode: { isolation: 'read-committed', access: 'read-write' },
+    } as unknown as UnitOfWorkRequest
+
+    expect(() => prepareMutationAuthorityClaim(mismatchedExport, null)).toThrow(
+      expect.objectContaining({ code: 'identity.authority-stale' }),
+    )
+    expect(() => prepareMutationAuthorityClaim(mismatchedMutation, null)).toThrow(
+      expect.objectContaining({ code: 'identity.authority-stale' }),
+    )
+  })
+
   it('preserves exact bindings through all four destructive promotions', () => {
     const issuer = createPlatformMutationAuthorityIssuer()
     const owner = issuer.authenticatedSession({

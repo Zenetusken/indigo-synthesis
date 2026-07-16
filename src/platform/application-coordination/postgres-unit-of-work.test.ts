@@ -564,7 +564,7 @@ function exportRequest(): SubjectExportRequest {
     session: { kind: 'ordinary' },
     expectedEpoch,
     productFence: 'shared',
-    subjectLock: { subjectUserId: 'subject-1', mode: 'shared' },
+    subjectLock: { subjectUserId: 'actor-1', mode: 'shared' },
     content: { kind: 'none' },
     mode: { isolation: 'repeatable-read', access: 'read-only' },
   }
@@ -636,7 +636,7 @@ async function withInitialPublication<Result>(
     ...planBindings(),
     shape: 'current-publication.initial',
     purpose: 'current-publication.initial',
-    subjectId: 'subject-1',
+    subjectId: 'actor-1',
   }
   const envelope = await content.withIssuanceScope(bindings, async ({ scope, seal }) =>
     seal([methodologyFactory.createIssuanceProjection(scope, releasePair)]),
@@ -657,7 +657,7 @@ async function withInitialPublication<Result>(
         workflowPurpose: bindings.purpose,
         expectedEpoch,
         productFence: 'shared',
-        subjectLock: { subjectUserId: 'subject-1', mode: 'exclusive' },
+        subjectLock: { subjectUserId: 'actor-1', mode: 'exclusive' },
         content: { kind: 'verified', plan, bindings },
         mode: { isolation: 'read-committed', access: 'read-write' },
       }
@@ -672,6 +672,30 @@ async function withInitialPublication<Result>(
 }
 
 describe('PostgresUnitOfWork', () => {
+  it('rejects a cross-subject authenticated scope before connection or gateway admission', async () => {
+    const acquireOrdinary = vi.fn(async () => {
+      throw new Error('cross-subject request reached connection admission')
+    })
+    const createGatewayContext = vi.fn()
+    const uow = new PostgresUnitOfWork<ReadGateways, WriteGateways>({
+      acquireOrdinary,
+      resolvePrelockedSession: () => {
+        throw new Error('cross-subject request reached prelocked admission')
+      },
+      createGatewayContext,
+    })
+    const request: SubjectExportRequest = {
+      ...exportRequest(),
+      subjectLock: { subjectUserId: 'actor-2', mode: 'shared' },
+    }
+
+    expect(() => uow.run(request, async () => 'unreachable')).toThrow(
+      expect.objectContaining({ code: 'identity.authority-stale' }),
+    )
+    expect(acquireOrdinary).not.toHaveBeenCalled()
+    expect(createGatewayContext).not.toHaveBeenCalled()
+  })
+
   it('derives the only sanctioned transaction-local settings from validated requests', async () => {
     const intents = createPlatformPrelockedSessionIntentFactory()
 
@@ -1458,7 +1482,7 @@ describe('PostgresUnitOfWork', () => {
       'indigo:credential-lifecycle:instance-fence',
       'indigo:credential-lifecycle:account:actor-1',
       'indigo:product-mutation-fence',
-      'subject-1',
+      'actor-1',
       'methodology:methodology-development:1',
       'template:template-development:1',
     ])
