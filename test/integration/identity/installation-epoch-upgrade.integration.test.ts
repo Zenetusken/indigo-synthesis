@@ -40,6 +40,18 @@ async function applyMigrations(
   }
 }
 
+function installationEpochMigrationIndex(migrations: readonly MigrationMeta[]): number {
+  const matches = migrations.flatMap((migration, index) =>
+    migration.sql.some((statement) => statement.includes('product_mutation_epoch'))
+      ? [index]
+      : [],
+  )
+  if (matches.length !== 1) {
+    throw new Error('Expected exactly one installation epoch migration.')
+  }
+  return matches[0] as number
+}
+
 describe('installation mutation epoch upgrade', () => {
   it('backfills a claimed singleton without rewriting its owner lifecycle', async () => {
     const database = createDisposableIntegrationDatabase({
@@ -54,8 +66,9 @@ describe('installation mutation epoch upgrade', () => {
       await client.connect()
       const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
       expect(migrations).toHaveLength(expectedMigrationCount)
+      const epochMigrationIndex = installationEpochMigrationIndex(migrations)
 
-      await applyMigrations(client, migrations.slice(0, -1))
+      await applyMigrations(client, migrations.slice(0, epochMigrationIndex))
       await client.query(
         `SELECT set_config('indigo.user_creation_mode', 'bootstrap-owner', false)`,
       )
@@ -74,7 +87,10 @@ describe('installation mutation epoch upgrade', () => {
                 created_at AS "createdAt", updated_at AS "updatedAt"
          FROM installation_state WHERE singleton = 1`,
       )
-      await applyMigrations(client, migrations.slice(-1))
+      await applyMigrations(
+        client,
+        migrations.slice(epochMigrationIndex, epochMigrationIndex + 1),
+      )
 
       const backfilled = await client.query<{
         bootstrapClosedAt: Date
@@ -119,6 +135,7 @@ describe('installation mutation epoch upgrade', () => {
         columnDefault: expect.stringContaining('gen_random_uuid()'),
         isNullable: 'NO',
       })
+      await applyMigrations(client, migrations.slice(epochMigrationIndex + 1))
     } finally {
       await client?.end()
       await database.cleanup()
@@ -137,13 +154,18 @@ describe('installation mutation epoch upgrade', () => {
       client = new Client({ connectionString: database.databaseUrl })
       await client.connect()
       const migrations = readMigrationFiles({ migrationsFolder: './drizzle' })
-      await applyMigrations(client, migrations.slice(0, -1))
+      expect(migrations).toHaveLength(expectedMigrationCount)
+      const epochMigrationIndex = installationEpochMigrationIndex(migrations)
+      await applyMigrations(client, migrations.slice(0, epochMigrationIndex))
       const before = await client.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM installation_state',
       )
       expect(before.rows[0]?.count).toBe(0)
 
-      await applyMigrations(client, migrations.slice(-1))
+      await applyMigrations(
+        client,
+        migrations.slice(epochMigrationIndex, epochMigrationIndex + 1),
+      )
       const rows = await client.query<{
         bootstrapClosedAt: Date | null
         epoch: string
@@ -163,6 +185,7 @@ describe('installation mutation epoch upgrade', () => {
           singleton: 1,
         },
       ])
+      await applyMigrations(client, migrations.slice(epochMigrationIndex + 1))
 
       database.activateDatabaseUrl()
       resetServerConfigForTests()

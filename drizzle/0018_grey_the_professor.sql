@@ -1,0 +1,1 @@
+CREATE INDEX "session_expires_at_id_idx" ON "session" USING btree ("expires_at","id" COLLATE "C");

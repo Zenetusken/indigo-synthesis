@@ -24,7 +24,7 @@ export type DatabasePreflight = {
   readonly ineligibleContentRevisionCount: number
 }
 
-export const expectedMigrationCount = 18
+export const expectedMigrationCount = 19
 const canonicalProgramOrdinalMigration = {
   createdAt: 1_783_823_225_722,
   hash: 'e5d7105d56a02ba8874fef8f2a724981363e74f809b22d909a0e7cec75564ba0',
@@ -584,6 +584,53 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
       SELECT
         to_regclass('public.member_reset_state') IS NOT NULL
         AND to_regclass('public.web_recovery_rate_limit_bucket') IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM pg_index
+          WHERE indexrelid = to_regclass('public.session_expires_at_id_idx')
+            AND indrelid = to_regclass('public.session')
+            AND NOT indisunique AND indisvalid AND indisready
+            AND indpred IS NULL
+            AND indnkeyatts = 2 AND indnatts = 2
+            AND (
+              SELECT access_method.amname
+              FROM pg_class AS index_relation
+              JOIN pg_am AS access_method
+                ON access_method.oid = index_relation.relam
+              WHERE index_relation.oid = indexrelid
+            ) = 'btree'
+            AND (
+              SELECT array_agg(key.option ORDER BY key.ordinality)::smallint[]
+              FROM unnest(indoption::smallint[]) WITH ORDINALITY AS key(
+                option,
+                ordinality
+              )
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY[0::smallint, 0::smallint]
+            AND (
+              SELECT array_agg(attribute.attname ORDER BY key.ordinality)::text[]
+              FROM unnest(indkey::smallint[]) WITH ORDINALITY AS key(attnum, ordinality)
+              JOIN pg_attribute AS attribute
+                ON attribute.attrelid = indrelid
+               AND attribute.attnum = key.attnum
+              WHERE key.ordinality <= indnkeyatts
+            ) = ARRAY['expires_at', 'id']
+            AND (
+              SELECT array_agg(
+                COALESCE(
+                  index_collation_namespace.nspname || '.' || index_collation.collname,
+                  ''
+                ) ORDER BY key.ordinality
+              )::text[]
+              FROM unnest(indcollation::oid[]) WITH ORDINALITY AS key(
+                collation_oid,
+                ordinality
+              )
+              LEFT JOIN pg_collation AS index_collation
+                ON index_collation.oid = key.collation_oid
+              LEFT JOIN pg_namespace AS index_collation_namespace
+                ON index_collation_namespace.oid = index_collation.collnamespace
+            ) = ARRAY['', 'pg_catalog.C']
+        )
         AND (
           SELECT count(*) = 8
           FROM information_schema.columns

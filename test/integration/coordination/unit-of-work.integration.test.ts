@@ -47,6 +47,7 @@ import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
 } from '@/platform/db/disposable-integration-database'
+import { withExternalHostCommand } from '@/platform/db/external-host-command'
 import { migrateDatabase } from '@/platform/db/migrate'
 import { installationState } from '@/platform/db/schema'
 
@@ -618,6 +619,32 @@ async function runSubject<Result>(input: {
   )
 }
 
+async function runExpiredSessionMaintenanceLease<Result>(input: {
+  readonly callback: () => Promise<Result>
+  readonly epoch: InstallationMutationEpoch
+  readonly hostInvocationId: string
+}): Promise<Result> {
+  const issued = authorityIssuer.expiredSessionMaintenance({
+    expectedEpoch: input.epoch,
+    expectedOwnerUserId: 'actor-1',
+    hostInvocationId: input.hostInvocationId,
+    cursor: null,
+    batchSize: 1,
+    resolvedAccountUserIds: ['actor-1'],
+  })
+  const intent =
+    createPlatformPrelockedSessionIntentFactory().expiredSessionMaintenance(issued)
+  return withExternalHostCommand(
+    {
+      hostInvocationId: input.hostInvocationId,
+      allowTestWithoutInheritedLock: true,
+    },
+    async () => Object.freeze({ captured: true as const }),
+    (_capture, prelockedSessions) =>
+      prelockedSessions.withPrelockedSessionLease(intent, input.callback),
+  )
+}
+
 async function runGlobal<Result>(input: {
   readonly callback: (scope: UnitOfWorkScope<WriteGateways>) => Promise<Result>
   readonly commandId: string
@@ -1120,6 +1147,102 @@ describe('PostgreSQL UnitOfWork integration', () => {
       })
     await Promise.all([runDifferent('subject-a'), runDifferent('subject-b')])
     expect(entered).toEqual(new Set(['subject-a', 'subject-b']))
+  })
+
+  it('serializes maintenance account-exclusive locks with product account-shared locks in both orders', async () => {
+    const epoch = await currentEpoch()
+
+    const releaseMaintenance = deferred()
+    const maintenanceEntered = deferred()
+    let productEnteredAfterMaintenance = false
+    let productAfterMaintenance: Promise<void> | undefined
+    const maintenanceFirst = runExpiredSessionMaintenanceLease({
+      epoch,
+      hostInvocationId: 'maintenance-exclusive-first',
+      callback: async () => {
+        maintenanceEntered.resolve()
+        await releaseMaintenance.promise
+      },
+    })
+    try {
+      await maintenanceEntered.promise
+      const existingWaiters = await currentAdvisoryWaiterPids()
+      productAfterMaintenance = runSubject({
+        commandId: 'product-shared-after-maintenance',
+        epoch,
+        subjectId: 'maintenance-account-seam-a',
+        callback: async () => {
+          productEnteredAfterMaintenance = true
+        },
+      })
+      const [productWaiterPid] = await newAdvisoryWaiterPids(existingWaiters, 1)
+      if (!productWaiterPid) throw new Error('missing product account-shared waiter')
+      expect(productEnteredAfterMaintenance).toBe(false)
+      await expect(
+        inspector.query<{ application_name: string }>(
+          `SELECT application_name FROM pg_stat_activity WHERE pid = $1`,
+          [productWaiterPid],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ application_name: 'indigo-synthesis:ordinary' }],
+      })
+
+      releaseMaintenance.resolve()
+      await Promise.all([maintenanceFirst, productAfterMaintenance])
+      expect(productEnteredAfterMaintenance).toBe(true)
+    } finally {
+      releaseMaintenance.resolve()
+      await Promise.allSettled(
+        [maintenanceFirst, productAfterMaintenance].filter((task) => task !== undefined),
+      )
+    }
+
+    const releaseProduct = deferred()
+    const productEntered = deferred()
+    let maintenanceEnteredAfterProduct = false
+    const productFirst = runSubject({
+      commandId: 'product-shared-first',
+      epoch,
+      subjectId: 'maintenance-account-seam-b',
+      callback: async () => {
+        productEntered.resolve()
+        await releaseProduct.promise
+      },
+    })
+    let maintenanceAfterProduct: Promise<void> | undefined
+    try {
+      await productEntered.promise
+      const existingWaiters = await currentAdvisoryWaiterPids()
+      maintenanceAfterProduct = runExpiredSessionMaintenanceLease({
+        epoch,
+        hostInvocationId: 'maintenance-exclusive-after-product',
+        callback: async () => {
+          maintenanceEnteredAfterProduct = true
+        },
+      })
+      const [maintenanceWaiterPid] = await newAdvisoryWaiterPids(existingWaiters, 1)
+      if (!maintenanceWaiterPid) {
+        throw new Error('missing maintenance account-exclusive waiter')
+      }
+      expect(maintenanceEnteredAfterProduct).toBe(false)
+      await expect(
+        inspector.query<{ application_name: string }>(
+          `SELECT application_name FROM pg_stat_activity WHERE pid = $1`,
+          [maintenanceWaiterPid],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ application_name: 'indigo-synthesis:external-host' }],
+      })
+
+      releaseProduct.resolve()
+      await Promise.all([productFirst, maintenanceAfterProduct])
+      expect(maintenanceEnteredAfterProduct).toBe(true)
+    } finally {
+      releaseProduct.resolve()
+      await Promise.allSettled(
+        [productFirst, maintenanceAfterProduct].filter((task) => task !== undefined),
+      )
+    }
   })
 
   it('allows compatible global and subject work to overlap and fences reset on both', async () => {

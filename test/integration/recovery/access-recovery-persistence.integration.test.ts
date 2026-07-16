@@ -238,4 +238,53 @@ describe.sequential('access-recovery persistence contract', () => {
       )
     }
   })
+
+  it('fails preflight when the expired-session maintenance seek index is missing', async () => {
+    await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+    try {
+      const report = await inspectDatabase()
+      expect(report.accessRecoveryPersistencePresent).toBe(false)
+      await expect(assertDatabaseReady()).rejects.toThrow(
+        /access-recovery state, rate-limit, constraint, or index contract is absent/,
+      )
+    } finally {
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C")',
+        ),
+      )
+    }
+  })
+
+  it('fails preflight for the wrong maintenance index ordering or access method', async () => {
+    await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+    await getDb().execute(
+      sql.raw(
+        'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C" DESC)',
+      ),
+    )
+    try {
+      const report = await inspectDatabase()
+      expect(report.accessRecoveryPersistencePresent).toBe(false)
+      await expect(assertDatabaseReady()).rejects.toThrow(
+        /access-recovery state, rate-limit, constraint, or index contract is absent/,
+      )
+
+      await getDb().execute(sql.raw('DROP INDEX session_expires_at_id_idx'))
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" USING brin (expires_at, id COLLATE "C")',
+        ),
+      )
+      const wrongMethodReport = await inspectDatabase()
+      expect(wrongMethodReport.accessRecoveryPersistencePresent).toBe(false)
+    } finally {
+      await getDb().execute(sql.raw('DROP INDEX IF EXISTS session_expires_at_id_idx'))
+      await getDb().execute(
+        sql.raw(
+          'CREATE INDEX session_expires_at_id_idx ON "session" (expires_at, id COLLATE "C")',
+        ),
+      )
+    }
+  })
 })

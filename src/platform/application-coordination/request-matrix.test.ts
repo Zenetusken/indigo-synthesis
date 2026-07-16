@@ -414,7 +414,7 @@ function validRequests(): readonly (readonly [label: string, request: unknown])[
             expectedEpoch: epoch,
             expectedOwnerUserId: 'owner-1',
             hostInvocationId: 'host-invocation-3',
-            cursor: null,
+            cursor: 'a'.repeat(8_192),
             batchSize: 100,
             resolvedAccountUserIds: ['member-2', 'member-1'],
           }),

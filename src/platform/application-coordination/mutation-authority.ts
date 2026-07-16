@@ -336,6 +336,18 @@ function canonicalString(value: unknown): string {
   return value
 }
 
+function canonicalExpiredSessionCursor(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    Buffer.byteLength(value, 'ascii') > 8_192 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    throw invalidInput()
+  }
+  return value
+}
+
 function expectedEpoch(value: InstallationMutationEpoch): InstallationMutationEpoch {
   try {
     installationMutationEpochWireValue(value)
@@ -818,7 +830,8 @@ export function createPlatformMutationAuthorityIssuer(): PlatformMutationAuthori
     },
     expiredSessionMaintenance(input) {
       const epoch = expectedEpoch(input.expectedEpoch)
-      const cursor = input.cursor === null ? null : canonicalString(input.cursor)
+      const cursor =
+        input.cursor === null ? null : canonicalExpiredSessionCursor(input.cursor)
       if (
         !Number.isSafeInteger(input.batchSize) ||
         input.batchSize < 1 ||

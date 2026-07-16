@@ -1040,4 +1040,37 @@ describe('Platform mutation authority', () => {
       }),
     ).toThrow('Mutation authority input is invalid')
   })
+
+  it('keeps only the maintenance cursor on its wider bounded base64url surface', () => {
+    const issuer = createPlatformMutationAuthorityIssuer()
+    expect(() =>
+      issuer.expiredSessionMaintenance({
+        expectedEpoch: epoch(),
+        expectedOwnerUserId: 'owner-1',
+        hostInvocationId: 'host-call-long-cursor',
+        cursor: 'a'.repeat(8_192),
+        batchSize: 1,
+        resolvedAccountUserIds: ['account-1'],
+      }),
+    ).not.toThrow()
+    for (const cursor of ['a'.repeat(8_193), 'not+base64url']) {
+      expect(() =>
+        issuer.expiredSessionMaintenance({
+          expectedEpoch: epoch(),
+          expectedOwnerUserId: 'owner-1',
+          hostInvocationId: 'host-call-invalid-cursor',
+          cursor,
+          batchSize: 1,
+          resolvedAccountUserIds: ['account-1'],
+        }),
+      ).toThrow('Mutation authority input is invalid')
+    }
+    expect(() =>
+      issuer.ownerRecoveryIssue({
+        expectedEpoch: epoch(),
+        expectedOwnerUserId: 'owner-1',
+        hostInvocationId: 'a'.repeat(301),
+      }),
+    ).toThrow('Mutation authority input is invalid')
+  })
 })

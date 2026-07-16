@@ -101,7 +101,7 @@ does not silently substitute plausible fake data.
 
 Startup rejects every non-loopback plain-HTTP application origin.
 
-`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 17 current committed migration
+`pnpm db:preflight` verifies PostgreSQL 18 or newer, all 19 current committed migration
 hashes including the exact canonical 0004 program-ordinal provenance, owner-bootstrap
 enforcement, current snapshot/revision and correction/invalidation structures,
 append-only content-release revocations, the access/recovery persistence and HMAC-keyed
@@ -141,6 +141,10 @@ Development content is never a production fallback: a production process rejects
 - Session reads disable cookie caching. Core credential auth exposes no bearer, JWT, or
   refresh-token path to browser JavaScript, so database session revocation takes effect
   on the next request.
+- Bounded expired-session retention is a host-only command, not a browser feature. Each
+  sweep fixes its cutoff inside an opaque continuation cursor and runs one page at a time
+  through the common serialized external-host wrapper. See the
+  [operator runbook](../operations/EXPIRED_SESSION_MAINTENANCE.md).
 - The current slice has no SMTP/self-service email reset, public signup, role mutation,
   standalone session-management UI, or security-events view.
 

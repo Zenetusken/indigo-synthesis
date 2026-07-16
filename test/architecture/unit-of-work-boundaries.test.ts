@@ -1167,6 +1167,10 @@ describe('UnitOfWork and coordination architecture boundaries', () => {
         new Set(['createPlatformMutationAuthorityIssuer']),
       ],
       [
+        'src/composition/identity-session-maintenance.ts',
+        new Set(['createPlatformMutationAuthorityIssuer']),
+      ],
+      [
         'src/platform/application-coordination/postgres-unit-of-work.ts',
         new Set(['consumePreparedMutationAuthority']),
       ],

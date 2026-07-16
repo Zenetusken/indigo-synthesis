@@ -26,6 +26,7 @@
     "test:e2e:llm": "bash scripts/e2e/run.sh llm",
     "owner:bootstrap": "bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts",
     "owner:recover": "bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts",
+    "identity:cleanup-expired-sessions": "bash scripts/run-external-host-command.sh scripts/identity/cleanup-expired-sessions.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/db/migrate.ts",
     "db:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/db/preflight.ts",

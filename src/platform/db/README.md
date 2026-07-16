@@ -9,7 +9,7 @@ catalog, and the bundled development fixture does not close Methodology Gate 0.
 The live contract has:
 
 - one schema authority;
-- one ordered committed SQL migration ledger with 18 current entries;
+- one ordered committed SQL migration ledger with 19 current entries;
 - Better Auth's Drizzle schema checked into that same schema authority;
 - only a project-owned migration command applying committed SQL before startup;
 - no Better Auth runtime migration, production CLI generation, or schema push;

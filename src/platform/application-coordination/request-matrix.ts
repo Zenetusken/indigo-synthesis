@@ -406,6 +406,18 @@ function boundedString(value: unknown): string {
   return value
 }
 
+function boundedExpiredSessionCursor(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    Buffer.byteLength(value, 'ascii') > 8_192 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    throw invalidRequest()
+  }
+  return value
+}
+
 function opaqueCapability(value: unknown): object {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
     throw invalidRequest()
@@ -531,7 +543,7 @@ function captureAuthority(
       ) {
         throw invalidRequest()
       }
-      const cursor = raw.cursor === null ? null : boundedString(raw.cursor)
+      const cursor = raw.cursor === null ? null : boundedExpiredSessionCursor(raw.cursor)
       return Object.freeze({
         kind: profile.kind,
         cursor,

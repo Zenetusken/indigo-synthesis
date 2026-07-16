@@ -261,6 +261,23 @@ TTL must be 5–60 whole minutes. Both redemption channels change the credential
 existing owner sessions, and record a redacted channel-aware audit event. Successful CLI
 redemption removes the code only if its path still names the opened inode.
 
+## Expired-session maintenance
+
+Expired database session rows can be removed in bounded host-only pages. Start a sweep
+without a cursor:
+
+```sh
+pnpm identity:cleanup-expired-sessions --batch-size 64
+```
+
+If the compact JSON result has `"status":"continue"`, pass its opaque `nextCursor` to
+the next invocation. Advance only after a confirmed successful result; after an ambiguous
+failure, retry the same input cursor. The cursor fixes one sweep cutoff, is bounded but
+contains internal session-row metadata, and must stay out of public logs. This command
+has no UI. Read the complete
+[expired-session maintenance runbook](docs/operations/EXPIRED_SESSION_MAINTENANCE.md)
+before scheduling it.
+
 ## Repository map
 
 - `docs/MVP_STATUS.md` — implementation traceability, evidence, open release gates, and

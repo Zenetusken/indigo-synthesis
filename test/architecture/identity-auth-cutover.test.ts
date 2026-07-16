@@ -378,6 +378,39 @@ const identityAuthPolicies = policy([
     ],
   ],
   [
+    'src/modules/identity/application/expired-session-maintenance.ts',
+    'src/composition/identity-session-maintenance.ts',
+    [
+      'ExpiredSessionMaintenanceError',
+      'parseExpiredSessionMaintenanceInput',
+      'toExpiredSessionMaintenanceResult',
+    ],
+  ],
+  [
+    'src/modules/identity/application/expired-session-maintenance.ts',
+    'scripts/identity/cleanup-expired-sessions.ts',
+    ['ExpiredSessionMaintenanceError'],
+  ],
+  [
+    'src/modules/identity/infrastructure/expired-session-maintenance.ts',
+    'src/composition/identity-session-maintenance.ts',
+    [
+      'captureExpiredSessionMaintenance',
+      'expiredSessionMaintenanceCaptureView',
+      'recheckExpiredSessionMaintenance',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/expired-session-maintenance.ts',
+    'src/modules/identity/infrastructure/scoped-expired-session-maintenance.ts',
+    ['claimExpiredSessionMaintenanceMutationScope'],
+  ],
+  [
+    'src/modules/identity/infrastructure/scoped-expired-session-maintenance.ts',
+    'src/composition/identity-session-maintenance.ts',
+    ['createScopedExpiredSessionMaintenanceMutationGateway'],
+  ],
+  [
     'src/modules/identity/infrastructure/scoped-credential-administration.ts',
     'src/composition/identity-credential-administration.ts',
     [
@@ -441,6 +474,11 @@ const identityAuthPolicies = policy([
     ['createScopedDrizzleDatabase'],
   ],
   [
+    'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/identity-session-maintenance.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-auth-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
@@ -466,6 +504,11 @@ const identityAuthPolicies = policy([
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/identity-session-maintenance.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
     'src/platform/db/external-host-command.ts',
     'src/composition/identity-bootstrap-mutations.ts',
     ['withExternalHostCommand'],
@@ -473,6 +516,11 @@ const identityAuthPolicies = policy([
   [
     'src/platform/db/external-host-command.ts',
     'src/composition/identity-host-recovery-mutations.ts',
+    ['withExternalHostCommand'],
+  ],
+  [
+    'src/platform/db/external-host-command.ts',
+    'src/composition/identity-session-maintenance.ts',
     ['withExternalHostCommand'],
   ],
   [
@@ -627,6 +675,11 @@ const identityAuthPolicies = policy([
     ['issueOwnerRecoveryFromHostCli', 'redeemOwnerRecoveryFromHostCli'],
   ],
   [
+    'src/composition/identity-session-maintenance.ts',
+    'scripts/identity/cleanup-expired-sessions.ts',
+    ['cleanupExpiredSessionsFromHostCli'],
+  ],
+  [
     'src/modules/identity/recovery/owner-recovery-contract.ts',
     'src/composition/identity-host-recovery-mutations.ts',
     ['OwnerRecoveryError'],
@@ -656,6 +709,11 @@ const externalHostIdentityPolicies = sealTargets(
       ['withExternalHostCommand'],
     ],
     [
+      'src/platform/db/external-host-command.ts',
+      'src/composition/identity-session-maintenance.ts',
+      ['withExternalHostCommand'],
+    ],
+    [
       'src/composition/identity-bootstrap-mutations.ts',
       'src/modules/identity/server/bootstrap.ts',
       ['createOwnerFromWebWithBootstrapCode'],
@@ -674,6 +732,44 @@ const externalHostIdentityPolicies = sealTargets(
       'src/composition/identity-host-recovery-mutations.ts',
       'scripts/identity/recover-owner.ts',
       ['issueOwnerRecoveryFromHostCli', 'redeemOwnerRecoveryFromHostCli'],
+    ],
+    [
+      'src/composition/identity-session-maintenance.ts',
+      'scripts/identity/cleanup-expired-sessions.ts',
+      ['cleanupExpiredSessionsFromHostCli'],
+    ],
+    [
+      'src/modules/identity/application/expired-session-maintenance.ts',
+      'src/composition/identity-session-maintenance.ts',
+      [
+        'ExpiredSessionMaintenanceError',
+        'parseExpiredSessionMaintenanceInput',
+        'toExpiredSessionMaintenanceResult',
+      ],
+    ],
+    [
+      'src/modules/identity/application/expired-session-maintenance.ts',
+      'scripts/identity/cleanup-expired-sessions.ts',
+      ['ExpiredSessionMaintenanceError'],
+    ],
+    [
+      'src/modules/identity/infrastructure/expired-session-maintenance.ts',
+      'src/composition/identity-session-maintenance.ts',
+      [
+        'captureExpiredSessionMaintenance',
+        'expiredSessionMaintenanceCaptureView',
+        'recheckExpiredSessionMaintenance',
+      ],
+    ],
+    [
+      'src/modules/identity/infrastructure/expired-session-maintenance.ts',
+      'src/modules/identity/infrastructure/scoped-expired-session-maintenance.ts',
+      ['claimExpiredSessionMaintenanceMutationScope'],
+    ],
+    [
+      'src/modules/identity/infrastructure/scoped-expired-session-maintenance.ts',
+      'src/composition/identity-session-maintenance.ts',
+      ['createScopedExpiredSessionMaintenanceMutationGateway'],
     ],
     [
       'src/modules/identity/recovery/owner-recovery-contract.ts',
@@ -798,10 +894,12 @@ describe('Identity authentication cutover boundaries', () => {
     }
   })
 
-  it('keeps host recovery on its external composition and off global or web paths', () => {
+  it('keeps external-host Identity work on dedicated compositions and off global or web paths', () => {
     const entries = [
       resolve(process.cwd(), 'scripts/identity/recover-owner.ts'),
       resolve(sourceRoot, 'composition/identity-host-recovery-mutations.ts'),
+      resolve(process.cwd(), 'scripts/identity/cleanup-expired-sessions.ts'),
+      resolve(sourceRoot, 'composition/identity-session-maintenance.ts'),
     ]
     const forbiddenTargets = new Set(
       [
@@ -870,6 +968,15 @@ describe('Identity authentication cutover boundaries', () => {
     )
     expect(violations(transitive)).toContain(
       'src/composition/identity-host-recovery-mutations.ts -> src/platform/db/client.ts',
+    )
+
+    transitive.set(entries[1], productionFiles.get(entries[1]) ?? '')
+    transitive.set(
+      entries[3],
+      `${productionFiles.get(entries[3]) ?? ''}\nimport { rogueHostRecoveryHelper } from './rogue-host-recovery-helper'\nvoid rogueHostRecoveryHelper\n`,
+    )
+    expect(violations(transitive)).toContain(
+      'src/composition/identity-session-maintenance.ts -> src/platform/db/client.ts',
     )
   })
 

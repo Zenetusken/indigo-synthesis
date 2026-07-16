@@ -245,16 +245,62 @@ describe('clean-clone operator contract', () => {
     expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
 
-  it('serializes owner bootstrap and recovery before running their entrypoints', async () => {
+  it('serializes every external-host database command through one wrapper', async () => {
     const manifest = JSON.parse(
       readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
     ) as { scripts?: Record<string, string> }
-    expect(manifest.scripts?.['owner:bootstrap']).toBe(
-      'bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts',
+    const externalHostCommands = Object.fromEntries(
+      Object.entries(manifest.scripts ?? {}).filter(([, command]) =>
+        command.includes('scripts/run-external-host-command.sh'),
+      ),
     )
-    expect(manifest.scripts?.['owner:recover']).toBe(
-      'bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts',
+    expect(externalHostCommands).toEqual({
+      'owner:bootstrap':
+        'bash scripts/run-external-host-command.sh scripts/identity/bootstrap-owner.ts',
+      'owner:recover':
+        'bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts',
+      'identity:cleanup-expired-sessions':
+        'bash scripts/run-external-host-command.sh scripts/identity/cleanup-expired-sessions.ts',
+    })
+
+    const maintenanceEntrypoint = resolve(
+      projectRoot,
+      'scripts/identity/cleanup-expired-sessions.ts',
     )
+    const directEnvironment = { ...process.env }
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_HELD
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_FD
+    delete directEnvironment.INDIGO_EXTERNAL_HOST_LOCK_PATH
+
+    const sensitiveCursor = 'do-not-reflect-this-cursor'
+    const invalidMaintenance = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        maintenanceEntrypoint,
+        '--batch-size',
+        '65',
+        '--cursor',
+        sensitiveCursor,
+      ],
+      { cwd: projectRoot, encoding: 'utf8', env: directEnvironment },
+    )
+    expect(invalidMaintenance.status).toBe(1)
+    expect(invalidMaintenance.stdout).toBe('')
+    expect(invalidMaintenance.stderr).toContain(
+      'Invalid expired-session maintenance arguments.',
+    )
+    expect(invalidMaintenance.stderr).not.toContain(sensitiveCursor)
+
+    const directMaintenance = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', maintenanceEntrypoint, '--batch-size', '1'],
+      { cwd: projectRoot, encoding: 'utf8', env: directEnvironment },
+    )
+    expect(directMaintenance.status).toBe(1)
+    expect(directMaintenance.stdout).toBe('')
+    expect(directMaintenance.stderr).toContain('run-external-host-command.sh')
 
     const directory = mkdtempSync(join(tmpdir(), 'indigo-external-host-lock-'))
     const firstMarker = join(directory, 'first-entrypoint-ran')
