@@ -273,9 +273,10 @@ explanationCacheKey =
 Storage is the Training-owned PostgreSQL `future_load_explanation_cache`. Rows retain
 served-model, runtime, runtime-attestation, prompt, validator, FactBundle, and
 generation-duration provenance. Data Portability currently projects, counts, and deletes
-these rows through its documented direct transactional path; that boundary debt does not
-transfer domain authority. Schema upgrades purge rows that cannot prove the current
-contract rather than relabeling them.
+these rows as part of its subject graph. Export projection and protected deletion execute through
+the Stage 3 scoped temporary cross-owner UoW adapters; preview/count planning remains direct. That
+boundary debt does not transfer domain authority. Schema upgrades purge rows that cannot prove the
+current contract rather than relabeling them.
 
 Every cache hit is revalidated by the current validator before presentation. Identity
 or validation failure deletes the row and regenerates only through the normal guarded
@@ -361,7 +362,7 @@ Rules:
 - Inference-disabled operation remains compatible with the required
   outbound-network-denied release proof. With inference disabled, the namespace runner
   passed the complete 19-test default tree from clean committed product tree
-  `7c7ea334d4c88d9279abe574031881a23a15f32c`.
+  `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`.
 - Adapters are swappable behind `ExplanationGenerationPort` (different engines/formats
   are infrastructure choices, not domain changes).
 - Implemented optional config surface (the listed model/runtime values are the current

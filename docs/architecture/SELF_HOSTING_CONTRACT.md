@@ -57,7 +57,7 @@ access blocked. Source guards and browser request observation cover the normal s
 checked-in Linux namespace runner additionally removes every non-loopback interface and
 default route while exposing PostgreSQL through a private Unix-socket bridge. The complete
 19-test default tree passed from clean committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c`; the retained record identifies the exact
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`; the retained record identifies the exact
 environment and proof limits. Any later product/runtime or default-suite change requires
 a new run.
 
@@ -178,9 +178,11 @@ The complete backup boundary is:
 Export is a product feature, not a database-admin substitute. It includes a schema
 version and enough provenance to interpret programs, sessions, and recommendations.
 
-Deletion is an explicit destruction exception to immutable history. The current Data
-Portability workflow directly deletes or redacts scoped personal records in referential
-order inside one serializable transaction; Identity is last. Subject deletion retains a
+Deletion is an explicit destruction exception to immutable history. The current Data Portability
+composition captures authority before queueing, rechecks Identity first, and deletes or redacts
+scoped personal records in referential order through its exact temporary adapter inside one
+serializable `UnitOfWork`; Identity is last. Preview creation/current-plan reads remain direct until
+public owner ports land. Subject deletion retains a
 non-personal completion tombstone. Instance reset also retains the cleared singleton
 installation record and any earlier non-personal tombstones, then appends its own
 tombstone. Tombstones contain only event metadata, aggregate row counts, schema version,
@@ -241,9 +243,9 @@ only the application, PostgreSQL, and optional media directory are available.
 
 `scripts/e2e/run-network-denied.sh` supplies that runtime boundary and passed the complete
 19-test default tree from committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c`. See the
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`. See the
 [acceptance runbook](../operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md) and
-[retained evidence](../operations/evidence/2026-07-13-outbound-network-blocked.md), plus
+[retained evidence](../operations/evidence/2026-07-16-outbound-network-blocked.md), plus
 [MVP status](../MVP_STATUS.md). Independent methodology, security/privacy, WCAG,
 physical-device, cold-install, HTTPS-ingress, and off-host-retention gates remain
 separate.

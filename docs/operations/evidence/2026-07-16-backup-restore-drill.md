@@ -1,7 +1,7 @@
 # Backup/restore drill evidence — 2026-07-16
 
 Scope: serialized host-preflight/migration and 19-migration checkpoint proof at committed
-product tree `131222a112287921dbf811784fddf6e2f7bfaec4`. Rerun after any later migration or
+product tree `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`. Rerun after any later migration or
 pre-release database-contract change.
 
 Command (credentials loaded from the ignored `.env.local`):
@@ -26,8 +26,8 @@ Retained result:
 ```text
 Backup/restore drill passed.
 PostgreSQL clients: pg_dump (PostgreSQL) 18.4; pg_restore (PostgreSQL) 18.4
-Disposable target: indigo_backup_restore_8f29d89f481a130c19b26bc6_integration
-Archive: 176840 bytes, sha256 da88858f1a010d27e0022d381d970906127dfb114916ed903314ad5dc2e2e72c
+Disposable target: indigo_backup_restore_cef7217fbcd14aa9cc8fae01_integration
+Archive: 176840 bytes, sha256 bb461d6d840e337eb92ce96d68911704aa00e607f7efa8d67d62cb82d9e955b7
 Restored preflight: PostgreSQL 18.4 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
 Proof: installation epoch and exact audit row restored; append-only trigger rejected mutation (SQLSTATE 55000).
 ```

@@ -13,8 +13,8 @@ That fixture is visibly unreviewed and configuration rejects it in production.
 This checkpoint does not close a phase or Gate 0. The complete release gate still needs
 reviewed content and golden examples, independent WCAG/screen-reader and physical-device
 review, completion of accepted schema-ownership Part B (the Part A write fence shipped in #9),
-and independent product/security/privacy review. The committed 19-test tree has retained
-outbound-network-denied proof; that proof
+and independent product/security/privacy review. The committed 19-test tree has current
+[outbound-network-denied proof](operations/evidence/2026-07-16-outbound-network-blocked.md); that proof
 must be rerun after relevant code or default-suite changes. Targeted automated
 accessibility/mobile checks already pass; they are not a conformance claim. Current
 traceability and debt are recorded in [MVP_STATUS.md](MVP_STATUS.md).
@@ -47,20 +47,22 @@ Implemented checkpoint:
 Gate status: the baseline J7–J9 engineering slice and its specified hardening are
 implemented. The complete 19-test default Playwright selection, including all four new
 access/recovery cases, passed from committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c` with outbound network denied. The separately
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6` with outbound network denied. The separately
 named Account security follow-on—session management plus a security-events view and
 sign-in-failure auditing—remains future work. Neither result closes Gate 0 or substitutes
 for independent security/privacy review.
 
-Calibration Part B Stage 3 is now in progress. Its bounded
+Calibration Part B Stage 3 is complete through `6117fbe`. Its bounded
 ordinary/control/trusted-capture/external-host allocation is live, configured by
 `INDIGO_DATABASE_POOL_MAX` (default 10, range 6–64), with no unused runtime-health lane.
 Migration, observational startup preflight, bootstrap, recovery, and maintenance share
-the serialized external slot and never construct application pools. The retained J7–J9
-network-denied record predates that cutover and is not evidence for the new topology.
-Stage 3 remains open until the Data Portability destructive adapter and export
-unit-of-work cutovers, their independent review gates, and the checkpoint certification
-are complete.
+the serialized external slot and never construct application pools. Data Portability subject
+export and protected destructive execution now use scoped temporary Stage 3 UoW adapters with
+transactional Identity rechecks; actor-bound result notices preserve truthful UI outcomes across
+redirects. The ownership scanner and cumulative review gates are green, and the current
+network-denied record exercises this topology. Stage 4 calibration/loadability persistence is next;
+public owner ports, operator retirement, peer-read/private-import guards, and O6 remain later Part B
+work.
 
 ## Gate 0 — Product truth
 
@@ -105,8 +107,9 @@ Gate:
 Checkpoint: the stack, committed migrations, PostgreSQL preflight, first-owner auth,
 configuration validation, local assets, executable module-boundary guards, and the Part A
 schema write-authority fence are implemented. A no-default-route namespace runner has passed the
-complete 19-test tree from a clean product commit; the accepted Part B public ports/UnitOfWork/read
-boundaries and O6 convergence remain open release work.
+complete 19-test tree from a clean product commit. The shared Stage 3 `UnitOfWork` is live; accepted
+Part B public owner ports, co-write/operator retirement, read/private-import boundaries, and O6
+convergence remain open release work.
 
 ## Phase 2 — First vertical slice
 

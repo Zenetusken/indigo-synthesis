@@ -164,7 +164,7 @@ suite in a Linux namespace with no non-loopback interface or default route. Read
 [`docs/operations/BACKUP_RESTORE.md`](docs/operations/BACKUP_RESTORE.md) and
 [`docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md`](docs/operations/OUTBOUND_NETWORK_BLOCKED_ACCEPTANCE.md)
 before using them. The current committed 19-test isolation proof is retained in
-[`docs/operations/evidence/2026-07-13-outbound-network-blocked.md`](docs/operations/evidence/2026-07-13-outbound-network-blocked.md).
+[`docs/operations/evidence/2026-07-16-outbound-network-blocked.md`](docs/operations/evidence/2026-07-16-outbound-network-blocked.md).
 Neither substitutes for encrypted off-host retention, a second-person cold restore, or
 independent security/accessibility review.
 

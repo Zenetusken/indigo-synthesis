@@ -104,10 +104,11 @@ arbitrary tables or become a second owner of personal data.
 
 The module descriptions above are the target boundaries. The current engineering slice
 still performs some cross-module Programs/Training coordination through direct Drizzle
-queries. Data Portability uses one direct repeatable-read export projection, one serializable
-planning/count/digest transaction, and—after user confirmation/reauthentication—a separate
-serializable revalidation/delete/tombstone transaction while module-owned export/deletion gateways
-remain unimplemented.
+queries. Data Portability subject export now runs through a subject-scoped temporary cross-owner
+gateway inside one repeatable-read, read-only `UnitOfWork`. Protected subject deletion and instance
+reset execution run through exact table/verb-scoped temporary adapters inside serializable UoWs,
+with Identity authority rechecked first. Preview creation and current-plan reads remain direct, and
+module-owned export/deletion gateways remain unimplemented.
 History queries also remain in Training until a real Phase 3 Progress contract exists.
 
 These are explicit convergence tasks, not hidden exceptions. The architecture suite now
@@ -146,11 +147,14 @@ Not every module needs every folder on day one. Empty abstraction is not archite
 
 ### Cross-module composition and persistence
 
-Multi-module operations are composed in `src/application/workflows/`. This layer owns
-workflow order and authorization but no domain entities or tables. A `UnitOfWork` port
-runs a callback with transaction-scoped public module gateways; the PostgreSQL adapter
-binds every participating repository to the same Drizzle transaction/`pg` connection.
-Repositories never escape that callback and remain private to their owning module.
+Neutral coordination contracts live in `src/application/coordination/`. Multi-module operations
+are composed in `src/composition/`, which owns workflow order and authorization but no domain
+entities or tables. The PostgreSQL implementation lives in
+`src/platform/application-coordination/`: its `UnitOfWork` adapter runs a callback with
+transaction-scoped gateways bound to the same Drizzle transaction/`pg` connection. Scoped
+gateways are revoked at callback settlement and cannot expose a raw transaction. Stage 3's Data
+Portability gateways are temporary cross-owner adapters; the target remains private owner
+repositories exposed only through public module ports.
 
 Relational integrity is not a module violation. Cross-module foreign keys are allowed
 when the referenced owner publishes the identity contract, both owners review the
@@ -451,9 +455,14 @@ configuration and certificate automation remain deferred. The supported `dev` an
 `start` commands bind the Node listener explicitly to `127.0.0.1`; `start` completes the
 database preflight before listening.
 
-Deletion is a deliberate destruction exception to historical immutability. The current
-Data Portability workflow directly deletes or redacts scoped personal records in
-referential order inside one serializable transaction. It retains system-level tombstones
+Deletion is a deliberate destruction exception to historical immutability. The current Data
+Portability composition captures authority before queueing, then rechecks Identity first and uses
+its exact temporary adapter to delete or redact scoped personal records in referential order inside
+one serializable `UnitOfWork`. A post-`COMMIT` transport failure is reported as outcome unknown,
+never as a known rollback. Short-lived signed, nonce-bearing destructive-result notices are bound
+to the exact actor on authenticated surfaces; generic verification is limited to post-destruction
+sign-in/bootstrap orientation. They report an outcome and never authorize a mutation. The workflow
+retains system-level tombstones
 containing event ID, actor class, timestamp, schema version, aggregate row counts, and a
 completion digest—never identity, health context, or training content. Instance reset also
 retains the cleared singleton installation record and prior non-personal tombstones.
@@ -463,7 +472,7 @@ See [the self-hosting contract](SELF_HOSTING_CONTRACT.md).
 The outbound-network acceptance runner executes the application and browser in a Linux
 namespace with only loopback and a private PostgreSQL bridge. The complete 19-test default
 tree passed from clean committed product tree
-`7c7ea334d4c88d9279abe574031881a23a15f32c`; later product/runtime or default-suite
+`6117fbe4f6ea363b8cf4553ed5c10eee51009ef6`; later product/runtime or default-suite
 changes require a new retained run.
 
 ## Architecture acceptance

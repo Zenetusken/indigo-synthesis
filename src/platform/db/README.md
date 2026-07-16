@@ -49,6 +49,10 @@ limit at least as large as `INDIGO_DATABASE_POOL_MAX`. This is a role-level allo
 not proof of cluster-wide `max_connections`, currently free capacity, or capacity for
 multiple application instances.
 
+Transaction-scoped application coordination is implemented separately in
+`src/platform/application-coordination/`; product composition lives in `src/composition/`.
+Neither layer may turn the connection topology above into an unbounded or raw-client escape.
+
 `pnpm db:backup-restore-drill` is a test-only disposable-database acceptance harness. It
 may use application-pool test helpers and proves restore/schema invariants; it is not a
 production one-shot topology proof. Production backup/restore follows the shared-lock

@@ -432,7 +432,7 @@ malformed trusted forwarding data in network mode) remains the existing pre-cred
   lock and guesses never consume the code. CLI owner redemption bypasses all web buckets
   and remains the guaranteed owner escape.
 
-  **Part B connection-topology amendment (accepted and live during Stage 3):**
+  **Part B connection-topology amendment (accepted and live since Stage 3):**
   `INDIGO_DATABASE_POOL_MAX` is an integer from **6 through 64**, defaults to **10**, and
   is the one installation-wide `poolMax`. Ordinary page/UoW/Better Auth read work receives
   `poolMax - 4` connections

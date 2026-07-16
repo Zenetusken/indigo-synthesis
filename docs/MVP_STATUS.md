@@ -1,6 +1,6 @@
 # Engineering MVP status and traceability
 
-Snapshot: 2026-07-15
+Snapshot: 2026-07-16
 Status: working engineering MVP; **not** a production coaching release and **not** the
 canonical Release 1 gate
 
@@ -52,7 +52,7 @@ record. No software test can substitute for that approval.
 | J3 — Instantiate a program | Pure deterministic generator, explicit local date, canonical hashes, revision/workout/prescription rows that become immutable on activation, review-status fields, content eligibility, and persisted safety/equipment validation before activation | Methodology/domain tests, training integration tests, browser restriction and advanced-tier cases | Only an unreviewed development fixture exists; Gate 0 and reviewed golden vectors remain open |
 | J4 — Train today | Truthful Today states; start; active/paused lifecycle; snapshot exercises/sets; canonical load, reps, optional RPE and notes; skips; timestamp-derived rest; pain stop/hold; abandon; source-linked hold resolution after live-source abandonment or completed-source durable invalidation plus abandonment of any already-active affected descendant session; exact PostgreSQL resume; and cause-neutral sign-in return reconstructed only from a UUIDv7 workout identifier and reauthorized after sign-in when the session is absent | Main browser journey, safety browser cases, supervised-restart hold-resolution journey, J7 mid-workout session-revocation case, restart-process integration, idempotency and authorization integration tests | No reviewed substitution set exists, so substitution correctly remains unavailable; resolution never reopens or rewrites the source session, and unsaved browser fields are not claimed as persisted |
 | J5 — Complete and learn | Transactional completion; immutable original sets, feedback, history, and decisions; append-only completed-set correction ledger/projection; feedback-correction entry from History; recursive decision/revision invalidation; fail-closed post-completion safety reporting; and a new future program revision without rewriting the completed revision | Main browser journey, direct database integrity tests, adjustment property/unit tests, correction/invalidation concurrency tests, and completion-replay integration | The correction ledger preserves historical facts and halts affected progression. The accepted calibration roadmap plans a narrow exact-source one-set History recovery for Stage 8, but it is not live yet; broad/open-ended or bulk correction management, richer aggregates, and comparison remain later Phase 3 work |
-| J6 — Control data | Repeatable-read versioned JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed member deletion; owner-only whole-instance reset; password reauthentication; transactional deletion/redaction; non-personal tombstones; and a guarded PostgreSQL backup/restore procedure with an exercised disposable-database drill | Main and cross-user browser journeys, portability integration tests, and the retained backup/restore drill record | Export is subject-scoped; operators still own encrypted off-host retention, deployment-specific restore practice, runtime-secret custody, and any future media boundary |
+| J6 — Control data | Coordinated repeatable-read, read-only UoW JSON export with hashes/provenance/omissions, including owned cached-explanation provenance independent of current content eligibility; previewed owner training-data deletion that retains the owner account and installation; previewed member account-plus-subject deletion; owner-only whole-instance reset; password reauthentication; actor/epoch/session-bound serializable destructive UoWs; actor-bound result notices; non-personal tombstones; and a guarded PostgreSQL backup/restore procedure with an exercised disposable-database drill | Main and cross-user browser journeys, portability/UoW integration tests, the retained backup/restore drill, and the current network-denied record | Export is subject-scoped; temporary cross-owner adapters remain until public module ports land; operators still own encrypted off-host retention, deployment-specific restore practice, runtime-secret custody, and any future media boundary |
 
 The concrete evidence lives in `src/**/*.test.ts`, `test/architecture/`,
 `test/integration/`, and `test/e2e/*.spec.ts`. Application APIs are not mocked in the
@@ -105,13 +105,13 @@ Account security follow-on, not unfinished J7–J9 work.
 
 | Concern | Implemented | Still required for canonical Release 1 |
 | --- | --- | --- |
-| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and retained 19/19 proof from a clean committed tree in a Linux namespace exposing only loopback plus a private PostgreSQL socket bridge | Rerun after any product/runtime or default-suite change; keep deployment ingress and cold-install evidence separate |
+| Self-hosting | Local auth/assets, no mandatory cloud adapter, validated origin/config, one Node process plus PostgreSQL, source guards, browser request observation, and current 19/19 proof from clean committed tree `6117fbe` in a Linux namespace exposing only loopback plus a private PostgreSQL socket bridge | Rerun after any product/runtime or default-suite change; keep deployment ingress and cold-install evidence separate |
 | Database integrity | Nineteen Drizzle migration entries, canonical 0004 ledger provenance plus current-hash coverage, PostgreSQL 18 preflight, ownership/lifecycle checks, unique constraints, immutable original training facts, append-only corrections/invalidation/hold-resolution/content-revocation records, cache provenance/uniqueness, HMAC-keyed recovery admission state, installation mutation epoch, and conservative audit-backed legacy provenance recovery | Ambiguous legacy hold provenance remains fail-closed for explicit administrator remediation; keep fresh-migration, upgrade, and preflight proof in final release evidence |
 | Reproducibility | Canonical JSON/SHA-256 vectors, versioned input/output hashes, explicit `asOfDate`, no clock/random/network/database access in the pure generator | Replace development vectors with independently approved methodology golden vectors |
 | Authorization/privacy | Server-derived actor, owner/member roles, cross-user denial, local sessions, subject-scoped export/deletion, and no application telemetry | Independent security/privacy review before an exposed deployment |
 | Safety honesty | Contraindication/restriction block, fail-closed content status, pain stop/hold, append-only subject-only hold resolution with live-source abandonment or completed-source durable-invalidation prerequisite, no medical-clearance implication, advanced-tier denial, no diagnosis, and no fabricated substitution | Human strength and safety approval of the intended population, movements, bounds, stop rules, and copy |
 | Accessibility/mobile | Semantic server-rendered UI plus targeted Playwright proof at 390×844 for reflow, 200% text sizing, 48px controls, skip-link/focus visibility, keyboard form order and focus continuation, changing polite save status, distinct titles, reduced motion, and no horizontal overflow | Independent WCAG 2.2 AA review, manual screen-reader certification, and representative physical-device testing |
-| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, executable dependency/runtime guards, the shipped O1–O5 schema write-authority fence, and the live Stage 3 UnitOfWork/Identity/connection substrate | Finish Part B owner ports, remove remaining Data Portability operator breadth, enforce public/private read boundaries, and complete O6 |
+| Maintainability | TypeScript, Biome, pure domain tests, one schema/migration authority, executable dependency/runtime guards, the hardened O1–O5 schema write-authority fence, and the completed Stage 3 UnitOfWork/Identity/connection/Data Portability cutovers | Finish Part B owner ports, remove remaining Data Portability operator breadth, enforce public/private read boundaries, and complete O6 |
 
 ## Validation commands
 
@@ -127,12 +127,15 @@ INDIGO_CONTENT_MODE=reviewed INDIGO_LLM_MODE=disabled pnpm build
 At this documentation checkpoint, the established static, unit/domain/architecture,
 database-integration, upgrade, PostgreSQL-preflight, and LLM-disabled build gates are
 green. The complete default Playwright selection contains **19** tests and passed 19/19
-from clean committed product tree `7c7ea334d4c88d9279abe574031881a23a15f32c` inside
+from clean committed product tree `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6` inside
 the outbound-network-denied runner. The retained
-[acceptance record](operations/evidence/2026-07-13-outbound-network-blocked.md) covers the
-prior suite plus all J7/J8/J9 cases. Fresh migration/preflight covers all 19 ledger
-entries and 28 required integrity triggers. Playwright recreates a guarded disposable
-PostgreSQL database and does not mock application APIs.
+[acceptance record](operations/evidence/2026-07-16-outbound-network-blocked.md) covers the
+current Stage 3 topology, actor-bound destructive notices, and all J7/J8/J9 cases. Fresh
+migration/preflight covers all 19 ledger entries and 28 required integrity triggers. Playwright
+recreates a guarded disposable PostgreSQL database and does not mock application APIs. At the
+Stage 3 code checkpoint, `pnpm validate` passed 151 unit files/1,779 tests and the reviewed-mode
+LLM-disabled build; `pnpm test:integration` passed 20 files/202 tests; and the focused ownership
+suite passed 355 tests.
 
 `pnpm validate` covers static checks, unit/domain tests, and the production-mode build.
 Integration and browser tests remain explicit because they require PostgreSQL and the E2E
@@ -147,15 +150,18 @@ The target architecture describes module-owned gateways and a shared workflow
 `UnitOfWork`. Part A of the schema-ownership arc shipped in #9: all live schema tables are
 manifested bijectively and every observed DML write is checked against owner/debt/operator grants.
 The maintainer selected the proper Part B boundary in #12. Runtime implementation is in
-progress: the nominal UnitOfWork, transaction substrate, installation epoch, live
-Identity credential/recovery routes, bounded expired-session maintenance, bounded pool
-allocation, and serialized host preflight/migration are implemented on this branch.
+progress overall, but Stage 3 is complete: the nominal UnitOfWork, transaction substrate,
+installation epoch, live Identity credential/recovery routes, bounded expired-session maintenance,
+bounded pool allocation, serialized host preflight/migration, Data Portability subject export, and
+protected destructive execution are implemented on this branch.
 The remaining debt is explicit:
 
 - Programs and Training currently coordinate through direct Drizzle queries over the
   shared schema for some cross-module workflows.
-- Data Portability intentionally uses a direct, repeatable-read projection and ordered
-  deletion transaction while public per-module export/deletion ports are still absent.
+- Data Portability now enters export and protected destructive execution through exact scoped
+  Stage 3 UoW adapters. Those temporary adapters still hold broad cross-owner projection/deletion
+  authority while public per-module export/deletion ports are absent; preview planning remains
+  direct.
 - History queries currently live in Training; a separate Progress module is deferred
   until the Phase 3 read-model requirements exist.
 - The exercise catalog is represented by development fixture identifiers and immutable
@@ -169,7 +175,7 @@ The remaining debt is explicit:
   [ADR 0007](architecture/adr/0007-schema-table-ownership.md).
   Production-release blocker 4 remains open until Part B removes the remaining
   Data Portability operator breadth and co-write debt and O6 status/documentation
-  converges.
+  converges. The Part B boundary spec and ADR 0010 are authored only after Stage 6 and gate Stage 9.
 
 These choices kept the first slice small and transactional, but they are tracked debt,
 not evidence that the documented boundaries already exist.

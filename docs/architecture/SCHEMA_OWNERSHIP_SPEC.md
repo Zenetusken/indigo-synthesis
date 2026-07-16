@@ -3,7 +3,7 @@
 Status: **Part A implemented and shipped (#9); Part B implementation active** — retained as the
 write-fence contract, measured census, and historical decision pack. #12 selected the proper
 boundary; the live working branch has reached the Stage 3 UnitOfWork/Identity/Data Portability
-coordination cutovers, while the cumulative Stage 3 gate and Stages 4–9 remain open. The active
+coordination cutovers and cumulative gate, while Stages 4–9 remain open. The active
 sequence is [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md).
 Scope owner: architecture / platform
 
@@ -724,7 +724,7 @@ Provisional debt ratification is historical alternative analysis, not an open cl
 
 | Item | Deferred? | Condition |
 | --- | --- | --- |
-| Full UnitOfWork + workflow adapters | No; active Part B work | Stage 3 substrate and scoped temporary Data Portability adapters are present; owner ports continue in Stages 6/9 |
+| Full UnitOfWork + owner workflow adapters | No; active Part B work | Stage 3 substrate and scoped temporary Data Portability adapters are present; owner ports continue in Stages 6/9 |
 | Progress read-model / History split | Yes | Part A will **not** catch Progress SELECTs of Training tables |
 | Exercises content schema | Yes | Do not invent catalog tables in this arc |
 | Data Portability export **shape** | No for newly persisted personal data | New tables enter export/deletion immediately; Stage 9 later replaces operator breadth with ports |

@@ -14,7 +14,7 @@ fake sync, and incompatible state APIs.
 Core use requires no mandatory external/cloud service and must work with outbound network
 blocked. Source guards and browser request observation cover the normal suite. A
 checked-in namespace runner additionally passed the complete 19-test default tree from
-clean committed product tree `7c7ea334d4c88d9279abe574031881a23a15f32c` with no
+clean committed product tree `6117fbe4f6ea363b8cf4553ed5c10eee51009ef6` with no
 non-loopback interface or default route. Durable state is saved to PostgreSQL through the
 self-hosted application. Offline mutation queues and conflict resolution are deferred.
 Plain HTTP is supported only for loopback-local use; phone, LAN, and other non-loopback

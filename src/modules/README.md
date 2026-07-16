@@ -2,10 +2,10 @@
 
 Modules are business boundaries inside one application. They are not services.
 
-Target Part B shape—sequenced by roadmap Stages 3/4 and not live at this checkpoint:
+Part B target shape, now backed by the live Stage 3 coordination substrate:
 
 ```text
-Application workflows / UnitOfWork
+Composition / UnitOfWork
   ├─ identity/account: identity
   ├─ initial plan: identity lifecycle fence -> athletes + exercises + methodology + calibration -> programs
   ├─ train/learn: identity lifecycle fence -> athletes + exercises + training + calibration + programs
@@ -26,10 +26,11 @@ Rules:
 - Application code owns use cases, authorization, transactions, and ports.
 - Infrastructure implements ports.
 - UI calls application APIs.
-- Public module APIs and a shared workflow unit of work remain the target boundary.
+- The shared workflow `UnitOfWork` is live; complete public module APIs remain the target boundary.
 - The current vertical slice still contains documented direct Drizzle coordination in
-  Programs/Training and Data Portability; architecture tests enforce the narrower live
-  dependency rules while that debt is resolved.
+  Programs/Training. Data Portability now enters export and protected destructive execution through
+  scoped temporary UoW adapters, but those adapters retain cross-owner breadth until public owner
+  ports land. Architecture tests enforce the exact live boundary while that debt is resolved.
 - Do not create a folder or abstraction before its first accepted use case.
 
 Current executable areas include:

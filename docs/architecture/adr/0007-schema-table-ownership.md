@@ -28,10 +28,12 @@ confuse the numbers.)
 [ADR 0001](0001-modular-monolith.md) chooses a modular monolith without internal HTTP. The
 stronger rules — public application APIs, no reaching across another module's tables,
 multi-module writes via a shared `UnitOfWork` — live in [AGENTS.md](../../../AGENTS.md)
-and [ARCHITECTURE.md](../ARCHITECTURE.md). The vertical slice never built those gateways;
-Programs and Training co-write via direct Drizzle; Data Portability uses a whole-schema
-projection and ordered deletion **while per-module ports are still absent** (tracked debt
-in `MVP_STATUS.md`, not a completed target).
+and [ARCHITECTURE.md](../ARCHITECTURE.md). At this decision point the vertical slice had not built
+those gateways: Programs and Training co-wrote via direct Drizzle, while Data Portability used a
+whole-schema projection and ordered deletion with per-module ports absent. Stage 3 has since landed
+the shared UoW substrate and scoped temporary Data Portability adapters; Programs/Training co-write,
+public owner ports, and operator retirement remain tracked debt in `MVP_STATUS.md`, not a completed
+target.
 
 A measured write-authority census of the **36** tables (see the
 [spec](../SCHEMA_OWNERSHIP_SPEC.md)) found that, excluding Data Portability's non-owned

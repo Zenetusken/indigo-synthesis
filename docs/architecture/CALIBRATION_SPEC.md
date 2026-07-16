@@ -2332,8 +2332,9 @@ plus missing, wrong-owner, source-owner-erased, or stale trigger attribution. Re
 fixtures prove historical DML neither false-fails the current graph nor survives a later replacement/
 drop.
 
-Stage 9 later replaces Data Portability's direct operator projection with per-module ports; that
-architectural refactor cannot justify omitting new personal tables in the interim.
+Stage 9 later replaces Data Portability's temporary scoped cross-owner operator projection with
+per-module ports; that architectural refactor cannot justify omitting new personal tables in the
+interim.
 
 ### Executable integrity versions
 

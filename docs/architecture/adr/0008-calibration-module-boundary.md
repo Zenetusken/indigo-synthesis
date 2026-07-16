@@ -53,11 +53,13 @@ write requires.
    at Gate 0. The adaptive *paradigm* is an owner product-direction choice, Gate-0-revisable.
 5. The LLM **explains** each decision and never makes one
    ([ADR 0006](0006-optional-local-grounded-language.md)); journeys work with it off.
-6. On completion, a `src/application/workflows/` workflow opens a **`UnitOfWork`**: training
-   records the decision and writes its own `program_revision_lineage`, a **Programs write
-   port** persists the revision + prescriptions, the **calibration port** updates e1RM state,
-   and the **athletes owner path** raises `safety_hold` when signaled — one transaction,
-   atomic. `training` stops writing the prescription cluster; nothing reaches across tables.
+6. On completion, a `src/composition/` workflow opens a **`UnitOfWork`** through the neutral
+   contracts in `src/application/coordination/` and PostgreSQL implementation in
+   `src/platform/application-coordination/`: training records the decision and writes its own
+   `program_revision_lineage`, a **Programs write port** persists the revision + prescriptions,
+   the **calibration port** updates e1RM state, and the **athletes owner path** raises
+   `safety_hold` when signaled — one transaction, atomic. `training` stops writing the prescription
+   cluster; nothing reaches across tables.
 
 ## Consequences
 

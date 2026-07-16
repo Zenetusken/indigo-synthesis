@@ -1,6 +1,6 @@
 # Development roadmap — calibration and proper module architecture (Part B)
 
-Status: **active engineering roadmap; Phase 0 complete, Stage 3 in progress**
+Status: **active engineering roadmap; Phase 0 and Stage 3 complete; Stage 4 next**
 
 This is the single engineering roadmap for the architecture arc from the shipped schema
 write-fence to a calibrated `profile → plan → train → learn` loop and complete Part B module
@@ -48,13 +48,15 @@ do not bless a direct-table workaround merely because the current installation i
 - **Stage 2 — accept ADR 0008 and Part B:** accepted 2026-07-15 in #12.
 - **Phase 0 — implementation contract and documentation convergence:** complete on this branch;
   exact-tree architecture/integrity, product/status, and content-lock adversarial gates are green.
+- **Stage 3 — foundational `UnitOfWork`:** complete through `6117fbe`; the neutral transaction,
+  Identity lifecycle, connection-budget, Data Portability destructive/export cutovers, hardened
+  ownership scanner, and cumulative review gates are green.
 - Access/recovery J7–J9, guarded backup/restore, retained outbound-network-denied evidence, and
   the default-off History explanation path are already implemented.
 - #13 independently corrected the first roadmap's migration mechanics and dependency graph.
 
 ### Open engineering work
 
-- complete the Stage 3 Data Portability destructive-adapter and export-UnitOfWork cutovers;
 - truthful calibration facts, schema, engine, persistence, and user-path integration;
 - Programs/Training co-write retirement;
 - the Part B boundary contract (`PART_B_BOUNDARY_SPEC.md` + ADR 0010) — authored after Stage 6,
@@ -371,20 +373,22 @@ No runtime implementation begins until this gate is green.
   saturation, paginated dormant-session cleanup, and provider-upgrade fail-closed tests pass.
   One-shot host/operator processes use the serialized external slot and never instantiate app
   pools; a real CLI-under-saturation case stays within budget. Until Stage 9 removes the Data
-  Portability operator, only its reset/subject-deletion verbs use one manifest-declared temporary
-  table/verb-scoped leased-client adapter with no raw connection/Drizzle escape; Identity recovery
-  uses scoped Identity repositories. The temporary adapter is not a new owner and is removed with
-  the operator. Product-
+  Portability operator, reset/subject-deletion execution uses one manifest-declared temporary
+  table/verb-scoped leased-client adapter with no raw connection/Drizzle escape, and subject export
+  uses a separate read-only, subject-scoped temporary projection inside its `UnitOfWork`; Identity
+  recovery uses scoped Identity repositories. Neither temporary adapter is a new owner, and both
+  are removed with the operator. Product-
   exclusive fencing is substrate-only here—reset-versus-every-product-writer linearization is not
   claimed until Stage 9 moves every writer to the shared side.
   Ownership/architecture suites remain green.
-- **Non-goals:** no calibration, completion, audit, safety-hold, Programs, or Data Portability
-  production gateway is invented before its accepted consumer; Stage 3 moves only the Identity
-  epoch/auth lifecycle data and neutral UoW ports required by the live substrate. Subject generation
-  waits for Stage 4's atomic setup/deletion cutover.
+- **Non-goals:** no calibration, completion, audit, safety-hold, Programs, or public owner gateway
+  is invented before its accepted consumer. Stage 3 moves the Identity epoch/auth lifecycle and
+  existing Data Portability export/destructive consumers onto the neutral UoW substrate through
+  explicitly temporary scoped adapters; it does not claim the Stage 9 public owner-port endpoint.
+  Subject generation waits for Stage 4's atomic setup/deletion cutover.
 - **Review gate:** transaction lifetime/atomicity and architecture-boundary lenses.
 
-#### Stage 3 implementation checkpoint — 2026-07-16 *(IN PROGRESS)*
+#### Stage 3 implementation checkpoint — 2026-07-16 *(COMPLETE)*
 
 - The nominal UnitOfWork and prelocked-session contracts, PostgreSQL transaction
   substrate, scoped Drizzle bridge, runtime mutation authority, and content-lock-plan
@@ -396,14 +400,21 @@ No runtime implementation begins until this gate is green.
   Migration and observational startup preflight share one serialized, separately
   budgeted one-shot client, normalize `search_path`, verify role allowance, and never
   instantiate application pools.
-- Static/type/unit/integration/build gates and the 19-migration disposable
-  backup→wipe→restore drill are green at code checkpoint `131222a`; independent
-  transaction/Identity, connection-budget, and one-shot-lifecycle reviews report no
-  unresolved finding in the completed slices.
-- Stage 3 is not complete: Data Portability still needs its epoch-bound destructive
-  adapter and export UnitOfWork cutovers, followed by the cumulative Stage 3 review and
-  certification gate. The retained 2026-07-13 network-denied browser evidence predates
-  this topology and is not relabeled as current proof.
+- Data Portability destructive execution now captures and transactionally rechecks exact
+  actor/role/session/epoch authority inside serializable UoWs, using only the temporary
+  table/verb-scoped adapter. Subject export uses one product-shared, subject-shared,
+  repeatable-read, read-only UoW whose first transactional product check revalidates Identity.
+  Short-lived signed, nonce-bearing result notices bind authenticated rendering to the exact actor;
+  generic verification is limited to post-destruction sign-in/bootstrap orientation and never
+  authorizes a mutation.
+- Static/type/unit/integration/build gates are green through committed code checkpoint `6117fbe`:
+  151 unit files/1,779 tests, 20 integration files/202 tests, and the focused five-file ownership
+  suite's 355 tests. The refreshed 19-migration/28-trigger backup→wipe→restore drill and complete
+  19/19 outbound-network-denied browser selection also pass against that tree.
+- Independent transaction/Identity, connection-budget, Data Portability, ownership/scanner, and
+  cumulative architecture reviews report no unresolved critical or major finding. Stage 4 is the
+  next implementation gate; the temporary Data Portability operator and public owner-port/read-
+  boundary work remain explicitly scheduled for Stage 9.
 
 ### Stage 4 — calibration and loadability persistence skeleton
 
@@ -996,7 +1007,8 @@ No runtime implementation begins until this gate is green.
   (C1–C5 options, costed), §6.3 remains the active blocker-closure rule, and §5.3's write-fence
   scanner contract remains normative — the new read/private-import and public-entrypoint scanner
   contract extends that base rather than starting fresh; and
-  [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule —
+  [ADR 0009](adr/0009-calibration-live-contract.md) establishes the normative-contract
+  precedent applied here —
   exact discriminants, bounds, and lock identities "live in the normative specification … changing
   them requires an explicit ADR/spec amendment, not an implementation shortcut." The deliverable
   extracts and expands this DoD into that contract with falsifiable definition-of-done items,
@@ -1093,7 +1105,7 @@ Stages 0–2  decisions/fence (DONE)
        ▼
 Phase 0  implementation contract + doc convergence (DONE)
        ▼
-Stage 3  lifecycle + UnitOfWork substrate
+Stage 3  lifecycle + UnitOfWork substrate (DONE)
        ▼
 Stage 4  schema/ports/loadability/portability
        ▼
@@ -1147,7 +1159,7 @@ evidence only and is never represented as the independent human release reviews 
 | Stage 1 | #10 | typecheck/format/schema suite recorded in PR | three adversarial boundary rounds |
 | Stage 2 | #12; corrections #13 | docs-only validation | acceptance + roadmap certification |
 | Phase 0 | this Phase 0 contract commit | `pnpm check`; `pnpm docs:check`; `pnpm typecheck`; `pnpm test` (70 files, 570 tests); `git diff --check` | exact-tree architecture/integrity, product/status, and content-lock gates green; no unresolved critical/major |
-| Stage 3 | in progress — `a93ebe1` through `131222a` | `pnpm check`; `pnpm docs:check`; `pnpm typecheck`; committed code checkpoint: 130 unit files/1194 tests; `pnpm test:integration` (19 files, 194 tests); reviewed-mode LLM-disabled build; 19-migration backup/restore drill | completed transaction/Identity, connection-budget, and one-shot-lifecycle slices independently green; Data Portability/export and cumulative disposition pending |
+| Stage 3 | complete — `a93ebe1` through `6117fbe` | `pnpm validate` (151 unit files, 1,779 tests, reviewed-mode LLM-disabled build); `pnpm test:integration` (20 files, 202 tests); focused ownership (5 files, 355 tests); 19-migration/28-trigger backup/restore drill; 19/19 outbound-network-denied E2E | transaction/Identity, connection-budget, Data Portability, ownership/scanner, and cumulative architecture gates green; no unresolved critical/major |
 | Stage 4 | pending | pending | pending |
 | Stage 5 | pending | pending | pending |
 | Stage 6 | pending | pending | pending |
