@@ -2,6 +2,7 @@ import type { QueryResult, QueryResultRow } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import {
   CredentialAdministrationCaptureInvariantError,
+  CredentialAdministrationCaptureStaleError,
   captureLocalUserCreationMutation,
   captureMemberResetIssuanceMutation,
   type IdentityCredentialAdministrationQuery,
@@ -448,12 +449,12 @@ describe('credential-administration mutation capture', () => {
     )
   })
 
-  it('rejects expired or mismatched sessions, malformed tokens, and forged captures', async () => {
+  it('classifies expired sessions as stale while rejecting mismatches, malformed tokens, and forged captures', async () => {
     const expired = querySequence(
       snapshotRow({ sessionExpiresAt: new Date('2026-07-15T11:59:59.999Z') }),
     )
     await expect(resetCapture(expired.surface)).rejects.toBeInstanceOf(
-      CredentialAdministrationCaptureInvariantError,
+      CredentialAdministrationCaptureStaleError,
     )
 
     const mismatched = querySequence(snapshotRow({ sessionUserId: 'other-user' }))
@@ -483,6 +484,23 @@ describe('credential-administration mutation capture', () => {
     await expect(
       recheckMemberResetIssuanceMutation(malformed.surface, forgedReset),
     ).rejects.toThrow('was not issued by Identity')
+  })
+
+  it('classifies a consumed render-bound local target as stale without weakening orphan checks', async () => {
+    const consumed = querySequence(snapshotRow())
+    await expect(localCapture(consumed.surface)).rejects.toBeInstanceOf(
+      CredentialAdministrationCaptureStaleError,
+    )
+
+    const orphanCredential = querySequence(
+      snapshotRow({
+        target: false,
+        credentials: [credential('actor-owner'), credential('target-member')],
+      }),
+    )
+    await expect(localCapture(orphanCredential.surface)).rejects.toBeInstanceOf(
+      CredentialAdministrationCaptureInvariantError,
+    )
   })
 
   it('rejects database rows that are not in the promised stable lexical order', async () => {

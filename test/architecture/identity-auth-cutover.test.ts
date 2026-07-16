@@ -264,6 +264,7 @@ const identityAuthPolicies = policy([
     'src/composition/identity-credential-administration.ts',
     [
       'CredentialAdministrationAuthorityUnavailableError',
+      'CredentialAdministrationCaptureStaleError',
       'captureLocalUserCreationMutation',
       'captureMemberResetIssuanceMutation',
       'localUserCreationMutationCaptureView',
@@ -422,6 +423,11 @@ const identityAuthPolicies = policy([
     'src/modules/identity/server/bootstrap.ts',
     ['createOwnerFromWebWithBootstrapCode'],
   ],
+  [
+    'src/composition/identity-credential-administration.ts',
+    'src/app/settings/actions.ts',
+    ['getProductionIdentityCredentialAdministrationMutationPort'],
+  ],
 ])
 
 const externalHostBootstrapPolicies = policy([
@@ -456,6 +462,40 @@ describe('Identity authentication cutover boundaries', () => {
 
   it('keeps every scoped/provider/capture seam on exact audited consumers', () => {
     expect(exactRuntimeImportViolations(sourceFiles, identityAuthPolicies)).toEqual([])
+  })
+
+  it('keeps settings credential administration off every retired live mutation path', () => {
+    const actions = resolve(sourceRoot, 'app/settings/actions.ts')
+    const forbiddenTargets = new Set(
+      [
+        'modules/identity/infrastructure/destructive-reauthentication.ts',
+        'modules/identity/infrastructure/local-users.ts',
+        'modules/identity/recovery/member-reset.ts',
+        'modules/identity/server/actor.ts',
+        'modules/identity/server/credential-lifecycle.ts',
+        'modules/identity/server/local-users.ts',
+        'modules/identity/server/web-credential-context.ts',
+        'platform/db/client.ts',
+      ].map((path) => resolve(sourceRoot, path)),
+    )
+    const violations = (files: ReadonlyMap<string, string>) =>
+      analyzeImportGraph(files, { sourceRoot })
+        .edges.filter(
+          (edge) => edge.from === actions && edge.to && forbiddenTargets.has(edge.to),
+        )
+        .map((edge) => `${projectPath(edge.from)} -> ${projectPath(edge.to as string)}`)
+        .sort()
+
+    expect(violations(sourceFiles)).toEqual([])
+
+    const synthetic = new Map(sourceFiles)
+    synthetic.set(
+      actions,
+      `${sourceFiles.get(actions) ?? ''}\nimport { issueMemberReset } from '@/modules/identity/recovery/member-reset'\nvoid issueMemberReset\n`,
+    )
+    expect(violations(synthetic)).toContain(
+      'src/app/settings/actions.ts -> src/modules/identity/recovery/member-reset.ts',
+    )
   })
 
   it('seals the external-host adapter and bootstrap composition across src and scripts', () => {

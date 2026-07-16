@@ -306,6 +306,14 @@ export class CredentialAdministrationAuthorityUnavailableError extends Error {
   }
 }
 
+/** A valid rendered command whose session or one-use target was consumed before capture. */
+export class CredentialAdministrationCaptureStaleError extends Error {
+  constructor() {
+    super('The rendered credential-administration command is no longer current.')
+    this.name = 'CredentialAdministrationCaptureStaleError'
+  }
+}
+
 type SnapshotRow = QueryResultRow & {
   readonly product_mutation_epoch?: unknown
   readonly installation_owner_user_id?: unknown
@@ -348,6 +356,10 @@ function staleCapture(): TypeError {
 
 function authorityUnavailable(): never {
   throw new CredentialAdministrationAuthorityUnavailableError()
+}
+
+function captureStale(): never {
+  throw new CredentialAdministrationCaptureStaleError()
 }
 
 function identity(value: unknown): string {
@@ -670,7 +682,7 @@ function credentialPresence(
 
 function assertActiveOwner(snapshot: AdministrationSnapshot, now: Date): void {
   if (!Number.isFinite(now.getTime())) throw new TypeError('Capture clock is invalid.')
-  if (snapshot.session.expiresAt.getTime() <= now.getTime()) invariant()
+  if (snapshot.session.expiresAt.getTime() <= now.getTime()) captureStale()
   const actorCredentials = credentialsFor(snapshot, snapshot.actor.id)
   if (actorCredentials.length !== 1 || !actorCredentials[0]?.password) invariant()
 }
@@ -708,9 +720,8 @@ export async function captureLocalUserCreationMutation(
   if (snapshot.actor.id === binding.targetUserId) {
     throw new TypeError('A preallocated target must differ from the authenticated actor.')
   }
-  if (snapshot.target || credentialsFor(snapshot, binding.targetUserId).length > 0) {
-    return invariant()
-  }
+  if (snapshot.target) return captureStale()
+  if (credentialsFor(snapshot, binding.targetUserId).length > 0) return invariant()
   if (snapshot.memberResetState || snapshot.memberResetVerifications.length > 0) {
     return invariant()
   }
