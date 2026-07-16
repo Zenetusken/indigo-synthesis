@@ -11,6 +11,7 @@ import type {
   InstallationMutationEpoch,
   InstanceResetRequest,
   NewCommandAuthorizer,
+  SubjectDeletionRequest,
   SubjectProductMutationRequest,
   UnitOfWorkContentScope,
   UnitOfWorkRequest,
@@ -763,6 +764,69 @@ type InstanceResetAttemptRequest = Extract<
   DestructiveReauthenticationAttemptRequest,
   { readonly authority: { readonly purpose: 'instance-reset' } }
 >
+
+type SubjectDeletionAttemptRequest = Extract<
+  DestructiveReauthenticationAttemptRequest,
+  { readonly authority: { readonly purpose: 'trainee-data-deletion' } }
+>
+
+async function promoteSubjectDeletionAuthority(input: {
+  readonly attempt: IssuedDestructiveAttempt<'trainee-data-deletion'>
+  readonly epoch: InstallationMutationEpoch
+  readonly lease: SubjectDeletionRequest['session']['lease']
+}): Promise<SubjectDeletionRequest['authority']> {
+  const request: SubjectDeletionAttemptRequest = {
+    operation: 'destructive-reauthentication-attempt',
+    authority: input.attempt.authority,
+    session: { kind: 'prelocked', lease: input.lease },
+    expectedEpoch: input.epoch,
+    productFence: 'shared',
+    subjectLock: null,
+    content: { kind: 'none' },
+    mode: { isolation: 'read-committed', access: 'read-write' },
+  }
+  const authority = await unitOfWork.run(request, async ({ gateways }) =>
+    gateways.markReauthenticationSucceeded(),
+  )
+  if (authority.purpose !== 'trainee-data-deletion') {
+    throw new Error('subject-deletion attempt minted a mismatched authority')
+  }
+  return authority
+}
+
+async function runSubjectDeletion<Result>(input: {
+  readonly callback: (gateways: WriteGateways) => Promise<Result>
+  readonly epoch: InstallationMutationEpoch
+  readonly subjectId: string
+}): Promise<Result> {
+  const authenticated = authorityIssuer.authenticatedSession({
+    expectedEpoch: input.epoch,
+    actorUserId: input.subjectId,
+    sessionId: `${input.subjectId}:integration-subject-deletion-session`,
+    expectedRole: 'member',
+  })
+  const attempt = authorityIssuer.traineeDataDeletionAttempt({ authenticated })
+  const prelockedPort = createPlatformPrelockedSessionPort()
+  const intent = createPlatformPrelockedSessionIntentFactory().subjectDeletion(attempt)
+  return prelockedPort.withPrelockedSessionLease(intent, async (lease) => {
+    const authority = await promoteSubjectDeletionAuthority({
+      attempt,
+      epoch: input.epoch,
+      lease,
+    })
+    const request: SubjectDeletionRequest = {
+      operation: 'subject-deletion',
+      authority,
+      session: { kind: 'prelocked', lease },
+      expectedEpoch: input.epoch,
+      productFence: 'shared',
+      subjectLock: { subjectUserId: input.subjectId, mode: 'exclusive' },
+      content: { kind: 'none' },
+      mode: { isolation: 'serializable', access: 'read-write' },
+    }
+    return unitOfWork.run(request, async ({ gateways }) => input.callback(gateways))
+  })
+}
 
 async function promoteInstanceResetAuthority(input: {
   readonly attempt: IssuedDestructiveAttempt<'instance-reset'>
@@ -1655,6 +1719,73 @@ describe('PostgreSQL UnitOfWork integration', () => {
          WHERE id = 'detached-row'`,
       ),
     ).toMatchObject({ rows: [{ count: 0 }] })
+  })
+
+  it('classifies a real COMMIT-side serialization rollback and reuses the healthy pool', async () => {
+    const epoch = await currentEpoch()
+    const bothRead = deferred()
+    const bothWrote = deferred()
+    const firstMayCommit = deferred()
+    const secondMayCommit = deferred()
+    let readers = 0
+    let writers = 0
+
+    const participate = async (
+      gateways: WriteGateways,
+      id: string,
+      mayCommit: ReturnType<typeof deferred>,
+    ): Promise<string> => {
+      expect(await gateways.count('a')).toBe(0)
+      readers += 1
+      if (readers === 2) bothRead.resolve()
+      await bothRead.promise
+
+      await gateways.insert('a', id)
+      writers += 1
+      if (writers === 2) bothWrote.resolve()
+      await bothWrote.promise
+      await mayCommit.promise
+      return id
+    }
+
+    const first = runSubjectDeletion({
+      epoch,
+      subjectId: 'subject-ssi-first',
+      callback: (gateways) => participate(gateways, 'ssi-first', firstMayCommit),
+    })
+    const second = runSubjectDeletion({
+      epoch,
+      subjectId: 'subject-ssi-second',
+      callback: (gateways) => participate(gateways, 'ssi-second', secondMayCommit),
+    })
+
+    try {
+      await bothWrote.promise
+      firstMayCommit.resolve()
+      await expect(first).resolves.toBe('ssi-first')
+      secondMayCommit.resolve()
+      await expect(second).rejects.toMatchObject({
+        code: 'uow.transaction-aborted',
+      })
+    } finally {
+      firstMayCommit.resolve()
+      secondMayCommit.resolve()
+      await Promise.allSettled([first, second])
+    }
+
+    expect(
+      await inspector.query(`SELECT id FROM uow_test_owner_a ORDER BY id`),
+    ).toMatchObject({ rows: [{ id: 'ssi-first' }] })
+    await expect(
+      runSubjectDeletion({
+        epoch,
+        subjectId: 'subject-ssi-replacement',
+        callback: async (gateways) => {
+          await gateways.insert('a', 'ssi-replacement')
+          return gateways.count('a')
+        },
+      }),
+    ).resolves.toBe(2)
   })
 
   it('treats PostgreSQL false COMMIT as an aborted transaction', async () => {

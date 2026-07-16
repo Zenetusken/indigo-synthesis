@@ -2335,6 +2335,37 @@ describe('PostgresUnitOfWork', () => {
     )
   })
 
+  it.each([
+    '40000',
+    '40001',
+    '40002',
+    '40P01',
+  ])('maps a confirmed PostgreSQL COMMIT rollback (%s) without retiring the healthy session', async (code) => {
+    const rollback = Object.assign(new Error('PostgreSQL rolled back COMMIT'), { code })
+    const database = fakeClient((text) =>
+      text === 'COMMIT' ? Promise.reject(rollback) : undefined,
+    )
+
+    await expect(
+      withWriteRequest(unitOfWork(database), async () => 'must not report success'),
+    ).rejects.toMatchObject({ code: 'uow.transaction-aborted' })
+    expect(database.release).toHaveBeenCalledWith()
+  })
+
+  it('preserves statement-completion uncertainty at COMMIT', async () => {
+    const uncertain = Object.assign(new Error('statement completion is unknown'), {
+      code: '40003',
+    })
+    const database = fakeClient((text) =>
+      text === 'COMMIT' ? Promise.reject(uncertain) : undefined,
+    )
+
+    await expect(
+      withWriteRequest(unitOfWork(database), async () => 'uncertain'),
+    ).rejects.toMatchObject({ code: 'uow.commit-outcome-unknown' })
+    expect(database.release).toHaveBeenCalledWith(uncertain)
+  })
+
   it('retires a checkout error replayed before the ordinary continuation without SQL', async () => {
     const database = fakeClient()
     const connectionFailure = Object.assign(

@@ -47,6 +47,19 @@ const credentialInstanceFenceKey = `${credentialLockNamespace}instance-fence`
 const productMutationFenceKey = 'indigo:product-mutation-fence'
 const maximumPostgresParameterCount = 65_535
 
+function confirmedCommitRollback(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error)) return false
+  switch (error.code) {
+    case '40000': // transaction_rollback
+    case '40001': // serialization_failure
+    case '40002': // transaction_integrity_constraint_violation
+    case '40P01': // deadlock_detected
+      return true
+    default:
+      return false
+  }
+}
+
 type SessionLock = {
   readonly key: string
   readonly mode: 'exclusive' | 'shared'
@@ -1272,13 +1285,16 @@ export class PostgresUnitOfWork<ReadGateways, WriteGateways extends ReadGateways
         transactionCommitted = true
       } catch (error) {
         transactionStarted = false
-        poison ??= error
         if (
           error instanceof CoordinationError &&
           error.code === 'uow.transaction-aborted'
         ) {
           throw error
         }
+        if (confirmedCommitRollback(error)) {
+          throw new CoordinationError('uow.transaction-aborted')
+        }
+        poison ??= error
         skipDatabaseCleanup = true
         throw new CoordinationError('uow.commit-outcome-unknown')
       }
