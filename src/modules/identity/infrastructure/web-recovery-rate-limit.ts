@@ -178,14 +178,25 @@ async function reserveDimension(
     return
   }
 
+  // Requests carry their fixed command-entry time through queueing. An older request can
+  // therefore acquire this row after a newer request has already advanced it. Preserve that
+  // request-time admission decision, but never move durable bucket clocks backwards (or violate
+  // window_started_at <= last_attempt_at) when persisting the serialized attempt.
+  const effectiveAttemptAt = new Date(
+    Math.max(
+      input.now.getTime(),
+      input.bucket.windowStartedAt.getTime(),
+      input.bucket.lastAttemptAt.getTime(),
+    ),
+  )
   const attemptCount = input.bucket.attemptCount + 1
   await database
     .update(webRecoveryRateLimitBuckets)
     .set({
       attemptCount,
       retryAfter: attemptCount >= maximumAttempts ? priorWindowEnd : null,
-      lastAttemptAt: input.now,
-      updatedAt: input.now,
+      lastAttemptAt: effectiveAttemptAt,
+      updatedAt: effectiveAttemptAt,
     })
     .where(
       and(

@@ -1,9 +1,11 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useActionState, useEffect, useRef } from 'react'
 import { ErrorSummary } from '@/components/error-summary'
 import { Field } from '@/components/field'
 import { SubmitButton } from '@/components/submit-button'
+import type { OwnerRecoveryRedemptionActionBinding } from '@/modules/identity/application/action-binding'
 import styles from '../recovery-form.module.css'
 import { type RecoverOwnerActionState, recoverOwnerAction } from './actions'
 
@@ -11,11 +13,19 @@ const initialState: RecoverOwnerActionState = {
   kind: 'idle',
   email: '',
   message: null,
+  stale: false,
 }
 
-export function RecoverOwnerForm() {
+export function RecoverOwnerForm({
+  actionBinding,
+}: {
+  readonly actionBinding: OwnerRecoveryRedemptionActionBinding
+}) {
   const [state, action] = useActionState(recoverOwnerAction, initialState)
   const formRef = useRef<HTMLFormElement>(null)
+  const issuedBindingRef = useRef(actionBinding)
+  const handledStaleResponse = useRef<RecoverOwnerActionState | null>(null)
+  const router = useRouter()
 
   useEffect(() => {
     if (state.kind === 'rejected') {
@@ -24,7 +34,24 @@ export function RecoverOwnerForm() {
       if (email instanceof HTMLInputElement) email.value = state.email
       document.querySelector<HTMLElement>('#recover-error-summary')?.focus()
     }
-  }, [state])
+    if (state.stale && handledStaleResponse.current !== state) {
+      handledStaleResponse.current = state
+      router.refresh()
+    } else if (!state.stale) {
+      handledStaleResponse.current = null
+    }
+  }, [router, state])
+
+  useEffect(() => {
+    if (issuedBindingRef.current === actionBinding) return
+    const form = formRef.current
+    const email = form?.elements.namedItem('email')
+    const preservedEmail = email instanceof HTMLInputElement ? email.value : ''
+    form?.reset()
+    const refreshedEmail = form?.elements.namedItem('email')
+    if (refreshedEmail instanceof HTMLInputElement) refreshedEmail.value = preservedEmail
+    issuedBindingRef.current = actionBinding
+  }, [actionBinding])
 
   const errors = state.message
     ? [{ key: 'recover-rejected', message: state.message }]
@@ -35,6 +62,7 @@ export function RecoverOwnerForm() {
 
   return (
     <form action={action} className={styles.form} noValidate ref={formRef}>
+      <input name="actionBinding" type="hidden" value={actionBinding} />
       <ErrorSummary
         errors={errors}
         id="recover-error-summary"

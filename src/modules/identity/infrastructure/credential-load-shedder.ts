@@ -136,6 +136,7 @@ export function admitCredentialLoadShedder(input: {
   readonly purpose: CredentialLoadShedderPurpose
   readonly email: string
   readonly clientAddress: string
+  readonly now?: Date
 }): CredentialLoadShedderAdmission {
   productionLoadShedder ??= createCredentialLoadShedder()
   return productionLoadShedder.admit(input)

@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { BrandMark } from '@/components'
-import { getInstallationStatus } from '@/modules/identity/application/installation'
 import { getActor } from '@/modules/identity/server/actor'
+import { getMemberResetPageInstallation } from '@/modules/identity/server/recovery-page'
 import { getServerConfig } from '@/platform/config/server'
 import styles from '../auth-layout.module.css'
 import { ResetCredentialForm } from './reset-form'
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = { title: 'Reset trainee password' }
 
 export default async function ResetPage() {
-  const installation = await getInstallationStatus()
+  const installation = await getMemberResetPageInstallation()
   if (installation.kind === 'open') redirect('/bootstrap')
   if (await getActor()) redirect('/')
   const contentModeLabel =
@@ -33,7 +33,7 @@ export default async function ResetPage() {
           <h1 id="reset-heading">Choose a new password.</h1>
           <p>Use the one-time code supplied by this instance’s owner.</p>
         </header>
-        <ResetCredentialForm />
+        <ResetCredentialForm actionBinding={installation.actionBinding} />
         <p className={styles.footnote}>
           No code yet? Ask the owner of this instance.{' '}
           <Link href={{ pathname: '/sign-in' }}>Return to sign in</Link>.

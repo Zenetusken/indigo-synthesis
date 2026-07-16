@@ -21,6 +21,8 @@ export type ServerBootstrapInstallationState =
     }
   | { readonly kind: 'closed' }
 
+export type ServerRecoveryPageInstallationState = ServerSignInInstallationState
+
 /**
  * Identity-owned issuance projection for a server-rendered authenticated action. The raw
  * lifecycle value remains server-side and is committed only into an opaque action binding.
@@ -46,8 +48,8 @@ export async function getInstallationOwnerUserId(): Promise<string | null> {
   return (await getServerActorInstallationState()).ownerUserId
 }
 
-/** Coherent installation projection used to issue one anti-ABA sign-in page binding. */
-export async function getServerSignInInstallationState(): Promise<ServerSignInInstallationState> {
+/** Shared coherent projection for public sign-in and recovery binding issuance. */
+async function getServerPublicInstallationState(): Promise<ServerSignInInstallationState> {
   const [state] = await getDb()
     .select({
       ownerUserId: installationState.ownerUserId,
@@ -71,6 +73,16 @@ export async function getServerSignInInstallationState(): Promise<ServerSignInIn
     kind: 'closed',
     productMutationEpoch: state.productMutationEpoch,
   }
+}
+
+/** Coherent installation projection used to issue one anti-ABA sign-in page binding. */
+export function getServerSignInInstallationState(): Promise<ServerSignInInstallationState> {
+  return getServerPublicInstallationState()
+}
+
+/** Coherent closed/open projection for either unauthenticated recovery page. */
+export function getServerRecoveryPageInstallationState(): Promise<ServerRecoveryPageInstallationState> {
+  return getServerPublicInstallationState()
 }
 
 /** Coherent installation projection used to issue one anti-ABA bootstrap page binding. */

@@ -1879,6 +1879,52 @@ describe('identity database boundary', () => {
     ])
   })
 
+  it('does not move durable rate-bucket clocks backward for an overtaken request', async () => {
+    const attempt = {
+      purpose: 'sign-in' as const,
+      email: 'overtaken@example.test',
+      clientAddress: '198.51.100.9',
+    }
+    const newerEntry = new Date('2026-07-15T12:00:02.000Z')
+    const olderEntry = new Date('2026-07-15T12:00:01.000Z')
+
+    await getDb().delete(webRecoveryRateLimitBuckets)
+    await expect(
+      getDb().transaction((transaction) =>
+        createScopedWebRecoveryRateLimitGateway(transaction).admit({
+          ...attempt,
+          now: newerEntry,
+        }),
+      ),
+    ).resolves.toEqual({ admitted: true })
+    await expect(
+      getDb().transaction((transaction) =>
+        createScopedWebRecoveryRateLimitGateway(transaction).admit({
+          ...attempt,
+          now: olderEntry,
+        }),
+      ),
+    ).resolves.toEqual({ admitted: true })
+
+    const buckets = await getDb()
+      .select({
+        attemptCount: webRecoveryRateLimitBuckets.attemptCount,
+        lastAttemptAt: webRecoveryRateLimitBuckets.lastAttemptAt,
+        updatedAt: webRecoveryRateLimitBuckets.updatedAt,
+      })
+      .from(webRecoveryRateLimitBuckets)
+      .orderBy(webRecoveryRateLimitBuckets.scope, webRecoveryRateLimitBuckets.bucketKey)
+
+    expect(buckets).toHaveLength(2)
+    expect(buckets).toEqual(
+      buckets.map(() => ({
+        attemptCount: 2,
+        lastAttemptAt: newerEntry,
+        updatedAt: newerEntry,
+      })),
+    )
+  })
+
   it('does zero rate-bucket DML when a queued dimension is already throttled', async () => {
     async function admit(clientAddress: string) {
       return getDb().transaction((transaction) =>

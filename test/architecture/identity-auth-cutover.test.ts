@@ -178,6 +178,14 @@ function policy(
   return result
 }
 
+function sealTargets(policies: ImportPolicy, targets: readonly string[]): ImportPolicy {
+  const result = new Map(policies)
+  for (const target of targets) {
+    if (!result.has(target)) result.set(target, new Map())
+  }
+  return result
+}
+
 const identityAuthPolicies = policy([
   [
     'src/modules/identity/infrastructure/scoped-mutation-auth.ts',
@@ -200,6 +208,11 @@ const identityAuthPolicies = policy([
   [
     'src/modules/identity/infrastructure/web-recovery-rate-limit.ts',
     'src/composition/identity-auth-mutations.ts',
+    ['createScopedWebRecoveryRateLimitGateway'],
+  ],
+  [
+    'src/modules/identity/infrastructure/web-recovery-rate-limit.ts',
+    'src/modules/identity/infrastructure/scoped-browser-recovery.ts',
     ['createScopedWebRecoveryRateLimitGateway'],
   ],
   [
@@ -229,6 +242,14 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/modules/identity/infrastructure/action-binding.ts',
+    'src/composition/identity-recovery-mutations.ts',
+    [
+      'verifyMemberResetRedemptionActionBinding',
+      'verifyOwnerRecoveryRedemptionActionBinding',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/actor.ts',
     [
       'issueCheckedSignOutActionBinding',
@@ -245,6 +266,34 @@ const identityAuthPolicies = policy([
     'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/bootstrap.ts',
     ['issueOwnerBootstrapActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
+    'src/modules/identity/server/recovery-page.ts',
+    [
+      'issueMemberResetRedemptionActionBinding',
+      'issueOwnerRecoveryRedemptionActionBinding',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/installation.ts',
+    'src/modules/identity/server/actor.ts',
+    ['getServerActorInstallationState'],
+  ],
+  [
+    'src/modules/identity/infrastructure/installation.ts',
+    'src/modules/identity/server/bootstrap.ts',
+    ['getServerBootstrapInstallationState'],
+  ],
+  [
+    'src/modules/identity/infrastructure/installation.ts',
+    'src/modules/identity/server/recovery-page.ts',
+    ['getServerRecoveryPageInstallationState'],
+  ],
+  [
+    'src/modules/identity/infrastructure/installation.ts',
+    'src/modules/identity/server/sign-in-page.ts',
+    ['getServerSignInInstallationState'],
   ],
   [
     'src/modules/identity/infrastructure/bootstrap-mutation.ts',
@@ -289,6 +338,26 @@ const identityAuthPolicies = policy([
     ['localUserCreationMutationScope', 'memberResetIssuanceMutationScope'],
   ],
   [
+    'src/modules/identity/infrastructure/recovery-mutation.ts',
+    'src/composition/identity-recovery-mutations.ts',
+    [
+      'captureMemberResetRedemption',
+      'captureOwnerRecoveryWebRedemption',
+      'memberResetRedemptionCaptureView',
+      'ownerRecoveryWebRedemptionCaptureView',
+      'recheckMemberResetRedemption',
+      'recheckOwnerRecoveryWebRedemption',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/recovery-mutation.ts',
+    'src/modules/identity/infrastructure/scoped-browser-recovery.ts',
+    [
+      'claimMemberResetRedemptionMutationScope',
+      'claimOwnerRecoveryWebRedemptionMutationScope',
+    ],
+  ],
+  [
     'src/modules/identity/infrastructure/scoped-credential-administration.ts',
     'src/composition/identity-credential-administration.ts',
     [
@@ -303,6 +372,14 @@ const identityAuthPolicies = policy([
     [
       'createScopedLocalUserCreationReauthenticationGateway',
       'createScopedMemberResetIssuanceReauthenticationGateway',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/scoped-browser-recovery.ts',
+    'src/composition/identity-recovery-mutations.ts',
+    [
+      'createScopedMemberResetRedemptionMutationGateway',
+      'createScopedOwnerRecoveryWebRedemptionMutationGateway',
     ],
   ],
   [
@@ -326,6 +403,11 @@ const identityAuthPolicies = policy([
     ['createScopedDrizzleDatabase'],
   ],
   [
+    'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/identity-recovery-mutations.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-auth-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
@@ -338,6 +420,11 @@ const identityAuthPolicies = policy([
   [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-credential-administration.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/identity-recovery-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
@@ -369,6 +456,34 @@ const identityAuthPolicies = policy([
     ['localUserCreationMutationCommandView', 'memberResetIssuanceMutationCommandView'],
   ],
   [
+    'src/modules/identity/server/recovery-page.ts',
+    'src/app/reset/page.tsx',
+    ['getMemberResetPageInstallation'],
+  ],
+  [
+    'src/modules/identity/server/recovery-page.ts',
+    'src/app/recover/page.tsx',
+    ['getOwnerRecoveryPageInstallation'],
+  ],
+  [
+    'src/modules/identity/server/recovery-redemption-command.ts',
+    'src/app/reset/actions.ts',
+    ['captureMemberResetRedemptionMutationCommand'],
+  ],
+  [
+    'src/modules/identity/server/recovery-redemption-command.ts',
+    'src/app/recover/actions.ts',
+    ['captureOwnerRecoveryRedemptionMutationCommand'],
+  ],
+  [
+    'src/modules/identity/server/recovery-redemption-command.ts',
+    'src/composition/identity-recovery-mutations.ts',
+    [
+      'memberResetRedemptionMutationCommandView',
+      'ownerRecoveryRedemptionMutationCommandView',
+    ],
+  ],
+  [
     'src/modules/identity/infrastructure/auth.ts',
     'src/composition/identity-auth-mutations.ts',
     ['clearProvenAbsentIdentitySession', 'verifyIdentitySessionCookie'],
@@ -387,6 +502,16 @@ const identityAuthPolicies = policy([
     'src/modules/identity/infrastructure/auth.ts',
     'src/modules/identity/server/auth-handler.ts',
     ['handleIdentityGetSession'],
+  ],
+  [
+    'src/modules/identity/infrastructure/auth.ts',
+    'scripts/db/reset-e2e.ts',
+    ['resetAuthForTests'],
+  ],
+  [
+    'src/modules/identity/infrastructure/auth.ts',
+    'scripts/llm/dry-run-session-synthesize.ts',
+    ['resetAuthForTests'],
   ],
   [
     'src/modules/identity/infrastructure/identity-auth-config.ts',
@@ -414,27 +539,14 @@ const identityAuthPolicies = policy([
     ['admitCredentialLoadShedder'],
   ],
   [
+    'src/modules/identity/infrastructure/credential-load-shedder.ts',
+    'src/modules/identity/server/recovery-redemption-command.ts',
+    ['admitCredentialLoadShedder'],
+  ],
+  [
     'src/composition/identity-auth-mutations.ts',
     'src/app/api/auth/[...all]/route.ts',
     ['getProductionIdentityAuthMutationPort'],
-  ],
-  [
-    'src/composition/identity-bootstrap-mutations.ts',
-    'src/modules/identity/server/bootstrap.ts',
-    ['createOwnerFromWebWithBootstrapCode'],
-  ],
-  [
-    'src/composition/identity-credential-administration.ts',
-    'src/app/settings/actions.ts',
-    ['getProductionIdentityCredentialAdministrationMutationPort'],
-  ],
-])
-
-const externalHostBootstrapPolicies = policy([
-  [
-    'src/platform/db/external-host-command.ts',
-    'src/composition/identity-bootstrap-mutations.ts',
-    ['withExternalHostCommand'],
   ],
   [
     'src/composition/identity-bootstrap-mutations.ts',
@@ -451,7 +563,53 @@ const externalHostBootstrapPolicies = policy([
     'scripts/llm/dry-run-session-synthesize.ts',
     ['createOwnerWithBootstrapCode', 'issueOwnerBootstrap'],
   ],
+  [
+    'src/composition/identity-credential-administration.ts',
+    'src/app/settings/actions.ts',
+    ['getProductionIdentityCredentialAdministrationMutationPort'],
+  ],
+  [
+    'src/composition/identity-recovery-mutations.ts',
+    'src/app/reset/actions.ts',
+    ['getProductionIdentityRecoveryMutationPort'],
+  ],
+  [
+    'src/composition/identity-recovery-mutations.ts',
+    'src/app/recover/actions.ts',
+    ['getProductionIdentityRecoveryMutationPort'],
+  ],
 ])
+
+const externalHostIdentityPolicies = sealTargets(
+  policy([
+    [
+      'src/platform/db/external-host-command.ts',
+      'src/composition/identity-bootstrap-mutations.ts',
+      ['withExternalHostCommand'],
+    ],
+    [
+      'src/composition/identity-bootstrap-mutations.ts',
+      'src/modules/identity/server/bootstrap.ts',
+      ['createOwnerFromWebWithBootstrapCode'],
+    ],
+    [
+      'src/composition/identity-bootstrap-mutations.ts',
+      'scripts/identity/bootstrap-owner.ts',
+      ['issueOwnerBootstrapFromHostCli'],
+    ],
+    [
+      'src/composition/identity-bootstrap-mutations.ts',
+      'scripts/llm/dry-run-session-synthesize.ts',
+      ['createOwnerWithBootstrapCode', 'issueOwnerBootstrap'],
+    ],
+    [
+      'src/modules/identity/recovery/owner-recovery.ts',
+      'scripts/identity/recover-owner.ts',
+      ['OwnerRecoveryError', 'issueOwnerRecovery', 'redeemOwnerRecovery'],
+    ],
+  ]),
+  ['src/modules/identity/recovery/member-reset.ts'],
+)
 
 describe('Identity authentication cutover boundaries', () => {
   const sourceFiles = readCodeSources(sourceRoot)
@@ -461,7 +619,19 @@ describe('Identity authentication cutover boundaries', () => {
   ])
 
   it('keeps every scoped/provider/capture seam on exact audited consumers', () => {
-    expect(exactRuntimeImportViolations(sourceFiles, identityAuthPolicies)).toEqual([])
+    expect(exactRuntimeImportViolations(productionFiles, identityAuthPolicies)).toEqual(
+      [],
+    )
+
+    const rogue = resolve(process.cwd(), 'scripts/identity/rogue-recovery.ts')
+    const synthetic = new Map(productionFiles)
+    synthetic.set(
+      rogue,
+      "import { createScopedMemberResetRedemptionMutationGateway } from '@/modules/identity/infrastructure/scoped-browser-recovery'\nvoid createScopedMemberResetRedemptionMutationGateway\n",
+    )
+    expect(exactRuntimeImportViolations(synthetic, identityAuthPolicies)).toContain(
+      'scripts/identity/rogue-recovery.ts: unauthorized broad import -> src/modules/identity/infrastructure/scoped-browser-recovery.ts',
+    )
   })
 
   it('keeps settings credential administration off every retired live mutation path', () => {
@@ -498,9 +668,53 @@ describe('Identity authentication cutover boundaries', () => {
     )
   })
 
-  it('seals the external-host adapter and bootstrap composition across src and scripts', () => {
+  it('keeps browser recovery actions off every retired live mutation and database path', () => {
+    const actions = [
+      resolve(sourceRoot, 'app/reset/actions.ts'),
+      resolve(sourceRoot, 'app/recover/actions.ts'),
+    ]
+    const forbiddenTargets = new Set(
+      [
+        'modules/identity/recovery/member-reset.ts',
+        'modules/identity/recovery/owner-recovery.ts',
+        'modules/identity/server/actor.ts',
+        'modules/identity/server/credential-lifecycle.ts',
+        'modules/identity/server/web-credential-context.ts',
+        'platform/db/client.ts',
+      ].map((path) => resolve(sourceRoot, path)),
+    )
+    const violations = (files: ReadonlyMap<string, string>) =>
+      analyzeImportGraph(files, { sourceRoot })
+        .edges.filter(
+          (edge) =>
+            actions.includes(edge.from) && edge.to && forbiddenTargets.has(edge.to),
+        )
+        .map((edge) => `${projectPath(edge.from)} -> ${projectPath(edge.to as string)}`)
+        .sort()
+
+    expect(violations(sourceFiles)).toEqual([])
+
+    for (const [action, injectedImport, expected] of [
+      [
+        actions[0],
+        "import { redeemMemberReset } from '@/modules/identity/recovery/member-reset'\nvoid redeemMemberReset\n",
+        'src/app/reset/actions.ts -> src/modules/identity/recovery/member-reset.ts',
+      ],
+      [
+        actions[1],
+        "import { getDb } from '@/platform/db/client'\nvoid getDb\n",
+        'src/app/recover/actions.ts -> src/platform/db/client.ts',
+      ],
+    ] as const) {
+      const synthetic = new Map(sourceFiles)
+      synthetic.set(action, `${sourceFiles.get(action) ?? ''}\n${injectedImport}`)
+      expect(violations(synthetic)).toContain(expected)
+    }
+  })
+
+  it('seals external-host Identity and retired browser recovery across src and scripts', () => {
     expect(
-      exactRuntimeImportViolations(productionFiles, externalHostBootstrapPolicies),
+      exactRuntimeImportViolations(productionFiles, externalHostIdentityPolicies),
     ).toEqual([])
 
     const rogue = resolve(process.cwd(), 'scripts/identity/rogue-host-capture.ts')
@@ -510,10 +724,28 @@ describe('Identity authentication cutover boundaries', () => {
       "import { withExternalHostCommand } from '@/platform/db/external-host-command'\nvoid withExternalHostCommand\n",
     )
     expect(
-      exactRuntimeImportViolations(synthetic, externalHostBootstrapPolicies),
+      exactRuntimeImportViolations(synthetic, externalHostIdentityPolicies),
     ).toContain(
       'scripts/identity/rogue-host-capture.ts: unauthorized broad import -> src/platform/db/external-host-command.ts',
     )
+
+    for (const [source, expected] of [
+      [
+        "import { redeemMemberReset } from '@/modules/identity/recovery/member-reset'\nvoid redeemMemberReset\n",
+        'src/app/api/rogue-recovery/route.ts: unauthorized broad import -> src/modules/identity/recovery/member-reset.ts',
+      ],
+      [
+        "import { redeemOwnerRecoveryWeb } from '@/modules/identity/recovery/owner-recovery'\nvoid redeemOwnerRecoveryWeb\n",
+        'src/app/api/rogue-recovery/route.ts: unauthorized broad import -> src/modules/identity/recovery/owner-recovery.ts',
+      ],
+    ] as const) {
+      const rogueRoute = resolve(sourceRoot, 'app/api/rogue-recovery/route.ts')
+      const bypass = new Map(productionFiles)
+      bypass.set(rogueRoute, source)
+      expect(
+        exactRuntimeImportViolations(bypass, externalHostIdentityPolicies),
+      ).toContain(expected)
+    }
   })
 
   it('detects aliases, re-exports, literal and computed loading outside the root', () => {

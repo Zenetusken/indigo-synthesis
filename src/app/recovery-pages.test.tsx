@@ -9,7 +9,8 @@ import ResetPage from './reset/page'
 
 const pageMocks = vi.hoisted(() => ({
   getActor: vi.fn(),
-  getInstallationStatus: vi.fn(),
+  getMemberResetPageInstallation: vi.fn(),
+  getOwnerRecoveryPageInstallation: vi.fn(),
   redirect: vi.fn(),
 }))
 
@@ -23,27 +24,35 @@ vi.mock('next/link', () => ({
   }) => <a href={typeof href === 'string' ? href : href.pathname}>{children}</a>,
 }))
 vi.mock('next/navigation', () => ({ redirect: pageMocks.redirect }))
-vi.mock('@/modules/identity/application/installation', () => ({
-  getInstallationStatus: pageMocks.getInstallationStatus,
+vi.mock('@/modules/identity/server/recovery-page', () => ({
+  getMemberResetPageInstallation: pageMocks.getMemberResetPageInstallation,
+  getOwnerRecoveryPageInstallation: pageMocks.getOwnerRecoveryPageInstallation,
 }))
 vi.mock('@/modules/identity/server/actor', () => ({ getActor: pageMocks.getActor }))
 vi.mock('@/platform/config/server', () => ({
   getServerConfig: () => ({ contentMode: 'reviewed' }),
 }))
 vi.mock('./reset/reset-form', () => ({
-  ResetCredentialForm: () => <form aria-label="Trainee recovery form" />,
+  ResetCredentialForm: ({ actionBinding }: { actionBinding: string }) => (
+    <form aria-label="Trainee recovery form" data-action-binding={actionBinding} />
+  ),
 }))
 vi.mock('./recover/recover-form', () => ({
-  RecoverOwnerForm: () => <form aria-label="Owner recovery form" />,
+  RecoverOwnerForm: ({ actionBinding }: { actionBinding: string }) => (
+    <form aria-label="Owner recovery form" data-action-binding={actionBinding} />
+  ),
 }))
 
 describe('unauthenticated recovery pages', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    pageMocks.getInstallationStatus.mockResolvedValue({
+    pageMocks.getMemberResetPageInstallation.mockResolvedValue({
       kind: 'closed',
-      ownerUserId: 'owner-id',
-      closedAt: new Date('2026-07-13T12:00:00.000Z'),
+      actionBinding: 'opaque-member-reset-binding',
+    })
+    pageMocks.getOwnerRecoveryPageInstallation.mockResolvedValue({
+      kind: 'closed',
+      actionBinding: 'opaque-owner-recovery-binding',
     })
     pageMocks.getActor.mockResolvedValue(null)
   })
@@ -51,7 +60,8 @@ describe('unauthenticated recovery pages', () => {
   afterEach(cleanup)
 
   it('returns both recovery paths to bootstrap while the instance is unclaimed', async () => {
-    pageMocks.getInstallationStatus.mockResolvedValue({ kind: 'open' })
+    pageMocks.getMemberResetPageInstallation.mockResolvedValue({ kind: 'open' })
+    pageMocks.getOwnerRecoveryPageInstallation.mockResolvedValue({ kind: 'open' })
 
     await ResetPage()
     await RecoverPage()
@@ -73,7 +83,10 @@ describe('unauthenticated recovery pages', () => {
   it('renders explicit reviewed-instance orientation and host mediation', async () => {
     render(await ResetPage())
     expect(screen.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible()
-    expect(screen.getByRole('form', { name: 'Trainee recovery form' })).toBeVisible()
+    expect(screen.getByRole('form', { name: 'Trainee recovery form' })).toHaveAttribute(
+      'data-action-binding',
+      'opaque-member-reset-binding',
+    )
     expect(
       screen.getByRole('link', { name: /Indigo Synthesis Reviewed content mode/ }),
     ).toHaveAttribute('href', '/sign-in')
@@ -81,7 +94,10 @@ describe('unauthenticated recovery pages', () => {
     cleanup()
     render(await RecoverPage())
     expect(screen.getByRole('heading', { name: 'Recover owner access.' })).toBeVisible()
-    expect(screen.getByRole('form', { name: 'Owner recovery form' })).toBeVisible()
+    expect(screen.getByRole('form', { name: 'Owner recovery form' })).toHaveAttribute(
+      'data-action-binding',
+      'opaque-owner-recovery-binding',
+    )
     expect(screen.getByText(/pnpm owner:recover issue/)).toBeVisible()
   })
 })

@@ -8,9 +8,13 @@ import {
   type LocalUserCreateActionBinding,
   localUserCreateActionBindingPurpose,
   type MemberResetIssueActionBinding,
+  type MemberResetRedemptionActionBinding,
   memberResetIssueActionBindingPurpose,
+  memberResetRedemptionActionBindingPurpose,
   type OwnerBootstrapActionBinding,
+  type OwnerRecoveryRedemptionActionBinding,
   ownerBootstrapActionBindingPurpose,
+  ownerRecoveryRedemptionActionBindingPurpose,
 } from '../application/action-binding'
 
 const actionBindingVersion = 'iab1'
@@ -21,14 +25,17 @@ const maximumIdentityFieldBytes = 512
 const authenticatedFormBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const emailSignInBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const ownerBootstrapBindingLifetimeMilliseconds = 15 * 60 * 1_000
+const recoveryRedemptionBindingLifetimeMilliseconds = 15 * 60 * 1_000
 const checkedSignOutCleanupGraceMilliseconds = 15 * 60 * 1_000
 
 type IdentityActionBindingPurpose =
   | typeof checkedSignOutActionBindingPurpose
   | typeof emailSignInActionBindingPurpose
   | typeof localUserCreateActionBindingPurpose
+  | typeof memberResetRedemptionActionBindingPurpose
   | typeof memberResetIssueActionBindingPurpose
   | typeof ownerBootstrapActionBindingPurpose
+  | typeof ownerRecoveryRedemptionActionBindingPurpose
 
 export type CheckedSignOutActionBindingContext = {
   readonly expectedEpoch: string
@@ -63,6 +70,10 @@ export type MemberResetIssueActionBindingContext = {
   readonly targetUserId: string
 }
 
+export type MemberResetRedemptionActionBindingContext = {
+  readonly expectedEpoch: string
+}
+
 type MemberResetIssueActionBindingIssuance = MemberResetIssueActionBindingContext & {
   readonly sessionExpiresAt: Date
 }
@@ -70,6 +81,18 @@ type MemberResetIssueActionBindingIssuance = MemberResetIssueActionBindingContex
 export type OwnerBootstrapActionBindingContext = {
   readonly expectedEpoch: string
 }
+
+export type OwnerRecoveryRedemptionActionBindingContext = {
+  readonly expectedEpoch: string
+}
+
+type PublicRecoveryRedemptionPurpose =
+  | typeof memberResetRedemptionActionBindingPurpose
+  | typeof ownerRecoveryRedemptionActionBindingPurpose
+
+type PublicRecoveryRedemptionContext =
+  | MemberResetRedemptionActionBindingContext
+  | OwnerRecoveryRedemptionActionBindingContext
 
 function assertIdentityField(label: string, value: string): void {
   if (
@@ -221,6 +244,48 @@ function verifyAuthenticatedFormBinding(
   return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
 }
 
+function issuePublicRecoveryRedemptionBinding(
+  purpose: PublicRecoveryRedemptionPurpose,
+  context: PublicRecoveryRedemptionContext,
+  now: Date,
+): string {
+  const current = currentSeconds(now)
+  const expiry = currentSeconds(
+    new Date(now.getTime() + recoveryRedemptionBindingLifetimeMilliseconds),
+  )
+  if (!Number.isSafeInteger(expiry) || expiry <= current) {
+    throw new TypeError('Cannot issue a recovery action binding at this time.')
+  }
+  const encodedExpiry = expiry.toString(36)
+  const encodedSignature = signature(
+    purpose,
+    [context.expectedEpoch],
+    encodedExpiry,
+  ).toString('base64url')
+  return `${actionBindingVersion}.${purpose}.${encodedExpiry}.${encodedSignature}`
+}
+
+function verifyPublicRecoveryRedemptionBinding(
+  binding: unknown,
+  purpose: PublicRecoveryRedemptionPurpose,
+  context: PublicRecoveryRedemptionContext,
+  now: Date,
+): boolean {
+  const parsed = parseBinding(binding, purpose)
+  if (!parsed) return false
+
+  const expiry = Number.parseInt(parsed.encodedExpiry, 36)
+  if (currentSeconds(now) >= expiry) return false
+
+  let expectedSignature: Buffer
+  try {
+    expectedSignature = signature(purpose, [context.expectedEpoch], parsed.encodedExpiry)
+  } catch {
+    return false
+  }
+  return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
 export function issueCheckedSignOutActionBinding(
   input: CheckedSignOutActionBindingIssuance,
   now = new Date(),
@@ -364,6 +429,32 @@ export function verifyMemberResetIssueActionBinding(
   )
 }
 
+/** Issues a session-independent proof for member-reset redemption on one generation. */
+export function issueMemberResetRedemptionActionBinding(
+  context: MemberResetRedemptionActionBindingContext,
+  now = new Date(),
+): MemberResetRedemptionActionBinding {
+  return issuePublicRecoveryRedemptionBinding(
+    memberResetRedemptionActionBindingPurpose,
+    context,
+    now,
+  ) as MemberResetRedemptionActionBinding
+}
+
+/** Verifies member-redemption purpose and current installation generation. */
+export function verifyMemberResetRedemptionActionBinding(
+  binding: unknown,
+  context: MemberResetRedemptionActionBindingContext,
+  now = new Date(),
+): binding is MemberResetRedemptionActionBinding {
+  return verifyPublicRecoveryRedemptionBinding(
+    binding,
+    memberResetRedemptionActionBindingPurpose,
+    context,
+    now,
+  )
+}
+
 /** Issues a purpose-separated, short-lived proof for the open bootstrap page generation. */
 export function issueOwnerBootstrapActionBinding(
   context: OwnerBootstrapActionBindingContext,
@@ -407,4 +498,30 @@ export function verifyOwnerBootstrapActionBinding(
     return false
   }
   return timingSafeEqual(parsed.suppliedSignature, expectedSignature)
+}
+
+/** Issues a session-independent proof for owner recovery on one installation generation. */
+export function issueOwnerRecoveryRedemptionActionBinding(
+  context: OwnerRecoveryRedemptionActionBindingContext,
+  now = new Date(),
+): OwnerRecoveryRedemptionActionBinding {
+  return issuePublicRecoveryRedemptionBinding(
+    ownerRecoveryRedemptionActionBindingPurpose,
+    context,
+    now,
+  ) as OwnerRecoveryRedemptionActionBinding
+}
+
+/** Verifies owner-recovery purpose and current installation generation. */
+export function verifyOwnerRecoveryRedemptionActionBinding(
+  binding: unknown,
+  context: OwnerRecoveryRedemptionActionBindingContext,
+  now = new Date(),
+): binding is OwnerRecoveryRedemptionActionBinding {
+  return verifyPublicRecoveryRedemptionBinding(
+    binding,
+    ownerRecoveryRedemptionActionBindingPurpose,
+    context,
+    now,
+  )
 }

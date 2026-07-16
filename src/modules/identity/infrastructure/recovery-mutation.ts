@@ -482,6 +482,51 @@ export type OwnerRecoveryIssuanceCaptureView = Readonly<{
   hostInvocationId: string
 }>
 
+/**
+ * Capture-private member redemption material. The runtime import boundary permits
+ * only the purpose-narrow scoped recovery gateway to resolve this projection.
+ */
+export type MemberResetRedemptionMutationScope = Readonly<{
+  purpose: 'member-reset-redemption'
+  normalizedEmail: string
+  codeIdentity: string
+  commandEnteredAt: Date
+  targetUserId: string | null
+  targetState: 'member' | 'owner' | 'missing'
+  credentialId: string | null
+  state: Readonly<{
+    activeVerificationId: string | null
+    lastIssuedAt: Date
+    failedAttempts: number
+    retryAfter: Date | null
+    lastAttemptAt: Date | null
+  }> | null
+  verification: Readonly<{
+    id: string
+    storedValue: string
+    expiresAt: Date
+  }> | null
+}>
+
+/**
+ * Capture-private browser owner-recovery material. Submitted email and stored
+ * capability material never cross the scoped recovery gateway boundary.
+ */
+export type OwnerRecoveryWebRedemptionMutationScope = Readonly<{
+  purpose: 'owner-recovery-web-redemption'
+  normalizedEmail: string
+  codeIdentity: string
+  commandEnteredAt: Date
+  ownerUserId: string | null
+  ownerEmailMatches: boolean
+  credentialId: string | null
+  verification: Readonly<{
+    id: string
+    storedValue: string
+    expiresAt: Date
+  }> | null
+}>
+
 export type RecoveryMutationRecheck =
   | Readonly<{ status: 'current' }>
   | Readonly<{
@@ -1149,6 +1194,87 @@ export function ownerRecoveryIssuanceCaptureView(
     ownerCredential: credentialPresence(state.snapshot.credentials),
     activeVerification: activeVerificationView(state.snapshot.verifications[0]),
     hostInvocationId: state.hostInvocationId,
+  })
+}
+
+function claimRecheckedState<State extends { status: CaptureStatus }>(
+  state: State | undefined,
+): State {
+  if (state?.status !== 'rechecked') throw staleCapture()
+  state.status = 'spent'
+  return state
+}
+
+/**
+ * Consumes a successfully rechecked capture and exposes only the private DML
+ * bindings required by member reset redemption. This projection is one-use.
+ */
+export function claimMemberResetRedemptionMutationScope(
+  capture: MemberResetRedemptionCapture,
+): MemberResetRedemptionMutationScope {
+  const state = claimRecheckedState(memberCaptures.get(capture))
+  const target = state.snapshot.users[0] ?? null
+  const credential = state.snapshot.credentials[0] ?? null
+  const reset = state.snapshot.states[0] ?? null
+  const pending = state.snapshot.verifications[0] ?? null
+  return Object.freeze({
+    purpose: 'member-reset-redemption',
+    normalizedEmail: state.normalizedEmail,
+    codeIdentity: state.codeIdentity,
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    targetUserId: target?.id ?? null,
+    targetState: !target
+      ? 'missing'
+      : target.id === state.snapshot.installation.ownerUserId
+        ? 'owner'
+        : 'member',
+    credentialId: credential?.id ?? null,
+    state: reset
+      ? Object.freeze({
+          activeVerificationId: reset.activeVerificationId,
+          lastIssuedAt: new Date(reset.lastIssuedAt.getTime()),
+          failedAttempts: reset.failedAttempts,
+          retryAfter:
+            reset.retryAfter === null ? null : new Date(reset.retryAfter.getTime()),
+          lastAttemptAt:
+            reset.lastAttemptAt === null ? null : new Date(reset.lastAttemptAt.getTime()),
+        })
+      : null,
+    verification: pending
+      ? Object.freeze({
+          id: pending.id,
+          storedValue: pending.value,
+          expiresAt: new Date(pending.expiresAt.getTime()),
+        })
+      : null,
+  })
+}
+
+/**
+ * Consumes a successfully rechecked capture and exposes only the private DML
+ * bindings required by browser owner recovery. This projection is one-use.
+ */
+export function claimOwnerRecoveryWebRedemptionMutationScope(
+  capture: OwnerRecoveryWebRedemptionCapture,
+): OwnerRecoveryWebRedemptionMutationScope {
+  const state = claimRecheckedState(ownerWebCaptures.get(capture))
+  const credential = state.snapshot.credentials[0] ?? null
+  const pending = state.snapshot.verifications[0] ?? null
+  return Object.freeze({
+    purpose: 'owner-recovery-web-redemption',
+    normalizedEmail: state.normalizedEmail,
+    codeIdentity: state.codeIdentity,
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    ownerUserId: state.snapshot.owner?.id ?? null,
+    ownerEmailMatches: ownerEmailMatches(state.snapshot, state.normalizedEmail),
+    credentialId: credential?.id ?? null,
+    verification: pending
+      ? Object.freeze({
+          id: pending.id,
+          storedValue: pending.value,
+          expiresAt: new Date(pending.expiresAt.getTime()),
+        })
+      : null,
   })
 }
 

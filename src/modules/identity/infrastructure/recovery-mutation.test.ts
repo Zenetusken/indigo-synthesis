@@ -1008,6 +1008,24 @@ describe('recovery mutation capture', () => {
   })
 
   it.each([
+    ['createdAt', { createdAt: new Date('2026-01-01T00:00:00.001Z') }],
+    ['updatedAt', { updatedAt: new Date('2026-06-01T00:00:00.001Z') }],
+  ] as const)('independently rechecks the owner %s timestamp', async (_, changed) => {
+    const { surface } = querySequence(
+      ownerRow(),
+      ownerRow({
+        owners: [user('owner-user', normalizedOwnerEmail, changed)],
+      }),
+    )
+    const capture = await captureOwnerWeb(surface)
+
+    await expect(recheckOwnerRecoveryWebRedemption(surface, capture)).resolves.toEqual({
+      status: 'stale',
+      reason: 'owner-state-changed',
+    })
+  })
+
+  it.each([
     [
       'epoch before every later dimension',
       ownerRow({

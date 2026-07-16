@@ -5,12 +5,16 @@ import {
   issueEmailSignInActionBinding,
   issueLocalUserCreateActionBinding,
   issueMemberResetIssueActionBinding,
+  issueMemberResetRedemptionActionBinding,
   issueOwnerBootstrapActionBinding,
+  issueOwnerRecoveryRedemptionActionBinding,
   verifyCheckedSignOutActionBinding,
   verifyEmailSignInActionBinding,
   verifyLocalUserCreateActionBinding,
   verifyMemberResetIssueActionBinding,
+  verifyMemberResetRedemptionActionBinding,
   verifyOwnerBootstrapActionBinding,
+  verifyOwnerRecoveryRedemptionActionBinding,
 } from './action-binding'
 
 const now = new Date('2026-07-15T12:00:00.000Z')
@@ -375,6 +379,77 @@ describe('owner bootstrap action binding', () => {
       verifyOwnerBootstrapActionBinding(
         binding,
         { expectedEpoch: context.expectedEpoch },
+        new Date(now.getTime() + 15 * 60 * 1_000),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('public recovery redemption action bindings', () => {
+  beforeEach(() => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://localhost/indigo_action_binding_test')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'action-binding-test-secret-at-least-32-characters')
+    vi.stubEnv('BETTER_AUTH_URL', 'http://127.0.0.1:3000')
+    vi.stubEnv('INDIGO_CONTENT_MODE', 'development')
+    vi.stubEnv('NODE_ENV', 'test')
+    resetServerConfigForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    resetServerConfigForTests()
+  })
+
+  it('binds both public forms to one epoch under mutually exclusive purposes', () => {
+    const bindingContext = { expectedEpoch: context.expectedEpoch }
+    const memberBinding = issueMemberResetRedemptionActionBinding(bindingContext, now)
+    const ownerBinding = issueOwnerRecoveryRedemptionActionBinding(bindingContext, now)
+
+    expect(memberBinding).toMatch(
+      /^iab1\.member-reset-redemption\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(ownerBinding).toMatch(
+      /^iab1\.owner-recovery-redemption\.[1-9a-z][0-9a-z]*\.[A-Za-z0-9_-]{43}$/,
+    )
+    expect(JSON.stringify({ memberBinding, ownerBinding })).not.toContain(
+      context.expectedEpoch,
+    )
+    expect(
+      verifyMemberResetRedemptionActionBinding(memberBinding, bindingContext, now),
+    ).toBe(true)
+    expect(
+      verifyOwnerRecoveryRedemptionActionBinding(ownerBinding, bindingContext, now),
+    ).toBe(true)
+    expect(
+      verifyOwnerRecoveryRedemptionActionBinding(memberBinding, bindingContext, now),
+    ).toBe(false)
+    expect(
+      verifyMemberResetRedemptionActionBinding(ownerBinding, bindingContext, now),
+    ).toBe(false)
+    expect(verifyOwnerBootstrapActionBinding(ownerBinding, bindingContext, now)).toBe(
+      false,
+    )
+  })
+
+  it('rejects a changed generation, tampering, and the exact fifteen-minute edge', () => {
+    const bindingContext = { expectedEpoch: context.expectedEpoch }
+    const memberBinding = issueMemberResetRedemptionActionBinding(bindingContext, now)
+    const tampered = `${memberBinding.slice(0, -1)}${memberBinding.endsWith('A') ? 'B' : 'A'}`
+
+    expect(
+      verifyMemberResetRedemptionActionBinding(
+        memberBinding,
+        { expectedEpoch: 'replacement-generation' },
+        now,
+      ),
+    ).toBe(false)
+    expect(verifyMemberResetRedemptionActionBinding(tampered, bindingContext, now)).toBe(
+      false,
+    )
+    expect(
+      verifyMemberResetRedemptionActionBinding(
+        memberBinding,
+        bindingContext,
         new Date(now.getTime() + 15 * 60 * 1_000),
       ),
     ).toBe(false)

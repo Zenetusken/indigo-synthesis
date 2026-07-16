@@ -1,8 +1,10 @@
 declare const checkedSignOutActionBindingBrand: unique symbol
 declare const emailSignInActionBindingBrand: unique symbol
 declare const localUserCreateActionBindingBrand: unique symbol
+declare const memberResetRedemptionActionBindingBrand: unique symbol
 declare const memberResetIssueActionBindingBrand: unique symbol
 declare const ownerBootstrapActionBindingBrand: unique symbol
+declare const ownerRecoveryRedemptionActionBindingBrand: unique symbol
 
 /**
  * Browser-safe proof that a checked sign-out was issued for one server-observed
@@ -29,6 +31,14 @@ export type LocalUserCreateActionBinding = string & {
 }
 
 /**
+ * Browser-safe proof that public member-reset redemption was rendered for one
+ * server-observed installation generation. It carries no session or account identity.
+ */
+export type MemberResetRedemptionActionBinding = string & {
+  readonly [memberResetRedemptionActionBindingBrand]: 'member-reset-redemption-action-binding'
+}
+
+/**
  * Browser-safe proof that reset issuance was rendered for one
  * server-observed installation/session/owner/member tuple.
  */
@@ -41,10 +51,22 @@ export type OwnerBootstrapActionBinding = string & {
   readonly [ownerBootstrapActionBindingBrand]: 'owner-bootstrap-action-binding'
 }
 
+/**
+ * Browser-safe proof that public owner recovery was rendered for one
+ * server-observed installation generation. It carries no session or account identity.
+ */
+export type OwnerRecoveryRedemptionActionBinding = string & {
+  readonly [ownerRecoveryRedemptionActionBindingBrand]: 'owner-recovery-redemption-action-binding'
+}
+
 export const checkedSignOutActionBindingPurpose = 'checked-sign-out' as const
 export const emailSignInActionBindingPurpose = 'email-sign-in' as const
 export const localUserCreateActionBindingPurpose = 'local-user-create' as const
+export const memberResetRedemptionActionBindingPurpose =
+  'member-reset-redemption' as const
 export const memberResetIssueActionBindingPurpose = 'member-reset-issue' as const
 export const ownerBootstrapActionBindingPurpose = 'owner-bootstrap' as const
+export const ownerRecoveryRedemptionActionBindingPurpose =
+  'owner-recovery-redemption' as const
 export const identityActionBindingHeader = 'x-indigo-action-binding' as const
 export const checkedSignOutActionBindingHeader = identityActionBindingHeader
