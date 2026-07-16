@@ -57,6 +57,8 @@ do not bless a direct-table workaround merely because the current installation i
 - complete the Stage 3 Data Portability destructive-adapter and export-UnitOfWork cutovers;
 - truthful calibration facts, schema, engine, persistence, and user-path integration;
 - Programs/Training co-write retirement;
+- the Part B boundary contract (`PART_B_BOUNDARY_SPEC.md` + ADR 0010) — authored after Stage 6,
+  the gate for Stage 9 implementation;
 - audit, safety-hold, and Data Portability owner ports;
 - public-entrypoint and peer-table-read enforcement;
 - calibration decision support in the existing optional History explanation contract; and
@@ -981,21 +983,22 @@ No runtime implementation begins until this gate is green.
 - **Depends on:** Stages 3 and 6.
 - **Explicit deliverable — normative Part B contract before implementation:** a standalone
   specification (`docs/architecture/PART_B_BOUNDARY_SPEC.md`) plus **ADR 0010**, drafted **after
-  Stage 6 lands** so it binds to the proven `UnitOfWork`/port pattern rather than its paper design,
-  and passed through the same adversarial-review loop as the write-fence and calibration contracts
-  before any Stage 9 implementation begins. Grounding: the DoD below already carries the normative
-  intent (port shapes, lock/fence orderings, the Data Portability snapshot/deletion transaction
-  matrix, the `safety_hold_resolution` ownership transfer), but it lives in a roadmap checklist;
-  [SCHEMA_OWNERSHIP_SPEC](SCHEMA_OWNERSHIP_SPEC.md) is the historical decision pack (C1–C5 options,
-  costed, not an implementation contract); and
-  [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule — exact discriminants,
-  bounds, and lock identities "live in the normative specification … changing them requires an
-  explicit ADR/spec amendment, not an implementation shortcut." The deliverable extracts and
-  expands this DoD into that contract: the read/private-import and public-entrypoint scanner
-  contract with synthetic fixtures, the port contracts, the Data Portability transaction matrix,
-  the manifest/ownership-transfer plan for `safety_hold_resolution`, and falsifiable
-  definition-of-done items, mirroring the O-/K-series treatment every other enforced boundary
-  received.
+  Stage 6 lands** so it binds to the proven `UnitOfWork`/port pattern rather than its paper design.
+  This contract gate is distinct from, and earlier than, this stage's implementation-time Review
+  gate below: it passes the same adversarial-review loop as the write-fence and calibration
+  contracts, on the Phase 0 bar (no unresolved critical or major finding), **before any Stage 9
+  implementation begins**, and is tracked as its own graph node (§5), gate row (§6), and ledger
+  row (§7). Grounding: the DoD below already carries the normative intent (port shapes, lock/fence
+  orderings, the Data Portability snapshot/deletion transaction matrix, the
+  `safety_hold_resolution` ownership transfer), but it lives in a roadmap checklist;
+  [SCHEMA_OWNERSHIP_SPEC](SCHEMA_OWNERSHIP_SPEC.md) §6 is the historical decision pack (C1–C5
+  options, costed) while its §5.3 write-fence scanner contract remains normative — the new
+  read/private-import and public-entrypoint scanner contract extends that base rather than
+  starting fresh; and [ADR 0009](adr/0009-calibration-live-contract.md) sets the governing rule —
+  exact discriminants, bounds, and lock identities "live in the normative specification … changing
+  them requires an explicit ADR/spec amendment, not an implementation shortcut." The deliverable
+  extracts and expands this DoD into that contract with falsifiable definition-of-done items,
+  mirroring the O-/K-series treatment every other enforced boundary received.
 - **DoD:** every current `additionalWriters` grant is removed; the cross-cutting Data Portability
   operator and Stage 3 temporary verb-scoped adapter are removed; modules import peers only through
   public entrypoints; non-owners cannot
@@ -1096,16 +1099,20 @@ Stage 5  pure engine
        ▼
 Stage 6  atomic completion + co-write retirement
        ├──► Stage 8  calibrated user path (LLM off) ──┐
-       └──► Stage 9  complete Part B / O6 ────────────┤
+       └──► Part B contract: spec + ADR 0010 (gate)   │
+                      ▼                               │
+            Stage 9  complete Part B / O6 ────────────┤
                                                       ▼
                                 Stage 7  optional grounded prose (last)
                                                       ▼
                                 Final certification / cumulative review
 ```
 
-The implementation path is **Phase 0 → 3 → 4 → 5 → 6**, then Stages 8 and 9 may proceed in
-parallel. Stage 8 is the core user-path branch and is deliberately proven with the LLM off. Stage 7
-begins only after both Stages 8 and 9 are green; final certification follows Stage 7.
+The implementation path is **Phase 0 → 3 → 4 → 5 → 6**; then Stage 8 and the Part B contract
+track proceed in parallel — the Part B boundary spec + ADR 0010 gate Stage 9, so Stage 9
+implementation starts only after that contract passes review. Stage 8 is the core user-path branch
+and is deliberately proven with the LLM off. Stage 7 begins only after both Stages 8 and 9 are
+green; final certification follows Stage 7.
 
 ---
 
@@ -1119,6 +1126,7 @@ begins only after both Stages 8 and 9 are green; final certification follows Sta
 | Stage 5 | golden/property/boundary vectors and purity tests | safety/property | non-total, non-deterministic, unattainable, or unclamped output |
 | Stage 6 | failure injection, replay/concurrency/correction/auth, ownership | transaction/concurrency; boundary | any partial, duplicate, stale-estimate, or co-write path |
 | Stage 8 | components + full LLM-off E2E/restart/export/deletion | product/UI/accessibility; privacy | hidden provenance, invented fact, or inaccessible state |
+| Part B contract | `pnpm docs:check` + `git diff --check`; `PART_B_BOUNDARY_SPEC.md` + ADR 0010 landed with recorded review disposition | adversarial architecture (contract) | Stage 9 implementation begins before this gate is green |
 | Stage 9 | public-import/read guards, all port/integration suites | adversarial architecture | any remaining current grant/operator/private reach |
 | Stage 7 | offline baseline, contract/cache tests, LLM-off E2E; optional attested live proof | LLM safety/provenance | prose changes authority or unknown input is served |
 | Final | full static/type/unit/integration/E2E/build, migration/preflight, backup/restore, network-denied, baseline, docs | cumulative architecture; integrity/privacy; product/UI; concurrency; LLM safety | any failed command or unresolved critical/major |
@@ -1142,6 +1150,7 @@ evidence only and is never represented as the independent human release reviews 
 | Stage 5 | pending | pending | pending |
 | Stage 6 | pending | pending | pending |
 | Stage 8 | pending | pending | pending |
+| Part B contract (spec + ADR 0010) | pending | pending | pending |
 | Stage 9 | pending | pending | pending |
 | Stage 7 | pending | pending | pending |
 | Final certification | pending | pending | pending |
