@@ -1,9 +1,14 @@
 import type { QueryResult, QueryResultRow } from 'pg'
 import { normalizeRecoveryEmail } from '../recovery/recovery-policy'
+import { memberResetIdentifier } from '../recovery/recovery-preparation'
 
 const lifecycleValuePattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const maximumIdentityLength = 512
+// Invalid browser input still needs the authenticated, audited validation-rejection path.
+// This deliberately non-creatable address identity keeps the capture query and lock bounded
+// without retaining hostile raw input or letting it alias a supported account email.
+const invalidLocalUserEmailCaptureIdentity = 'indigo:invalid-local-user-email'
 
 const credentialAdministrationSnapshotStatement = `
   SELECT
@@ -229,6 +234,7 @@ export type LocalUserCreationMutationCaptureView = Readonly<{
   sessionExpiresAt: Date
   expectedRole: 'owner'
   preallocatedTargetUserId: string
+  normalizedEmail: string
   submittedEmailUserIds: readonly string[]
   actorCredential: CredentialPresence
 }>
@@ -244,6 +250,29 @@ export type MemberResetIssuanceMutationCaptureView = Readonly<{
   targetState: 'member' | 'owner' | 'missing'
   actorCredential: CredentialPresence
   targetCredential: CredentialPresence
+}>
+
+export type LocalUserCreationMutationScope = Readonly<{
+  actorUserId: string
+  targetUserId: string
+  normalizedEmail: string
+  commandEnteredAt: Date
+  submittedEmailUserIds: readonly string[]
+  actorCredential: 'present'
+}>
+
+export type MemberResetIssuanceMutationScope = Readonly<{
+  actorUserId: string
+  targetUserId: string
+  identifier: string
+  commandEnteredAt: Date
+  targetState: 'member' | 'owner' | 'missing'
+  actorCredential: 'present'
+  targetCredential: CredentialPresence
+  state: Readonly<{
+    activeVerificationId: string | null
+    lastIssuedAt: Date
+  }> | null
 }>
 
 export type CredentialAdministrationMutationRecheck =
@@ -526,7 +555,7 @@ function assertCoherentMemberResetState(
 function normalizedEmail(value: string): string {
   const normalized = normalizeRecoveryEmail(value)
   if (!normalized || normalized.includes('\0') || normalized.length > 254) {
-    throw new TypeError('A valid submitted email is required for local-user capture.')
+    return invalidLocalUserEmailCaptureIdentity
   }
   return normalized
 }
@@ -749,6 +778,7 @@ export function localUserCreationMutationCaptureView(
     sessionExpiresAt: new Date(state.snapshot.session.expiresAt.getTime()),
     expectedRole: 'owner',
     preallocatedTargetUserId: state.preallocatedTargetUserId,
+    normalizedEmail: state.normalizedEmail,
     submittedEmailUserIds: Object.freeze([...state.snapshot.submittedEmailUserIds]),
     actorCredential: credentialPresence(state.snapshot, state.snapshot.actor.id),
   })
@@ -774,6 +804,59 @@ export function memberResetIssuanceMutationCaptureView(
     targetState,
     actorCredential: credentialPresence(state.snapshot, state.snapshot.actor.id),
     targetCredential: credentialPresence(state.snapshot, state.targetUserId),
+  })
+}
+
+/**
+ * Resolves only the DML bindings needed by the protected local-user gateway. The
+ * nominal capture remains the authority; callers cannot construct a structural
+ * substitute, and credential/session secrets never cross this projection.
+ */
+export function localUserCreationMutationScope(
+  capture: LocalUserCreationMutationCapture,
+): LocalUserCreationMutationScope {
+  const state = localState(capture)
+  if (credentialPresence(state.snapshot, state.snapshot.actor.id) !== 'present') {
+    return invariant()
+  }
+  return Object.freeze({
+    actorUserId: state.snapshot.actor.id,
+    targetUserId: state.preallocatedTargetUserId,
+    normalizedEmail: state.normalizedEmail,
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    submittedEmailUserIds: Object.freeze([...state.snapshot.submittedEmailUserIds]),
+    actorCredential: 'present',
+  })
+}
+
+/** Resolves the bounded reset state needed after the capture's first-query recheck. */
+export function memberResetIssuanceMutationScope(
+  capture: MemberResetIssuanceMutationCapture,
+): MemberResetIssuanceMutationScope {
+  const state = resetState(capture)
+  if (credentialPresence(state.snapshot, state.snapshot.actor.id) !== 'present') {
+    return invariant()
+  }
+  const targetState = !state.snapshot.target
+    ? 'missing'
+    : state.snapshot.target.id === state.snapshot.ownerUserId
+      ? 'owner'
+      : 'member'
+  const reset = state.snapshot.memberResetState
+  return Object.freeze({
+    actorUserId: state.snapshot.actor.id,
+    targetUserId: state.targetUserId,
+    identifier: memberResetIdentifier(state.targetUserId),
+    commandEnteredAt: new Date(state.commandEnteredAt.getTime()),
+    targetState,
+    actorCredential: 'present',
+    targetCredential: credentialPresence(state.snapshot, state.targetUserId),
+    state: reset
+      ? Object.freeze({
+          activeVerificationId: reset.activeVerificationId,
+          lastIssuedAt: new Date(reset.lastIssuedAt.getTime()),
+        })
+      : null,
   })
 }
 

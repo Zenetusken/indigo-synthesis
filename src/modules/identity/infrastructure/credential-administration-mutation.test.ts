@@ -186,6 +186,7 @@ describe('credential-administration mutation capture', () => {
       sessionExpiresAt,
       expectedRole: 'owner',
       preallocatedTargetUserId: 'target-member',
+      normalizedEmail: 'new.member@example.test',
       submittedEmailUserIds: [],
       actorCredential: 'present',
     })
@@ -197,11 +198,38 @@ describe('credential-administration mutation capture', () => {
     ])
     expect(query.mock.calls[0]?.[0]).toContain('matched_session.token = $1')
     expect(query.mock.calls[0]?.[0]).toContain('actor.id = matched_session.user_id')
+    expect(query.mock.calls[0]?.[0]).toContain('lower(candidate.email) = $3')
     expect(query.mock.calls[0]?.[0]).toContain('LIMIT 2')
     expect(query.mock.calls[0]?.[0]).toContain('LIMIT 3')
     expect(JSON.stringify(capture)).toBe('{}')
     expect(JSON.stringify(view)).not.toContain(verifiedToken)
     expect(JSON.stringify(view)).not.toContain('hash-for-actor-owner')
+  })
+
+  it.each([
+    ['overlong', 'x'.repeat(255)],
+    ['nul-bearing', 'hostile\0email@example.test'],
+  ])('captures %s local email input under one bounded non-creatable identity', async (_label, submittedEmail) => {
+    const { query, surface } = querySequence(snapshotRow({ target: false }))
+
+    const capture = await captureLocalUserCreationMutation(surface, {
+      verifiedSessionToken: verifiedToken,
+      preallocatedTargetUserId: 'target-member',
+      submittedEmail,
+      commandEnteredAt,
+    })
+
+    expect(query.mock.calls[0]?.[1]).toEqual([
+      verifiedToken,
+      'target-member',
+      'indigo:invalid-local-user-email',
+    ])
+    expect(localUserCreationMutationCaptureView(capture).normalizedEmail).toBe(
+      'indigo:invalid-local-user-email',
+    )
+    expect(JSON.stringify(localUserCreationMutationCaptureView(capture))).not.toContain(
+      submittedEmail,
+    )
   })
 
   it('captures member target and credential presence without exposing credential rows', async () => {

@@ -224,6 +224,11 @@ const identityAuthPolicies = policy([
   ],
   [
     'src/modules/identity/infrastructure/action-binding.ts',
+    'src/composition/identity-credential-administration.ts',
+    ['verifyLocalUserCreateActionBinding', 'verifyMemberResetIssueActionBinding'],
+  ],
+  [
+    'src/modules/identity/infrastructure/action-binding.ts',
     'src/modules/identity/server/actor.ts',
     [
       'issueCheckedSignOutActionBinding',
@@ -255,6 +260,51 @@ const identityAuthPolicies = policy([
     ],
   ],
   [
+    'src/modules/identity/infrastructure/credential-administration-mutation.ts',
+    'src/composition/identity-credential-administration.ts',
+    [
+      'CredentialAdministrationAuthorityUnavailableError',
+      'captureLocalUserCreationMutation',
+      'captureMemberResetIssuanceMutation',
+      'localUserCreationMutationCaptureView',
+      'memberResetIssuanceMutationCaptureView',
+      'recheckLocalUserCreationMutation',
+      'recheckMemberResetIssuanceMutation',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/credential-administration-mutation.ts',
+    'src/modules/identity/infrastructure/scoped-credential-reauthentication.ts',
+    [
+      'localUserCreationMutationCaptureView',
+      'localUserCreationMutationScope',
+      'memberResetIssuanceMutationCaptureView',
+      'memberResetIssuanceMutationScope',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/credential-administration-mutation.ts',
+    'src/modules/identity/infrastructure/scoped-credential-administration.ts',
+    ['localUserCreationMutationScope', 'memberResetIssuanceMutationScope'],
+  ],
+  [
+    'src/modules/identity/infrastructure/scoped-credential-administration.ts',
+    'src/composition/identity-credential-administration.ts',
+    [
+      'createScopedLocalUserCreationMutationGateway',
+      'createScopedMemberResetIssuanceMutationGateway',
+      'prepareLocalUserCreation',
+    ],
+  ],
+  [
+    'src/modules/identity/infrastructure/scoped-credential-reauthentication.ts',
+    'src/composition/identity-credential-administration.ts',
+    [
+      'createScopedLocalUserCreationReauthenticationGateway',
+      'createScopedMemberResetIssuanceReauthenticationGateway',
+    ],
+  ],
+  [
     'src/modules/identity/infrastructure/expired-session-cleanup.ts',
     'src/composition/identity-auth-mutations.ts',
     ['cleanupExpiredAccountSessions'],
@@ -270,6 +320,11 @@ const identityAuthPolicies = policy([
     ['createScopedDrizzleDatabase'],
   ],
   [
+    'src/platform/application-coordination/scoped-drizzle.ts',
+    'src/composition/identity-credential-administration.ts',
+    ['createScopedDrizzleDatabase'],
+  ],
+  [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-auth-mutations.ts',
     ['createRuntimePostgresUnitOfWork'],
@@ -277,6 +332,11 @@ const identityAuthPolicies = policy([
   [
     'src/platform/application-coordination/runtime-unit-of-work.ts',
     'src/composition/identity-bootstrap-mutations.ts',
+    ['createRuntimePostgresUnitOfWork'],
+  ],
+  [
+    'src/platform/application-coordination/runtime-unit-of-work.ts',
+    'src/composition/identity-credential-administration.ts',
     ['createRuntimePostgresUnitOfWork'],
   ],
   [
