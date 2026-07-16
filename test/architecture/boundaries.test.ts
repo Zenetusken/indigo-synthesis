@@ -225,8 +225,8 @@ describe('architecture boundaries', () => {
     expect(development).toContain('next dev --hostname 127.0.0.1')
     expect(production).toContain('next start --hostname 127.0.0.1')
     expect(production).toContain('NODE_ENV=production')
-    expect(production).toContain('scripts/db/preflight.ts')
-    expect(production.indexOf('scripts/db/preflight.ts')).toBeLessThan(
+    expect(production).toContain('pnpm db:preflight')
+    expect(production.indexOf('pnpm db:preflight')).toBeLessThan(
       production.indexOf('next start --hostname 127.0.0.1'),
     )
   })

@@ -42,7 +42,7 @@ import {
   startWorkout,
 } from '@/modules/training/application/workouts'
 import { resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb } from '@/platform/db/client'
+import { closeDb, getDb, getPool } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -1866,7 +1866,7 @@ describe('training PostgreSQL command boundary', () => {
           code: 'content.development-forbidden-in-production',
         },
       })
-      await expect(assertDatabaseReady()).rejects.toThrow(
+      await expect(assertDatabaseReady(getPool())).rejects.toThrow(
         'reviewed content mode cannot start with 1 unreviewed program revisions',
       )
 

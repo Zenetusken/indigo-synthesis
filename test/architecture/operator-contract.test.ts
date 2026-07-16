@@ -245,14 +245,20 @@ describe('clean-clone operator contract', () => {
     expect(liveConfig).toContain("INDIGO_LLM_MODELS_DIR: 'llm/models'")
   })
 
-  it('serializes every external-host database command through one wrapper', async () => {
+  it('pins the complete production external-host command census', async () => {
     const manifest = JSON.parse(
       readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
     ) as { scripts?: Record<string, string> }
+    const commandNames = [
+      'owner:bootstrap',
+      'owner:recover',
+      'identity:cleanup-expired-sessions',
+      'db:migrate',
+      'db:preflight',
+      'start',
+    ] as const
     const externalHostCommands = Object.fromEntries(
-      Object.entries(manifest.scripts ?? {}).filter(([, command]) =>
-        command.includes('scripts/run-external-host-command.sh'),
-      ),
+      commandNames.map((name) => [name, manifest.scripts?.[name]]),
     )
     expect(externalHostCommands).toEqual({
       'owner:bootstrap':
@@ -261,7 +267,33 @@ describe('clean-clone operator contract', () => {
         'bash scripts/run-external-host-command.sh scripts/identity/recover-owner.ts',
       'identity:cleanup-expired-sessions':
         'bash scripts/run-external-host-command.sh scripts/identity/cleanup-expired-sessions.ts',
+      'db:migrate': 'bash scripts/run-external-host-command.sh scripts/db/migrate.ts',
+      'db:preflight': 'bash scripts/run-external-host-command.sh scripts/db/preflight.ts',
+      start:
+        'NODE_ENV=production pnpm db:preflight && NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1',
     })
+
+    const wrapperConsumers = Object.entries(manifest.scripts ?? {})
+      .filter(([, command]) => command.includes('scripts/run-external-host-command.sh'))
+      .map(([name]) => name)
+      .sort()
+    expect(wrapperConsumers).toEqual([
+      'db:migrate',
+      'db:preflight',
+      'identity:cleanup-expired-sessions',
+      'owner:bootstrap',
+      'owner:recover',
+    ])
+
+    const productionDatabaseEntrypointConsumers = Object.entries(manifest.scripts ?? {})
+      .filter(
+        ([name, command]) =>
+          name !== 'db:backup-restore-drill' &&
+          /scripts\/(?:db|identity)\/[^ ]+\.ts(?: |$)/.test(command),
+      )
+      .map(([name]) => name)
+      .sort()
+    expect(productionDatabaseEntrypointConsumers).toEqual(wrapperConsumers)
 
     const maintenanceEntrypoint = resolve(
       projectRoot,

@@ -11,7 +11,7 @@ import {
   omitAmbientPostgresEnvironment,
   resolveBackupRestoreDrillPgClient,
 } from '../../src/platform/db/backup-restore-drill-guard'
-import { closeDb } from '../../src/platform/db/client'
+import { closeDb, getPool } from '../../src/platform/db/client'
 import { createDisposableIntegrationDatabase } from '../../src/platform/db/disposable-integration-database'
 import { migrateDatabase } from '../../src/platform/db/migrate'
 import { parseGuardedPostgresUrl } from '../../src/platform/db/postgres-url-guard'
@@ -366,7 +366,7 @@ try {
   )
 
   await verifyRestoredProof(database.databaseUrl, expectedEpoch)
-  const preflight = await assertDatabaseReady()
+  const preflight = await assertDatabaseReady(getPool())
   await closeDb()
 
   const archiveDigest = createHash('sha256').update(retainedArchive).digest('hex')

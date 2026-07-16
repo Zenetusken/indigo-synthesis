@@ -190,14 +190,14 @@ describe('installation mutation epoch upgrade', () => {
       database.activateDatabaseUrl()
       resetServerConfigForTests()
       await closeDb()
-      await expect(inspectDatabase()).resolves.toMatchObject({
+      await expect(inspectDatabase(client)).resolves.toMatchObject({
         installationMutationEpochPresent: true,
       })
 
       await client.query(
         'ALTER TABLE installation_state ALTER COLUMN product_mutation_epoch DROP DEFAULT',
       )
-      await expect(inspectDatabase()).resolves.toMatchObject({
+      await expect(inspectDatabase(client)).resolves.toMatchObject({
         installationMutationEpochPresent: false,
       })
       await client.query(
@@ -207,11 +207,11 @@ describe('installation mutation epoch upgrade', () => {
         'ALTER TABLE installation_state DROP CONSTRAINT installation_state_singleton_check',
       )
       await client.query('UPDATE installation_state SET singleton = 2')
-      await expect(inspectDatabase()).resolves.toMatchObject({
+      await expect(inspectDatabase(client)).resolves.toMatchObject({
         installationMutationEpochPresent: false,
       })
       await client.query('DELETE FROM installation_state')
-      await expect(inspectDatabase()).resolves.toMatchObject({
+      await expect(inspectDatabase(client)).resolves.toMatchObject({
         installationMutationEpochPresent: false,
       })
     } finally {

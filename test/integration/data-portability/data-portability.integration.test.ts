@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@/modules/methodology/domain/canonical'
 import { revokeContentRelease } from '@/modules/programs/application/content-revocations'
 import { generateDraftProgram } from '@/modules/programs/application/programs'
 import { getServerConfig, resetServerConfigForTests } from '@/platform/config/server'
-import { closeDb, getDb } from '@/platform/db/client'
+import { closeDb, getDb, getPool } from '@/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -1080,7 +1080,7 @@ describe('subject export and exact instance reset', () => {
   })
 
   it('enforces durable hold provenance and fail-closed append-only resolution facts', async () => {
-    const preflight = await assertDatabaseReady()
+    const preflight = await assertDatabaseReady(getPool())
     expect(preflight.safetyHoldIntegrityPresent).toBe(true)
 
     await expect(

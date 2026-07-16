@@ -22,7 +22,7 @@ import {
   startWorkout,
 } from '../../src/modules/training/application/workouts'
 import { resetServerConfigForTests } from '../../src/platform/config/server'
-import { closeDb } from '../../src/platform/db/client'
+import { closeDb, getPool } from '../../src/platform/db/client'
 import {
   createDisposableIntegrationDatabase,
   type DisposableIntegrationDatabase,
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     resetAuthForTests()
     await closeDb()
     await migrateDatabase()
-    await assertDatabaseReady()
+    await assertDatabaseReady(getPool())
     await resetProductData()
 
     const bootstrap = await issueOwnerBootstrap({ ttlMinutes: 15 })

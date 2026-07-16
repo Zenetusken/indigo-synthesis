@@ -296,7 +296,7 @@ describe('PostgreSQL constructor census', () => {
     const allowed = new Map<string, readonly string[]>([
       ['src/platform/db/bounded-pool.ts', ['named:Pool->Pool']],
       ['src/platform/db/disposable-integration-database.ts', ['named:Client->Client']],
-      ['src/platform/db/external-host-command.ts', ['named:Client->Client']],
+      ['src/platform/db/external-host-one-shot.ts', ['named:Client->Client']],
       ['src/platform/db/postgres-value.ts', ['default:pg']],
       ['scripts/db/backup-restore-drill.ts', ['named:Client->Client']],
       ['scripts/db/reset-e2e.ts', ['named:Client->Client']],
@@ -313,17 +313,17 @@ describe('PostgreSQL constructor census', () => {
     expect(Object.fromEntries(observed)).toEqual(Object.fromEntries(allowed))
   })
 
-  it('constructs exactly one raw pg Client in the external-host adapter', () => {
-    const path = resolve(process.cwd(), 'src/platform/db/external-host-command.ts')
+  it('constructs exactly one raw pg Client in the external-host one-shot owner', () => {
+    const path = resolve(process.cwd(), 'src/platform/db/external-host-one-shot.ts')
     const source = readCodeSources(resolve(process.cwd(), 'src')).get(path)
 
-    expect(source, 'missing src/platform/db/external-host-command.ts').toBeTypeOf(
+    expect(source, 'missing src/platform/db/external-host-one-shot.ts').toBeTypeOf(
       'string',
     )
     expect(directConstructorCount(path, source ?? '', 'Client')).toBe(1)
   })
 
-  it('pins the public value surface of every raw-pg allowlisted module', () => {
+  it('pins raw-pg modules and external-host adapters to exact public value surfaces', () => {
     const files = new Map([
       ...readCodeSources(resolve(process.cwd(), 'src')),
       ...readCodeSources(resolve(process.cwd(), 'scripts')),
@@ -337,7 +337,13 @@ describe('PostgreSQL constructor census', () => {
           'function:createDisposableIntegrationDatabase',
         ],
       ],
+      [
+        'src/platform/db/external-host-one-shot.ts',
+        ['function:withExternalHostClientOwner', 'function:withExternalHostOneShot'],
+      ],
       ['src/platform/db/external-host-command.ts', ['function:withExternalHostCommand']],
+      ['src/platform/db/host-migrate.ts', ['function:migrateDatabaseFromHostCli']],
+      ['src/platform/db/host-preflight.ts', ['function:assertHostDatabaseReady']],
       ['src/platform/db/postgres-value.ts', ['function:prepareStablePostgresValue']],
       ['scripts/db/backup-restore-drill.ts', []],
       ['scripts/db/reset-e2e.ts', []],

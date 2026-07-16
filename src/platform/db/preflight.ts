@@ -1,11 +1,49 @@
-import { sql } from 'drizzle-orm'
+import { type SQL, sql } from 'drizzle-orm'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
+import { PgDialect } from 'drizzle-orm/pg-core'
+import type { QueryResult, QueryResultRow } from 'pg'
 import { getServerConfig } from '@/platform/config/server'
-import { getDb } from './client'
+
+export type DatabasePreflightQuery = {
+  query<Row extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<Row>>
+}
+
+const dialect = new PgDialect()
+
+function normalizedRoleConnectionLimit(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value
+  if (typeof value === 'string' && /^-?[0-9]+$/.test(value)) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed)) return parsed
+  }
+  return null
+}
+
+export function hasSufficientRoleConnectionAllowance(
+  value: unknown,
+  databasePoolMax: number,
+): boolean {
+  const limit = normalizedRoleConnectionLimit(value)
+  return limit === -1 || (limit !== null && limit >= databasePoolMax)
+}
+
+function execute<Row extends QueryResultRow>(
+  query: DatabasePreflightQuery,
+  statement: SQL,
+): Promise<QueryResult<Row>> {
+  const compiled = dialect.sqlToQuery(statement)
+  return query.query<Row>(compiled.sql, compiled.params)
+}
 
 export type DatabasePreflight = {
   readonly databaseVersion: string
   readonly databaseVersionNumber: number
+  readonly authenticatedRoleName: string | null
+  readonly authenticatedRoleConnectionLimit: number | null
+  readonly authenticatedRoleConnectionAllowancePresent: boolean
   readonly migrationLedgerPresent: boolean
   readonly migrationLedgerCanonical: boolean
   readonly appliedMigrationCount: number
@@ -172,30 +210,37 @@ const requiredIntegrityTriggers = [
   },
 ] as const
 
-export async function inspectDatabase(): Promise<DatabasePreflight> {
-  const db = getDb()
+export async function inspectDatabase(
+  query: DatabasePreflightQuery,
+): Promise<DatabasePreflight> {
   const committedMigrations = readMigrationFiles({ migrationsFolder: './drizzle' })
   const committedHashes = committedMigrations.map((migration) => migration.hash)
-  const [
-    versionResult,
-    migrationResult,
-    triggerResult,
-    installationEpochResult,
-    columnsResult,
-    safetyHoldResult,
-    trainingCorrectionResult,
-    contentRevocationResult,
-    llmCacheResult,
-    accessRecoveryResult,
-    integrityResult,
-  ] = await Promise.all([
-    db.execute<{ version: string; versionNumber: string }>(sql`
+  const versionResult = await execute<{ version: string; versionNumber: string }>(
+    query,
+    sql`
         SELECT version(), current_setting('server_version_num') AS "versionNumber"
-      `),
-    db.execute<{ present: boolean }>(sql`
+      `,
+  )
+  const roleResult = await execute<{
+    roleName: string
+    connectionLimit: number | string
+  }>(
+    query,
+    sql`
+      SELECT role.rolname AS "roleName", role.rolconnlimit AS "connectionLimit"
+      FROM pg_roles AS role
+      WHERE role.rolname = session_user
+    `,
+  )
+  const migrationResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const triggerResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT EXISTS (
         SELECT 1
         FROM pg_trigger AS trigger
@@ -212,8 +257,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND NOT trigger.tgisinternal
           AND trigger.tgenabled = 'O'
       ) AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const installationEpochResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         EXISTS (
           SELECT 1
@@ -253,8 +301,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           ) !~
             '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
         ) AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const columnsResult = await execute<{ present: boolean }>(
+    query,
+    sql`
         SELECT
           count(*) FILTER (
             WHERE table_name = 'workout_session'
@@ -313,8 +364,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             'safety_hold',
             'safety_hold_resolution'
           )
-      `),
-    db.execute<{ present: boolean }>(sql`
+      `,
+  )
+  const safetyHoldResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         EXISTS (
           SELECT 1 FROM pg_index
@@ -436,8 +490,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             AND pg_get_functiondef(trigger_function.oid)
               LIKE '%Only a source-less eligibility restriction hold may be cleared once.%'
         ) AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const trainingCorrectionResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         to_regclass('public.training_fact_correction') IS NOT NULL
         AND to_regclass('public.session_feedback_correction') IS NOT NULL
@@ -473,8 +530,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           )
             AND indisunique AND indisvalid AND indisready
         ) AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const contentRevocationResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         to_regclass('public.content_release_revocation') IS NOT NULL
         AND (
@@ -529,8 +589,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             AND pg_get_functiondef(trigger_function.oid)
               LIKE '%Content release revocations are append-only.%'
         ) AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const llmCacheResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         (
           SELECT count(*) = 16
@@ -579,8 +642,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             )
         )
         AS present
-    `),
-    db.execute<{ present: boolean }>(sql`
+    `,
+  )
+  const accessRecoveryResult = await execute<{ present: boolean }>(
+    query,
+    sql`
       SELECT
         to_regclass('public.member_reset_state') IS NOT NULL
         AND to_regclass('public.web_recovery_rate_limit_bucket') IS NOT NULL
@@ -767,8 +833,11 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
             AND pg_get_constraintdef(oid) LIKE '%local-user-create%'
             AND pg_get_constraintdef(oid) NOT LIKE '%session-revoke%'
         ) AS present
-    `),
-    db.execute<{ count: number }>(sql`
+    `,
+  )
+  const integrityResult = await execute<{ count: number }>(
+    query,
+    sql`
         SELECT count(*)::int AS count
         FROM pg_trigger AS trigger
         JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
@@ -784,13 +853,15 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
           AND namespace.nspname = 'public'
           AND NOT trigger.tgisinternal
           AND trigger.tgenabled = 'O'
-      `),
-  ])
+      `,
+  )
 
   const migrationLedgerPresent = migrationResult.rows[0]?.present ?? false
   const migrationLedgerState = migrationLedgerPresent
     ? (
-        await db.execute<{ canonical: boolean; count: number }>(sql`
+        await execute<{ canonical: boolean; count: number }>(
+          query,
+          sql`
           SELECT
             count(*)::int AS count,
             count(*) FILTER (
@@ -801,7 +872,8 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
               WHERE created_at = ${canonicalProgramOrdinalMigration.createdAt}
             ) = 1 AS canonical
           FROM drizzle.__drizzle_migrations
-        `)
+        `,
+        )
       ).rows[0]
     : undefined
   const appliedMigrationCount = Number(migrationLedgerState?.count ?? 0)
@@ -809,14 +881,17 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
   const appliedCommittedMigrationCount = migrationLedgerPresent
     ? Number(
         (
-          await db.execute<{ count: number }>(sql`
+          await execute<{ count: number }>(
+            query,
+            sql`
             SELECT count(DISTINCT hash)::int AS count
             FROM drizzle.__drizzle_migrations
             WHERE hash IN (${sql.join(
               committedHashes.map((hash) => sql`${hash}`),
               sql`, `,
             )})
-          `)
+          `,
+          )
         ).rows[0]?.count ?? 0,
       )
     : 0
@@ -825,27 +900,45 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
     migrationLedgerPresent && latestCommittedMigration
       ? Boolean(
           (
-            await db.execute<{ present: boolean }>(sql`
+            await execute<{ present: boolean }>(
+              query,
+              sql`
               SELECT EXISTS (
                 SELECT 1 FROM drizzle.__drizzle_migrations
                 WHERE hash = ${latestCommittedMigration.hash}
               ) AS present
-            `)
+            `,
+            )
           ).rows[0]?.present,
         )
       : false
   const contentRevocationIntegrityPresent =
     contentRevocationResult.rows[0]?.present ?? false
-  const contentResult = await db.execute<{ count: number }>(sql`
+  const contentResult = await execute<{ count: number }>(
+    query,
+    sql`
         SELECT count(*)::int AS count
         FROM program_revision
         WHERE methodology_review_status <> 'reviewed'
            OR template_review_status <> 'reviewed'
-      `)
+      `,
+  )
+  const role = roleResult.rows[0]
+  const authenticatedRoleConnectionLimit = normalizedRoleConnectionLimit(
+    role?.connectionLimit,
+  )
 
   return {
     databaseVersion: versionResult.rows[0]?.version ?? 'unknown',
     databaseVersionNumber: Number(versionResult.rows[0]?.versionNumber ?? 0),
+    authenticatedRoleName: role?.roleName ?? null,
+    authenticatedRoleConnectionLimit,
+    authenticatedRoleConnectionAllowancePresent:
+      role !== undefined &&
+      hasSufficientRoleConnectionAllowance(
+        role.connectionLimit,
+        getServerConfig().databasePoolMax,
+      ),
     migrationLedgerPresent,
     migrationLedgerCanonical,
     appliedMigrationCount,
@@ -866,8 +959,10 @@ export async function inspectDatabase(): Promise<DatabasePreflight> {
   }
 }
 
-export async function assertDatabaseReady(): Promise<DatabasePreflight> {
-  const result = await inspectDatabase()
+export async function assertDatabaseReady(
+  query: DatabasePreflightQuery,
+): Promise<DatabasePreflight> {
+  const result = await inspectDatabase(query)
   const failures: string[] = []
 
   if (!result.migrationLedgerPresent) failures.push('Drizzle migration ledger is absent')
@@ -921,6 +1016,11 @@ export async function assertDatabaseReady(): Promise<DatabasePreflight> {
   }
   if (result.databaseVersionNumber < 180_000) {
     failures.push('PostgreSQL 18 or newer is required')
+  }
+  if (!result.authenticatedRoleConnectionAllowancePresent) {
+    failures.push(
+      `authenticated PostgreSQL role connection allowance is below INDIGO_DATABASE_POOL_MAX=${getServerConfig().databasePoolMax} (role ${result.authenticatedRoleName ?? 'unknown'}, rolconnlimit ${result.authenticatedRoleConnectionLimit ?? 'missing or malformed'}; -1 means unlimited)`,
+    )
   }
   if (
     getServerConfig().contentMode === 'reviewed' &&
